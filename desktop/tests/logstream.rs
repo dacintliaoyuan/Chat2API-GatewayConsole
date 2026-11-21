@@ -1,8 +1,12 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
-use um_desktop::logstream::{LevelFilter, LogStream};
+use chrono::{Local, TimeZone};
+use um_desktop::logstream::{
+    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, LOG_ROW_HEIGHT,
+};
 
 mod common;
 use common::TempDir;
@@ -252,7 +256,10 @@ fn a_pause_and_backfill_reads_every_line_since_the_last_offset() {
     assert_eq!(outcome.appended.len(), 50);
     assert_eq!(outcome.total, 51);
     assert_eq!(outcome.trimmed, 0);
-    assert_eq!(texts(&stream).last().unwrap(), "after-50");
+    let expected = std::iter::once("first".to_string())
+        .chain((1..=50).map(|index| format!("after-{index}")))
+        .collect::<Vec<_>>();
+    assert_eq!(texts(&stream), expected, "backfill must keep file order");
 }
 
 #[test]
@@ -296,11 +303,395 @@ fn sensitive_values_and_control_characters_are_removed_from_display_text() {
     assert!(text.contains("[redacted]"), "{text}");
     assert!(!text.contains('\u{1b}'), "raw escape byte leaked in {text}");
     assert!(text.contains("\\u{001b}"), "{text}");
+    let detail = &stream.lines()[0].detail;
+    assert!(!detail.contains('\u{1b}'), "raw escape byte leaked in {detail}");
+    assert!(detail.contains("\\u{001b}"), "{detail}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap().trim_end(),
         raw,
         "the service log itself must not be rewritten"
     );
+}
+
+fn local_at(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
+    Local
+        .with_ymd_and_hms(year, month, day, hour, minute, second)
+        .single()
+        .expect("unambiguous local time")
+        .timestamp_millis()
+}
+
+#[test]
+fn same_day_lines_show_only_the_time_and_cross_day_lines_show_the_date() {
+    let now = Local
+        .with_ymd_and_hms(2026, 11, 21, 10, 0, 0)
+        .single()
+        .expect("local now");
+
+    let same_day = format_log_time(Some(local_at(2026, 11, 21, 9, 5, 7)), now);
+    assert_eq!(same_day.label, "09:05:07");
+    assert!(same_day.precise.starts_with("2026-11-21 09:05:07"), "{}", same_day.precise);
+
+    let previous_day = format_log_time(Some(local_at(2026, 11, 20, 23, 59, 59)), now);
+    assert_eq!(previous_day.label, "11-20 23:59:59");
+    assert!(
+        previous_day.precise.starts_with("2026-11-20 23:59:59"),
+        "{}",
+        previous_day.precise
+    );
+
+    let unknown = format_log_time(None, now);
+    assert_eq!(unknown.label, "时间未知");
+    assert_eq!(unknown.precise, "时间未知");
+}
+
+#[test]
+fn paused_follow_keeps_the_reading_position_and_counts_only_new_matching_lines() {
+    let dir = TempDir::new("logstream-paused");
+    let path = dir.path().join("service.log");
+    for index in 1..=20 {
+        append(&path, &format!("line-{index}\n"));
+    }
+    let mut stream = LogStream::open(&path).expect("open log");
+    let previous: Vec<_> = stream.lines().iter().cloned().collect();
+    append(&path, "new-1\nnew-2\n");
+    let outcome = stream.poll().expect("poll appended");
+    let entries: Vec<_> = stream.lines().iter().cloned().collect();
+
+    let plan = plan_log_page(
+        &previous,
+        &entries,
+        &outcome.appended,
+        outcome.reset,
+        outcome.trimmed,
+        false,
+        false,
+        -100.0,
+        3,
+        LevelFilter::All,
+        "",
+    );
+    assert_eq!(plan.added, 2);
+    assert_eq!(plan.new_count, 5);
+    assert_eq!(
+        plan.scroll_y, None,
+        "paused reading must not jump when new lines arrive"
+    );
+    assert_eq!(plan.rows.len(), 22);
+    assert!(!plan.rebuild);
+
+    let resumed = plan_log_page(
+        &previous,
+        &entries,
+        &outcome.appended,
+        outcome.reset,
+        outcome.trimmed,
+        false,
+        true,
+        -100.0,
+        plan.new_count,
+        LevelFilter::All,
+        "",
+    );
+    assert_eq!(resumed.new_count, 0, "resuming follow clears the new count");
+    assert_eq!(
+        resumed.scroll_y, None,
+        "resuming follow jumps to the newest row"
+    );
+}
+
+#[test]
+fn paused_follow_keeps_the_same_row_when_the_front_is_trimmed() {
+    let dir = TempDir::new("logstream-paused-trim");
+    let path = dir.path().join("service.log");
+    append(&path, "a\nb\nc\n");
+    let mut stream = LogStream::open_with_limits(&path, 3, 64 * 1024).expect("open log");
+    let previous: Vec<_> = stream.lines().iter().cloned().collect();
+    append(&path, "d\n");
+    let outcome = stream.poll().expect("poll appended");
+    assert_eq!(outcome.trimmed, 1);
+    let entries: Vec<_> = stream.lines().iter().cloned().collect();
+
+    let plan = plan_log_page(
+        &previous,
+        &entries,
+        &outcome.appended,
+        outcome.reset,
+        outcome.trimmed,
+        false,
+        false,
+        -2.0 * LOG_ROW_HEIGHT,
+        0,
+        LevelFilter::All,
+        "",
+    );
+    assert_eq!(plan.rows.len(), 3);
+    assert_eq!(
+        plan.scroll_y,
+        Some(-LOG_ROW_HEIGHT),
+        "the row that was at the top must stay at the top after a trim"
+    );
+    assert_eq!(plan.new_count, 1);
+}
+
+#[test]
+fn paused_filtered_follow_keeps_the_same_row_when_the_front_is_trimmed() {
+    let dir = TempDir::new("logstream-paused-filtered-trim");
+    let path = dir.path().join("service.log");
+    for (level, index) in [("info", 1), ("error", 2), ("error", 3), ("error", 4), ("info", 5)] {
+        append(
+            &path,
+            &format!("{{\"level\":\"{level}\",\"event\":\"line-{index}\"}}\n"),
+        );
+    }
+    let mut stream = LogStream::open_with_limits(&path, 5, 64 * 1024).expect("open log");
+    let previous: Vec<_> = stream.lines().iter().cloned().collect();
+    append(&path, "{\"level\":\"error\",\"event\":\"line-6\"}\n");
+    let outcome = stream.poll().expect("poll appended");
+    assert_eq!(outcome.trimmed, 1);
+    let entries: Vec<_> = stream.lines().iter().cloned().collect();
+
+    let plan = plan_log_page(
+        &previous,
+        &entries,
+        &outcome.appended,
+        outcome.reset,
+        outcome.trimmed,
+        false,
+        false,
+        -2.0 * LOG_ROW_HEIGHT,
+        0,
+        LevelFilter::Error,
+        "",
+    );
+    assert_eq!(plan.rows.len(), 4);
+    assert_eq!(
+        plan.scroll_y,
+        Some(-2.0 * LOG_ROW_HEIGHT),
+        "the filtered row that was at the top must stay at the top after a trim"
+    );
+    assert_eq!(plan.new_count, 1);
+}
+
+#[test]
+fn a_filter_change_rebuilds_only_matching_rows_and_clears_the_new_count() {
+    let dir = TempDir::new("logstream-filter-change");
+    let path = dir.path().join("service.log");
+    for index in 1..=10 {
+        append(&path, &format!("info-{index}\n"));
+        append(&path, &format!("{{\"level\":\"error\",\"event\":\"error-{index}\"}}\n"));
+    }
+    let mut stream = LogStream::open(&path).expect("open log");
+    let previous: Vec<_> = stream.lines().iter().cloned().collect();
+    append(&path, "{\"level\":\"error\",\"event\":\"error-new\"}\n");
+    let outcome = stream.poll().expect("poll appended");
+    let entries: Vec<_> = stream.lines().iter().cloned().collect();
+
+    let plan = plan_log_page(
+        &previous,
+        &entries,
+        &outcome.appended,
+        outcome.reset,
+        outcome.trimmed,
+        true,
+        false,
+        -100.0,
+        5,
+        LevelFilter::Error,
+        "",
+    );
+    assert_eq!(plan.rows.len(), 11);
+    assert!(plan.rows.iter().all(|line| line.entry.level == "error"));
+    assert_eq!(plan.added, 1);
+    assert_eq!(plan.new_count, 0);
+    assert_eq!(plan.scroll_y, Some(0.0));
+}
+
+#[test]
+fn a_recovered_file_backfills_without_duplicating_the_kept_window() {
+    let dir = TempDir::new("logstream-recovered");
+    let path = dir.path().join("service.log");
+    append(&path, "a\n");
+    let mut stream = LogStream::open(&path).expect("open log");
+    std::fs::remove_file(&path).unwrap();
+    let error = stream.poll().expect_err("a missing log must fail");
+    assert!(error.contains("service.log"), "{error}");
+    assert_eq!(texts(&stream), vec!["a"]);
+
+    append(&path, "a\nb\n");
+    let outcome = stream.poll().expect("poll recovered log");
+    assert_eq!(
+        outcome
+            .appended
+            .iter()
+            .map(|line| line.entry.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
+    assert_eq!(texts(&stream), vec!["a", "b"]);
+}
+
+#[test]
+fn history_pages_are_contiguous_and_do_not_repeat_lines() {
+    let dir = TempDir::new("logstream-history-pages");
+    let path = dir.path().join("service.log");
+    let now = Local::now();
+    for index in 0..300 {
+        let time = now - chrono::Duration::seconds((300 - index) as i64);
+        append(
+            &path,
+            &format!(
+                "{{\"time\":\"{}\",\"level\":\"info\",\"event\":\"line-{index}\"}}\n",
+                time.to_rfc3339()
+            ),
+        );
+    }
+    let since = (now - chrono::Duration::days(1)).timestamp_millis();
+    let mut before = None;
+    let mut seen = HashSet::new();
+    let mut pages = 0;
+    loop {
+        let page = read_history(&path, before, since, LevelFilter::All, "").expect("history page");
+        assert!(!page.lines.is_empty(), "page {pages} must not be empty");
+        for line in &page.lines {
+            assert!(
+                seen.insert(line.id),
+                "line {:?} repeated across history pages",
+                line.id
+            );
+        }
+        pages += 1;
+        match page.older {
+            Some(older) => before = Some(older),
+            None => break,
+        }
+        assert!(pages < 10, "history pagination did not terminate");
+    }
+    assert_eq!(pages, 3);
+    assert_eq!(seen.len(), 300);
+}
+
+#[test]
+fn history_filter_pages_do_not_repeat_matching_lines() {
+    let dir = TempDir::new("logstream-history-filter");
+    let path = dir.path().join("service.log");
+    let now = Local::now();
+    for index in 0..300 {
+        let level = if index % 2 == 0 { "error" } else { "info" };
+        let time = now - chrono::Duration::seconds((300 - index) as i64);
+        append(
+            &path,
+            &format!(
+                "{{\"time\":\"{}\",\"level\":\"{level}\",\"event\":\"line-{index}\"}}\n",
+                time.to_rfc3339()
+            ),
+        );
+    }
+    let since = (now - chrono::Duration::days(1)).timestamp_millis();
+    let mut before = None;
+    let mut seen = HashSet::new();
+    let mut pages = 0;
+    loop {
+        let page = read_history(&path, before, since, LevelFilter::Error, "").expect("history page");
+        for line in &page.lines {
+            assert_eq!(line.entry.level, "error");
+            assert!(
+                seen.insert(line.id),
+                "line {:?} repeated across history pages",
+                line.id
+            );
+        }
+        pages += 1;
+        match page.older {
+            Some(older) => before = Some(older),
+            None => break,
+        }
+        assert!(pages < 10, "history pagination did not terminate");
+    }
+    assert_eq!(seen.len(), 150);
+}
+
+#[test]
+fn history_excludes_lines_outside_the_period_and_undated_lines() {
+    let dir = TempDir::new("logstream-history-period");
+    let path = dir.path().join("service.log");
+    let now = Local::now();
+    let today = now - chrono::Duration::hours(1);
+    let old = now - chrono::Duration::days(40);
+    append(
+        &path,
+        &format!(
+            "{{\"time\":\"{}\",\"level\":\"info\",\"event\":\"today\"}}\n",
+            today.to_rfc3339()
+        ),
+    );
+    append(
+        &path,
+        &format!(
+            "{{\"time\":\"{}\",\"level\":\"info\",\"event\":\"old\"}}\n",
+            old.to_rfc3339()
+        ),
+    );
+    append(&path, "raw undated\n");
+
+    let since = (now - chrono::Duration::days(30)).timestamp_millis();
+    let page = read_history(&path, None, since, LevelFilter::All, "").expect("history page");
+    assert_eq!(page.lines.len(), 1);
+    assert!(page.lines[0].entry.text.contains("today"), "{}", page.lines[0].entry.text);
+}
+
+#[test]
+fn a_history_cursor_past_the_file_is_an_error_not_an_empty_page() {
+    let dir = TempDir::new("logstream-history-cursor");
+    let path = dir.path().join("service.log");
+    append(&path, "line-1\n");
+    let length = path.metadata().unwrap().len();
+
+    let error = read_history(&path, Some(length + 1), 0, LevelFilter::All, "")
+        .expect_err("a cursor past the file must fail");
+    assert!(error.contains("轮换"), "{error}");
+}
+
+#[test]
+fn expanded_detail_keeps_the_full_sanitized_text_for_copy() {
+    let dir = TempDir::new("logstream-detail");
+    let path = dir.path().join("service.log");
+    let raw = "{\"time\":\"2026-11-20T10:00:00+08:00\",\"level\":\"error\",\"event\":\"request_summary\",\"request_id\":\"req-1\",\"protocol\":\"chat\",\"final\":\"502\",\"tries\":3,\"authorization\":\"Bearer sk-abc123\",\"api_key\":\"secret\"}";
+    append(&path, &format!("{raw}\n"));
+    let stream = LogStream::open(&path).expect("open log");
+    let line = &stream.lines()[0];
+
+    assert!(line.entry.text.contains("request_summary req-1 chat final=502 tries=3"));
+    assert!(
+        line.detail.contains("\"request_id\":\"req-1\""),
+        "the expanded text must keep the whole record: {}",
+        line.detail
+    );
+    assert!(line.detail.len() > line.entry.text.len());
+    for secret in ["abc123", "secret"] {
+        assert!(!line.detail.contains(secret), "{secret} leaked in {}", line.detail);
+    }
+    assert!(line.detail.contains("[redacted]"), "{}", line.detail);
+}
+
+#[cfg(windows)]
+#[test]
+fn replacement_with_the_same_head_and_length_resets_by_file_identity() {
+    let dir = TempDir::new("logstream-replace-identity");
+    let path = dir.path().join("service.log");
+    let head = "x".repeat(300);
+    append(&path, &format!("{head}\nold\n"));
+    let mut stream = LogStream::open(&path).expect("open log");
+    assert_eq!(texts(&stream), vec![head.clone(), "old".to_string()]);
+
+    std::fs::remove_file(&path).unwrap();
+    append(&path, &format!("{head}\nnew\n"));
+    let outcome = stream.poll().expect("poll replacement");
+    assert!(
+        outcome.reset,
+        "a replaced file must reset even when its head and length match"
+    );
+    assert_eq!(texts(&stream), vec![head, "new".to_string()]);
 }
 
 #[test]
@@ -319,6 +710,10 @@ fn append_to_poll_latency_p95_stays_under_500_ms() {
     }
     samples.sort();
     let p95 = samples[(samples.len() * 95 / 100).min(samples.len() - 1)];
+    println!(
+        "append-to-poll read latency p95 over {} samples: {p95:?}",
+        samples.len()
+    );
     assert!(
         p95 <= std::time::Duration::from_millis(500),
         "p95 read latency {p95:?} exceeded 500ms"

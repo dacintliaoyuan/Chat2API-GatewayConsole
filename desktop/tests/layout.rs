@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::platform::{Key, WindowEvent};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, ModelRc, VecModel};
 
 slint::include_modules!();
 
@@ -243,6 +243,50 @@ fn account_form_can_be_completed_with_the_keyboard() {
         saved.borrow().clone(),
         Some(("someone@um.edu.mo".to_string(), "secret".to_string())),
         "Enter in the password field saves the credentials"
+    );
+}
+
+fn log_row(index: usize) -> LogRow {
+    LogRow {
+        id: format!("row-{index}").into(),
+        at: "10:00:00".into(),
+        level: "信息".into(),
+        text: format!("line-{index}").into(),
+        detail: format!("2026-11-21 10:00:00 +08:00  信息\n\nline-{index}").into(),
+    }
+}
+
+#[test]
+fn closing_the_log_detail_gives_its_height_back_to_the_list() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    let rows: Vec<LogRow> = (0..20).map(log_row).collect();
+    window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let closed_list = window.get_log_list_height();
+    assert!(closed_list > 0.0, "the log list must fill the page");
+    assert_eq!(window.get_log_details_height(), 0.0);
+
+    window.set_open_log_id("row-1".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let open_list = window.get_log_list_height();
+    assert!(
+        window.get_log_details_height() > 0.0,
+        "opening a log row shows the detail panel"
+    );
+    assert!(
+        open_list < closed_list,
+        "the open detail panel must shorten the list ({open_list} vs {closed_list})"
+    );
+
+    window.set_open_log_id("".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_log_details_height(), 0.0);
+    assert!(
+        (window.get_log_list_height() - closed_list).abs() < 1.0,
+        "closing the detail must restore the list height ({} vs {closed_list})",
+        window.get_log_list_height()
     );
 }
 
