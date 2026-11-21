@@ -228,13 +228,13 @@ function Invoke-DefaultProcessQuery {
     # make the private instance look alive. A port 8000 listener that is not a
     # private instance is a conflict the watch must not start into.
     #
-    # #133 A2: in component mode the watch watches the WORKER only. The ingress
-    # is started by the component start and must not keep the pair "alive" while
-    # the worker is gone. A recorded worker port is only a hint: with no worker
-    # identity process it is stale (the worker crashed and the port may have been
-    # reused by an unrelated process), so it is ignored instead of becoming a
-    # permanent "unconfirmed" that blocks every recovery. The component start
-    # deletes the file before launching a fresh worker.
+    # #133 A2: in component mode the watch confirms BOTH the worker and the
+    # ingress identities; either missing means the pair is absent. The component
+    # start fills only the missing one. A recorded worker port is only a hint:
+    # with no worker identity process it is stale (the worker crashed and the
+    # port may have been reused by an unrelated process), so it is ignored
+    # instead of becoming a permanent "unconfirmed" that blocks every recovery.
+    # The component start deletes the file before launching a fresh worker.
     try {
         $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
         $startPath = $null

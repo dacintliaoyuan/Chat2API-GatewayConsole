@@ -717,7 +717,7 @@ foreach ($scriptName in @(
     $ticket80PortRoot = Join-Path ([IO.Path]::GetTempPath()) ('ticket80-ports-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     [void][IO.Directory]::CreateDirectory($ticket80PortRoot)
     $script:ticket80WorkerPortFile = Join-Path $ticket80PortRoot 'chat2api-worker.port'
-    [IO.File]::WriteAllText($script:ticket80WorkerPortFile, "9911`n",
+    [IO.File]::WriteAllText($script:ticket80WorkerPortFile, "9911`n990206`n",
         (New-Object System.Text.UTF8Encoding($false)))
     $savedWorkerPortFile = [string]$desc.WorkerPortFile
     $desc.WorkerPortFile = $script:ticket80WorkerPortFile
@@ -912,7 +912,7 @@ foreach ($scriptName in @(
     $componentPortRoot = Join-Path ([IO.Path]::GetTempPath()) ('component-ports-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     [void][IO.Directory]::CreateDirectory($componentPortRoot)
     $script:componentWorkerPortFile = Join-Path $componentPortRoot 'chat2api-worker.port'
-    [IO.File]::WriteAllText($script:componentWorkerPortFile, "9911`n",
+    [IO.File]::WriteAllText($script:componentWorkerPortFile, "9911`n990206`n",
         (New-Object System.Text.UTF8Encoding($false)))
     $desc.WorkerPortFile = $script:componentWorkerPortFile
 
@@ -1039,7 +1039,7 @@ foreach ($scriptName in @(
                         CreationDate = [datetime]'2026-11-21T10:05:00'
                     })
                 if ($component -eq 'worker') {
-                    [IO.File]::WriteAllText($script:componentWorkerPortFile, "9911`n",
+                    [IO.File]::WriteAllText($script:componentWorkerPortFile, "9911`n990209`n",
                         (New-Object System.Text.UTF8Encoding($false)))
                     $script:componentListeners[9911] = @(
                         [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = $newPid })
@@ -1082,7 +1082,7 @@ foreach ($scriptName in @(
                 -Force -ErrorAction SilentlyContinue
         } else {
             [IO.File]::WriteAllText($script:componentWorkerPortFile,
-                ($WorkerPort + "`n"),
+                ($WorkerPort + "`n990206`n"),
                 (New-Object System.Text.UTF8Encoding($false)))
         }
         $script:componentLaunches.Clear()
@@ -1185,6 +1185,17 @@ foreach ($scriptName in @(
         Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'ingress' 'a starting worker still starts the missing ingress'
         Assert-Equal (@($script:componentSleeperCalls | Where-Object { $_ -eq 1 }).Count) 20 'the starting worker consumes the single start budget'
 
+        # #133 A2/P3: a present but invalid WorkerPortFile is still Starting,
+        # with the unreadable/invalid detail rather than "not written yet".
+        Set-ComponentFixture -Processes @($startingWorker) `
+            -Listeners @{ 9911 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990206 }) } `
+            -WorkerPort $null
+        [IO.File]::WriteAllText($script:componentWorkerPortFile, "not-a-port`n990206`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+        $workerInspection = Get-GatewayComponentInspection -Descriptor $desc -ComponentName 'worker'
+        Assert-Equal $workerInspection.State 'Starting' 'an invalid WorkerPortFile keeps the worker Starting'
+        Assert-Equal ([string]$workerInspection.Detail -match '不可读或格式非法') $true 'an invalid WorkerPortFile names the unreadable/format reason'
+
         # #133 A2/P2: past StartTimeoutSeconds a worker without a port file is
         # stuck, not starting: the worker component is Residual and the start
         # force-restarts it.
@@ -1204,6 +1215,26 @@ foreach ($scriptName in @(
         Assert-Equal $result.Status 'StartPending' 'a stuck starting worker reports StartPending'
         Assert-Equal ($script:componentTerminated -contains 990211) $true 'a stuck starting worker is force-stopped'
         Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'worker,ingress' 'a stuck starting worker is replaced before the ingress'
+
+        # #133 A2/P3: an unreadable or invalid creation time fails closed to
+        # "not expired" (keep waiting) and never throws.
+        foreach ($badCreation in @($null, '', 'not a date')) {
+            $badWorker = [pscustomobject]@{
+                ProcessId = 990220; Name = 'um-gateway-candidate.exe'
+                CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+                CreationDate = $badCreation
+            }
+            $expired = $null
+            $threw = $false
+            try {
+                $expired = Test-GatewayWorkerStartingExpired -Descriptor $desc `
+                    -Processes @($badWorker)
+            } catch {
+                $threw = $true
+            }
+            Assert-Equal $threw $false 'an unreadable creation time never throws'
+            Assert-Equal $expired $false 'an unreadable creation time fails closed to not expired'
+        }
 
         # Both components present but unhealthy: Degraded, and the start keeps
         # both instead of reporting Stopped or restarting them.
@@ -1448,6 +1479,34 @@ foreach ($scriptName in @(
     } finally {
         Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $spacedRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# #133 A2/P3: the PowerShell worker-port reader requires the PID line too, so a
+# port-only record left by an older worker is treated as unknown.
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['chat2api']
+    $savedWorkerPortFile = [string]$desc.WorkerPortFile
+    $readerRoot = Join-Path ([IO.Path]::GetTempPath()) ('port-reader-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    [void][IO.Directory]::CreateDirectory($readerRoot)
+    $readerPortFile = Join-Path $readerRoot 'chat2api-worker.port'
+    try {
+        $desc.WorkerPortFile = $readerPortFile
+        [IO.File]::WriteAllText($readerPortFile, "9911`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+        Assert-Null (Get-GatewayWorkerPort -Descriptor $desc) 'a port-only record is rejected by the PowerShell reader'
+        [IO.File]::WriteAllText($readerPortFile, "9911`n990206`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+        Assert-Equal (Get-GatewayWorkerPort -Descriptor $desc) 9911 'a port and PID record is accepted by the PowerShell reader'
+        [IO.File]::WriteAllText($readerPortFile, "9911`nnot-a-pid`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+        Assert-Null (Get-GatewayWorkerPort -Descriptor $desc) 'an invalid PID line is rejected by the PowerShell reader'
+    } finally {
+        $desc.WorkerPortFile = $savedWorkerPortFile
+        Remove-Item -LiteralPath $readerRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

@@ -1164,9 +1164,10 @@ function Get-GatewayWorkerPortFilePath {
 }
 
 function Get-GatewayWorkerPort {
-    # The worker writes "decimal port + newline" (and, since #133 A2, a second
-    # line with its PID) atomically after the listener is bound. The port is the
-    # first line; anything unreadable means "unknown", never a guessed port.
+    # The worker writes "decimal port + newline + PID + newline" atomically
+    # after the listener is bound. Both lines are required: the port is the
+    # first line, the worker PID the second. Anything missing, unreadable or
+    # invalid means "unknown", never a guessed port.
     param([Parameter(Mandatory = $true)]$Descriptor)
     $path = Get-GatewayWorkerPortFilePath -Descriptor $Descriptor
     if (-not $path) { return $null }
@@ -1176,11 +1177,14 @@ function Get-GatewayWorkerPort {
     } catch {
         return $null
     }
-    $firstLine = @($text -split "`r?`n") | Select-Object -First 1
-    if ($null -eq $firstLine) { return $null }
+    $lines = @($text -split "`r?`n")
+    if ($lines.Count -lt 2) { return $null }
     $port = 0
-    if (-not [int]::TryParse($firstLine.Trim(), [ref]$port)) { return $null }
+    if (-not [int]::TryParse($lines[0].Trim(), [ref]$port)) { return $null }
     if ($port -le 0 -or $port -gt 65535) { return $null }
+    $workerPid = 0
+    if (-not [int]::TryParse($lines[1].Trim(), [ref]$workerPid)) { return $null }
+    if ($workerPid -le 0) { return $null }
     return $port
 }
 
@@ -1324,11 +1328,22 @@ function Test-GatewayWorkerStartingExpired {
     $timeoutSeconds = [Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds)
     $now = [DateTime]::UtcNow
     foreach ($process in @($Processes)) {
+        $creationProp = $process.PSObject.Properties['CreationDate']
+        if ($null -eq $creationProp -or $null -eq $creationProp.Value) {
+            return $false
+        }
+        $rawCreated = $creationProp.Value
+        if ($rawCreated -isnot [DateTime] -and
+                ($rawCreated -isnot [string] -or
+                 [string]::IsNullOrWhiteSpace([string]$rawCreated))) {
+            return $false
+        }
         $created = $null
         try {
-            $created = ([DateTime]$process.CreationDate).ToUniversalTime()
-        } catch { }
-        if ($null -eq $created) { return $false }
+            $created = ([DateTime]$rawCreated).ToUniversalTime()
+        } catch {
+            return $false
+        }
         if (($now - $created).TotalSeconds -le $timeoutSeconds) { return $false }
     }
     return $true
@@ -1379,12 +1394,28 @@ function Get-GatewayWorkerInspection {
                 Detail = '发现组件残留进程：worker（启动超时）'
             }
         }
-        # The worker process is alive but has not published its port yet. This
-        # is the startup window, not a residual instance: the caller must wait
-        # for it within the start budget instead of force-stopping it.
+        # The worker process is alive but has not published a usable port
+        # yet. This is the startup window, not a residual instance: the caller
+        # must wait for it within the start budget instead of force-stopping it.
+        $portFile = Get-GatewayWorkerPortFilePath -Descriptor $Descriptor
+        $portFilePresent = $false
+        if ($portFile) {
+            try {
+                $portFilePresent = Test-Path -LiteralPath $portFile -PathType Leaf
+            } catch {
+                # An unreadable existence check is treated as a present but
+                # unusable record, never as "not written yet".
+                $portFilePresent = $true
+            }
+        }
+        $startingDetail = if ($portFilePresent) {
+            'worker 正在启动（WorkerPortFile 不可读或格式非法）'
+        } else {
+            'worker 正在启动（尚未写入 WorkerPortFile）'
+        }
         return [pscustomobject]@{
             Name = 'worker'; State = 'Starting'; ProcessIds = @($workerPids)
-            Detail = 'worker 正在启动（尚未写入 WorkerPortFile）'
+            Detail = $startingDetail
         }
     }
     try {
