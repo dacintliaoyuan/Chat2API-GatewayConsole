@@ -377,6 +377,27 @@ fn settings_rows_share_one_height_and_align_controls_right() {
             < 1.5,
         "复制 /v1 入口必须与卡片内容右对齐"
     );
+
+    // The same right edge holds at the minimum window width, where the
+    // segmented control and the port row switch to their compact widths.
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(540.0, 420.0));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        (window.get_theme_mode_x() + window.get_theme_mode_width()
+            - (window.get_appearance_card_x() + window.get_appearance_card_width() - inset))
+            .abs()
+            < 1.5,
+        "最小宽度下主题控件仍必须与卡片内容右对齐"
+    );
+    assert!(
+        (window.get_port_apply_x() + window.get_port_apply_width()
+            - (window.get_gateway_card_x() + window.get_gateway_card_width() - inset))
+            .abs()
+            < 1.5,
+        "最小宽度下应用按钮仍必须与卡片内容右对齐"
+    );
 }
 
 #[test]
