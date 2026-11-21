@@ -184,6 +184,7 @@ struct ChatContext<'a> {
 fn forward_json(context: &ChatContext<'_>) -> ChatResult {
     let mut stats = AttemptStats::default();
     let result = forward_json_inner(context, &mut stats);
+    record_desktop_failure(context, false, &result);
     log_final_failure(context, &stats, &result);
     result
 }
@@ -315,7 +316,11 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
             status: "ok",
             protocol: Some("chat"),
             key_id: context.key_id,
-            request_id: context.request_id,
+            request_id: crate::ledger::request_id(
+                context.request_id,
+                context.http_request_id,
+                context.state.config.desktop_instance,
+            ),
             attribution: context.attribution,
         });
         if data
@@ -347,9 +352,35 @@ fn log_final_failure(context: &ChatContext<'_>, stats: &AttemptStats, result: &C
     });
 }
 
+fn record_desktop_failure(context: &ChatContext<'_>, stream: bool, result: &ChatResult) {
+    if !context.state.config.desktop_instance {
+        return;
+    }
+    let Some(status) = result.final_failure_status() else {
+        return;
+    };
+    context.state.ledger.record(UsageRecord {
+        model: context.model,
+        stream,
+        started_at: context.started_at,
+        usage: None,
+        input_estimate: 0,
+        output_estimate: 0,
+        status: &status,
+        protocol: Some("chat"),
+        key_id: context.key_id,
+        request_id: Some(context.http_request_id),
+        attribution: context.attribution,
+    });
+}
+
 fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResult {
     let mut stats = AttemptStats::default();
-    let result = forward_stream_inner(context, stream, &mut stats);
+    let mut recorded_final = false;
+    let result = forward_stream_inner(context, stream, &mut stats, &mut recorded_final);
+    if !recorded_final {
+        record_desktop_failure(context, true, &result);
+    }
     log_final_failure(context, &stats, &result);
     result
 }
@@ -358,6 +389,7 @@ fn forward_stream_inner(
     context: &ChatContext<'_>,
     stream: &mut TcpStream,
     stats: &mut AttemptStats,
+    recorded_final: &mut bool,
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
@@ -433,6 +465,7 @@ fn forward_stream_inner(
         let outcome = consume_stream(context, stream, response.body);
         if outcome.status == StreamStatus::ClientDisconnected {
             record_stream_usage(context, &outcome);
+            *recorded_final = true;
             return ChatResult::Written {
                 close: true,
                 failed: false,
@@ -463,7 +496,11 @@ fn forward_stream_inner(
                         status: "upstream_transient_retried",
                         protocol: Some("chat"),
                         key_id: context.key_id,
-                        request_id: context.request_id,
+                        request_id: crate::ledger::request_id(
+                            context.request_id,
+                            context.http_request_id,
+                            context.state.config.desktop_instance,
+                        ),
                         attribution: context.attribution,
                     });
                 }
@@ -479,9 +516,11 @@ fn forward_stream_inner(
             }
         } else if !outcome.status.is_success() {
             record_stream_usage(context, &outcome);
+            *recorded_final = true;
             return ChatResult::Response(stream_error_response(&outcome, context.http_request_id));
         }
         record_stream_usage(context, &outcome);
+        *recorded_final = true;
         return ChatResult::Written {
             close: true,
             failed: outcome.committed && !outcome.status.is_success(),
@@ -840,7 +879,11 @@ fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
         status: outcome.status.reason(),
         protocol: Some("chat"),
         key_id: context.key_id,
-        request_id: context.request_id,
+        request_id: crate::ledger::request_id(
+            context.request_id,
+            context.http_request_id,
+            context.state.config.desktop_instance,
+        ),
         attribution: context.attribution,
     });
 }

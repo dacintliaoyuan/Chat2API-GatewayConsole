@@ -37,11 +37,11 @@ fn missing_file_is_a_legal_first_open_default() {
 fn save_then_load_round_trips_the_port() {
     let dir = TempDir::new("config-roundtrip");
     let path = dir.path().join("Chat2API").join("desktop.json");
-    save_to(&path, &DesktopConfig { model_api_port: 7998 }).expect("save config");
+    save_to(&path, &DesktopConfig { model_api_port: 7998, ..DesktopConfig::default() }).expect("save config");
     assert_eq!(
         load_from(&path),
         LoadOutcome::Loaded(DesktopConfig {
-            model_api_port: 7998
+            model_api_port: 7998, ..DesktopConfig::default()
         })
     );
 }
@@ -50,12 +50,12 @@ fn save_then_load_round_trips_the_port() {
 fn saving_again_replaces_the_previous_port() {
     let dir = TempDir::new("config-overwrite");
     let path = dir.path().join("Chat2API").join("desktop.json");
-    save_to(&path, &DesktopConfig { model_api_port: 7999 }).expect("first save");
-    save_to(&path, &DesktopConfig { model_api_port: 7998 }).expect("second save");
+    save_to(&path, &DesktopConfig { model_api_port: 7999, ..DesktopConfig::default() }).expect("first save");
+    save_to(&path, &DesktopConfig { model_api_port: 7998, ..DesktopConfig::default() }).expect("second save");
     assert_eq!(
         load_from(&path),
         LoadOutcome::Loaded(DesktopConfig {
-            model_api_port: 7998
+            model_api_port: 7998, ..DesktopConfig::default()
         })
     );
 }
@@ -93,7 +93,7 @@ fn port_zero_and_out_of_range_are_rejected() {
 fn save_rejects_port_zero_without_writing() {
     let dir = TempDir::new("config-zero");
     let path = dir.path().join("Chat2API").join("desktop.json");
-    let error = save_to(&path, &DesktopConfig { model_api_port: 0 }).expect_err("port zero");
+    let error = save_to(&path, &DesktopConfig { model_api_port: 0, ..DesktopConfig::default() }).expect_err("port zero");
     assert!(error.contains("1-65535"), "{error}");
     assert!(!path.exists());
 }
@@ -193,7 +193,7 @@ mod windows_acl {
     fn saved_config_acl_is_restricted_to_current_user() {
         let dir = TempDir::new("config-acl");
         let path = dir.path().join("Chat2API").join("desktop.json");
-        save_to(&path, &DesktopConfig { model_api_port: 7999 }).expect("save config");
+        save_to(&path, &DesktopConfig { model_api_port: 7999, ..DesktopConfig::default() }).expect("save config");
         let (ace_count, only_current_user) = read_dacl(&path);
         assert_eq!(ace_count, 1, "saved config must carry one ACE");
         assert!(only_current_user, "the only ACE must be the current user");

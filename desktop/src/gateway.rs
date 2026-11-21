@@ -10,16 +10,13 @@
 //! real gateway. Tokens are never printed: [`ControlToken`] redacts its `Debug`
 //! output and the supervision log only records events and paths.
 //!
-//! The existing gateway binary's production policy still accepts only
-//! 8000/8002/8003, so a real 7999/7998 start is rejected by the binary itself
-//! and surfaced as [`GatewayState::StartFailed`] with its stderr. The supervision
-//! code is ready for the desktop port as soon as that policy is extended in a
-//! separate gateway ticket; this ticket does not change the binary.
+//! Port changes first drain admitted model requests through the desktop-only
+//! control route. A normal exit still uses immediate shutdown.
 
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_INSTANCE_PORT: u16 = 7999;
 pub const TEST_INSTANCE_PORT: u16 = 7998;
@@ -29,6 +26,8 @@ pub const GOVERNED_PORTS: [u16; 4] = [8000, 8001, 8002, 8003];
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub const GATEWAY_BIN_ENV: &str = "UM_DESKTOP_GATEWAY_BIN";
 pub const LOGIN_HISTORY_ENV: &str = "CHAT2API_LOGIN_HISTORY_FILE";
@@ -348,6 +347,7 @@ pub fn gateway_args(port: u16, paths: &InstancePaths) -> Vec<OsString> {
     for value in [
         "--mode",
         "production",
+        "--desktop-instance",
         "--port",
         &port.to_string(),
         "--role",
@@ -399,10 +399,25 @@ pub fn gateway_env(
     envs
 }
 
-/// The HTTP edge of the gateway: `/health` and `POST /admin/shutdown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainAction {
+    Wait,
+    Commit,
+    Cancel,
+}
+
+/// The HTTP edge of the gateway's health and authenticated lifecycle routes.
 pub trait GatewayHttp: Send + Sync {
     fn health(&self, base_url: &str) -> Result<(), String>;
     fn shutdown(&self, base_url: &str, token: &ControlToken) -> Result<(), String>;
+    fn port_switch_drain(
+        &self,
+        base_url: &str,
+        token: &ControlToken,
+        lease: &str,
+        action: DrainAction,
+    ) -> Result<usize, String>;
+    fn listener_down(&self, base_url: &str) -> bool;
 }
 
 pub struct HttpGateway {
@@ -460,6 +475,61 @@ impl GatewayHttp for HttpGateway {
             .call()
             .map(|_| ())
             .map_err(|error| format!("{url}: {error}"))
+    }
+
+    fn port_switch_drain(
+        &self,
+        base_url: &str,
+        token: &ControlToken,
+        lease: &str,
+        action: DrainAction,
+    ) -> Result<usize, String> {
+        let url = format!(
+            "{}/admin/desktop/port-switch",
+            base_url.trim_end_matches('/')
+        );
+        let (verb, expected_status) = match action {
+            DrainAction::Wait => ("wait", 200),
+            DrainAction::Commit => ("commit", 202),
+            DrainAction::Cancel => ("cancel", 200),
+        };
+        let response = self
+            .agent
+            .post(&url)
+            .set("X-Admin-Control", token.expose())
+            .set("X-Desktop-Port-Switch", lease)
+            .set("X-Desktop-Port-Switch-Action", verb)
+            .call()
+            .map_err(|error| format!("{url}: {error}"))?;
+        if response.status() != expected_status {
+            return Err(format!("{url}: 意外的 HTTP {}", response.status()));
+        }
+        let body: serde_json::Value = response
+            .into_json()
+            .map_err(|error| format!("{url}: {error}"))?;
+        match action {
+            DrainAction::Wait => body
+                .get("in_flight")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| "网关未返回有效的在途请求数".to_string()),
+            DrainAction::Commit if body["status"] == "stopping" => Ok(0),
+            DrainAction::Cancel if body["status"] == "accepting" => Ok(0),
+            _ => Err("网关未返回预期的服务状态".to_string()),
+        }
+    }
+
+    fn listener_down(&self, base_url: &str) -> bool {
+        let Some(addr) = base_url
+            .strip_prefix("http://")
+            .and_then(|addr| addr.parse::<std::net::SocketAddr>().ok())
+        else {
+            return false;
+        };
+        matches!(
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused
+        )
     }
 }
 
@@ -716,6 +786,13 @@ pub enum PortSwitch {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortSwitchProgress {
+    Waiting { in_flight: usize },
+    Switching,
+    Restoring,
+}
+
 enum HealthWait {
     Healthy,
     Exited(ProcessExit),
@@ -803,6 +880,12 @@ impl GatewaySupervisor {
 
     /// Attaches to a healthy instance or starts exactly one managed child.
     pub fn start_or_attach(&mut self) -> GatewayStatus {
+        if desktop_port_reserved(self.port) {
+            self.state = GatewayState::SetupFailed {
+                reason: format!("127.0.0.1:{} 为保留端口", self.port),
+            };
+            return self.status();
+        }
         if let Err(error) = self.paths.ensure_dirs() {
             self.state = GatewayState::SetupFailed {
                 reason: error.clone(),
@@ -918,7 +1001,6 @@ impl GatewaySupervisor {
                 );
             }
             HealthWait::WaitFailed(error) => {
-                self.child = None;
                 let reason = format!("等待网关进程失败：{error}");
                 self.state = GatewayState::StartFailed {
                     reason: reason.clone(),
@@ -994,9 +1076,19 @@ impl GatewaySupervisor {
             return self.status();
         };
         let shutdown_error = self.http.shutdown(&self.base_url(), &token).err();
+        self.wait_until_stopped(reason, shutdown_error, true)
+    }
+
+    fn wait_until_stopped(
+        &mut self,
+        reason: StopReason,
+        shutdown_error: Option<String>,
+        allow_force: bool,
+    ) -> GatewayStatus {
+        let managed = self.child.is_some();
         let wait = if managed {
             self.wait_for_exit(STOP_TIMEOUT)
-        } else if self.wait_for_health_down(STOP_TIMEOUT) {
+        } else if self.wait_for_health_down(STOP_TIMEOUT, reason == StopReason::PortSwitch) {
             ExitWait::Exited(ProcessExit { code: None })
         } else {
             ExitWait::TimedOut
@@ -1015,7 +1107,7 @@ impl GatewaySupervisor {
                     }),
                 );
             }
-            ExitWait::TimedOut if managed => match self.force_kill() {
+            ExitWait::TimedOut if managed && allow_force => match self.force_kill() {
                 Ok(()) => {
                     self.child = None;
                     self.state = GatewayState::Stopped;
@@ -1109,10 +1201,16 @@ impl GatewaySupervisor {
         }
     }
 
-    fn wait_for_health_down(&mut self, timeout: Duration) -> bool {
+    fn wait_for_health_down(&mut self, timeout: Duration, verify_listener: bool) -> bool {
         let mut waited = Duration::ZERO;
         loop {
-            if self.http.health(&self.base_url()).is_err() {
+            let base = self.base_url();
+            let down = if verify_listener {
+                self.http.listener_down(&base)
+            } else {
+                self.http.health(&base).is_err()
+            };
+            if down {
                 return true;
             }
             if waited >= timeout {
@@ -1138,61 +1236,63 @@ impl GatewaySupervisor {
         }
     }
 
-    /// Saves the new port, stops the old instance and starts the new one.
-    ///
-    /// A failed switch restores both the saved config and the old listener. The
-    /// gateway exposes no in-flight counter, so the stop waits for the process
-    /// (managed) or `/health` (attached) instead of the gateway's graceful
-    /// shutdown drain. That limitation is logged, never reported as drained.
     pub fn switch_port(
         &mut self,
         new_port: u16,
         save: &mut dyn FnMut(u16) -> Result<(), String>,
     ) -> PortSwitch {
+        self.switch_port_with_progress(new_port, save, &mut |_| {}, &|| false)
+    }
+
+    /// Stops admission, drains the old listener, then changes the saved port.
+    /// The caller can preempt the wait with a separate explicit quit action.
+    pub fn switch_port_with_progress(
+        &mut self,
+        new_port: u16,
+        save: &mut dyn FnMut(u16) -> Result<(), String>,
+        progress: &mut dyn FnMut(PortSwitchProgress),
+        cancelled: &dyn Fn() -> bool,
+    ) -> PortSwitch {
         let from = self.port;
+        let reject = |reason| PortSwitch::Rejected {
+            from,
+            to: new_port,
+            reason,
+        };
         if new_port == from {
             return PortSwitch::Unchanged { port: from };
         }
-        if GOVERNED_PORTS.contains(&new_port) {
-            return PortSwitch::Rejected {
-                from,
-                to: new_port,
-                reason: format!("127.0.0.1:{new_port} 保留给现有 8000/8001 或云端实例"),
-            };
+        if desktop_port_reserved(new_port) {
+            return reject(format!("127.0.0.1:{new_port} 为保留端口"));
         }
         if let Err(reason) = port_available(new_port) {
-            return PortSwitch::Rejected {
-                from,
-                to: new_port,
-                reason,
-            };
+            return reject(reason);
+        }
+        if cancelled() {
+            return reject("已取消端口切换".to_string());
+        }
+        let has_listener = self.child.is_some()
+            || matches!(
+                self.state,
+                GatewayState::Running { .. } | GatewayState::StopFailed { .. }
+            );
+        if has_listener {
+            if let Err(reason) = self.drain_before_switch(new_port, progress, cancelled) {
+                return reject(reason);
+            }
+        } else {
+            progress(PortSwitchProgress::Switching);
+        }
+        if cancelled() {
+            return reject("已取消端口切换".to_string());
         }
         if let Err(error) = save(new_port) {
-            return PortSwitch::Rejected {
-                from,
-                to: new_port,
-                reason: format!("保存新端口失败：{error}"),
+            let reason = format!("保存新端口失败：{error}");
+            return if has_listener {
+                self.restore_port(from, new_port, reason, Ok(()), progress)
+            } else {
+                reject(reason)
             };
-        }
-        let has_listener = matches!(
-            self.state,
-            GatewayState::Running { .. }
-                | GatewayState::HealthTimeout { .. }
-                | GatewayState::StopFailed { .. }
-        );
-        if has_listener {
-            let stopped = self.stop(StopReason::PortSwitch);
-            if !matches!(&stopped.state, GatewayState::Stopped) {
-                let mut reason = format!("停止旧实例失败：{}", stopped.state.detail());
-                if let Err(error) = save(from) {
-                    reason.push_str(&format!("；恢复原端口配置失败：{error}"));
-                }
-                return PortSwitch::Rejected {
-                    from,
-                    to: new_port,
-                    reason,
-                };
-            }
         }
         self.port = new_port;
         let started = self.start_or_attach();
@@ -1204,27 +1304,132 @@ impl GatewaySupervisor {
             return PortSwitch::Switched { from, to: new_port };
         }
         let reason = started.state.detail();
-        self.port = from;
+        if self.child.is_some() {
+            let stopped = self.stop(StopReason::Shutdown);
+            if !matches!(stopped.state, GatewayState::Stopped) {
+                // Retain the current port and ownership until the managed
+                // child is confirmed stopped. Restoring now can fork a
+                // second child against the same persistent files.
+                return PortSwitch::RestoreFailed {
+                    from,
+                    to: new_port,
+                    reason,
+                    restore_error: stopped.state.detail(),
+                };
+            }
+        }
         let config_restore = save(from);
+        self.restore_port(from, new_port, reason, config_restore, progress)
+    }
+
+    fn drain_before_switch(
+        &mut self,
+        new_port: u16,
+        progress: &mut dyn FnMut(PortSwitchProgress),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
+        let base = self.base_url();
+        if self.child.is_none() && self.http.listener_down(&base) {
+            self.state = GatewayState::Stopped;
+            progress(PortSwitchProgress::Switching);
+            return Ok(());
+        }
+        if let Some(child) = self.child.as_mut() {
+            if child.try_wait()?.is_some() {
+                self.child = None;
+                self.state = GatewayState::Stopped;
+                progress(PortSwitchProgress::Switching);
+                return Ok(());
+            }
+        }
+        let token = self
+            .token
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| load_control_token(&self.paths.control_token))?;
+        let mut entropy = [0u8; 16];
+        getrandom::getrandom(&mut entropy)
+            .map_err(|error| format!("创建端口切换租约失败：{error}"))?;
+        let lease = entropy
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let started = Instant::now();
+        let mut previous = None;
+        let result = loop {
+            if cancelled() {
+                break Err("已取消端口切换".to_string());
+            }
+            if started.elapsed() >= DRAIN_TIMEOUT {
+                break Err("等候当前模型请求结束超时，旧端口继续服务".to_string());
+            }
+            match self
+                .http
+                .port_switch_drain(&base, &token, &lease, DrainAction::Wait)
+            {
+                Ok(0) => break port_available(new_port),
+                Ok(in_flight) => {
+                    if previous != Some(in_flight) {
+                        previous = Some(in_flight);
+                        progress(PortSwitchProgress::Waiting { in_flight });
+                    }
+                    self.sleeper.sleep(DRAIN_POLL_INTERVAL);
+                }
+                Err(error) => break Err(format!("无法确认当前请求已经结束：{error}")),
+            }
+        };
+        if result.is_err() || cancelled() {
+            let _ = self
+                .http
+                .port_switch_drain(&base, &token, &lease, DrainAction::Cancel);
+            return Err(result.err().unwrap_or_else(|| "已取消端口切换".to_string()));
+        }
+        progress(PortSwitchProgress::Switching);
+        let commit = self
+            .http
+            .port_switch_drain(&base, &token, &lease, DrainAction::Commit);
+        if commit.is_err() {
+            // The server might have committed before the reply was lost. A
+            // committed lease cannot be cancelled. Check actual termination
+            // and never force-kill after an ambiguous response.
+            let _ = self
+                .http
+                .port_switch_drain(&base, &token, &lease, DrainAction::Cancel);
+        }
+        let committed = commit.is_ok();
+        let stopped = self.wait_until_stopped(StopReason::PortSwitch, commit.err(), committed);
+        if matches!(stopped.state, GatewayState::Stopped) {
+            Ok(())
+        } else {
+            Err(format!("停止旧实例失败：{}", stopped.state.detail()))
+        }
+    }
+
+    fn restore_port(
+        &mut self,
+        from: u16,
+        to: u16,
+        reason: String,
+        config_restore: Result<(), String>,
+        progress: &mut dyn FnMut(PortSwitchProgress),
+    ) -> PortSwitch {
+        progress(PortSwitchProgress::Restoring);
+        self.port = from;
         let restored = self.start_or_attach();
         if matches!(&restored.state, GatewayState::Running { .. }) {
             if let Err(error) = config_restore {
                 return PortSwitch::RestoreFailed {
                     from,
-                    to: new_port,
+                    to,
                     reason,
                     restore_error: format!("恢复原端口配置失败：{error}"),
                 };
             }
             self.append_log(
                 "switch_restored",
-                serde_json::json!({ "from": from, "to": new_port, "reason": reason }),
+                serde_json::json!({ "from": from, "to": to, "reason": reason }),
             );
-            return PortSwitch::Restored {
-                from,
-                to: new_port,
-                reason,
-            };
+            return PortSwitch::Restored { from, to, reason };
         }
         let mut restore_error = restored.state.detail();
         if let Err(error) = config_restore {
@@ -1234,14 +1439,14 @@ impl GatewaySupervisor {
             "switch_restore_failed",
             serde_json::json!({
                 "from": from,
-                "to": new_port,
+                "to": to,
                 "reason": reason,
                 "restore_error": restore_error,
             }),
         );
         PortSwitch::RestoreFailed {
             from,
-            to: new_port,
+            to,
             reason,
             restore_error,
         }
@@ -1302,6 +1507,13 @@ impl GatewaySupervisor {
             .open(&self.paths.supervision_log)
             .and_then(|mut file| file.write_all(text.as_bytes()));
     }
+}
+
+fn desktop_port_reserved(port: u16) -> bool {
+    matches!(
+        port,
+        0 | 5173 | 5901 | 8000..=8009 | 8090..=8119 | 8300..=8399 | 18096
+    )
 }
 
 /// Checks whether a loopback port can be bound right now.

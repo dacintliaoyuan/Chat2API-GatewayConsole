@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::logs::{parse_log_line, LogEntry};
+use crate::logs::{parse_log_line, sanitize_text, LogEntry};
 
 /// The number of newest lines the log page keeps.
 pub const DEFAULT_MAX_LINES: usize = 400;
@@ -32,6 +32,23 @@ pub struct LineId {
 pub struct StreamLine {
     pub id: LineId,
     pub entry: LogEntry,
+    pub detail: String,
+}
+
+impl StreamLine {
+    fn from_text(offset: u64, text: &str) -> Self {
+        let entry = parse_log_line(text);
+        let detail = if text == entry.text {
+            entry.text.clone()
+        } else {
+            sanitize_text(text)
+        };
+        Self {
+            id: LineId { offset, hash: hash_line(text) },
+            entry,
+            detail,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,17 +189,10 @@ impl LogStream {
     }
 
     fn push(&mut self, offset: u64, text: String) -> Option<StreamLine> {
-        let id = LineId {
-            offset,
-            hash: hash_line(&text),
-        };
-        if !self.ids.insert(id) {
+        let line = StreamLine::from_text(offset, &text);
+        if !self.ids.insert(line.id) {
             return None;
         }
-        let line = StreamLine {
-            id,
-            entry: parse_log_line(&text),
-        };
         self.lines.push_back(line.clone());
         Some(line)
     }
@@ -220,6 +230,7 @@ struct TailRead {
     lines: Vec<(u64, String)>,
     offset: u64,
     head: Vec<u8>,
+    start: u64,
 }
 
 fn open_len(path: &Path) -> Result<(File, u64), String> {
@@ -241,21 +252,23 @@ fn read_tail(
     path: &Path,
 ) -> Result<TailRead, String> {
     let start = length.saturating_sub(tail_bytes);
-    file.seek(SeekFrom::Start(start))
+    let read_from = start.saturating_sub(1);
+    file.seek(SeekFrom::Start(read_from))
         .map_err(|error| format!("定位日志失败（{}）：{error}", path.display()))?;
     let mut bytes = Vec::new();
     file.by_ref()
-        .take(length - start)
+        .take(length - read_from)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("读取日志失败（{}）：{error}", path.display()))?;
 
     let mut cursor = 0usize;
-    if start > 0 {
+    if read_from < start {
         match bytes.iter().position(|byte| *byte == b'\n') {
             Some(index) => cursor = index + 1,
             None => cursor = bytes.len(),
         }
     }
+    let first_complete = read_from + cursor as u64;
     let mut lines = Vec::new();
     while let Some(index) = bytes[cursor..].iter().position(|byte| *byte == b'\n') {
         let line_end = cursor + index;
@@ -263,15 +276,16 @@ fn read_tail(
             .trim_end_matches('\r')
             .to_string();
         if !text.trim().is_empty() {
-            lines.push((start + cursor as u64, text));
+            lines.push((read_from + cursor as u64, text));
         }
         cursor = line_end + 1;
     }
     let head = read_head(file, length, path)?;
     Ok(TailRead {
         lines,
-        offset: start + cursor as u64,
+        offset: read_from + cursor as u64,
         head,
+        start: first_complete.min(start.saturating_add(tail_bytes)),
     })
 }
 
@@ -337,6 +351,56 @@ impl LevelFilter {
             Self::Raw => level.eq_ignore_ascii_case("raw"),
         }
     }
+}
+
+/// A bounded page of earlier complete lines in the current service log. The
+/// cursor is a byte boundary, so appending lines does not move a historical page.
+pub struct HistoryPage {
+    pub lines: Vec<StreamLine>,
+    pub older: Option<u64>,
+}
+
+pub fn read_history(
+    path: &Path,
+    before: Option<u64>,
+    since: i64,
+    level: LevelFilter,
+    keyword: &str,
+) -> Result<HistoryPage, String> {
+    let (mut file, length) = open_len(path)?;
+    if before.is_some_and(|offset| offset > length) {
+        return Err("日志已轮换，请从最新一页重新读取".to_string());
+    }
+    let end = before.unwrap_or(length);
+    let tail = read_tail(&mut file, end, DEFAULT_TAIL_BYTES, path)?;
+    let keyword = keyword.trim().to_lowercase();
+    let mut lines = Vec::new();
+    let mut older = if end > DEFAULT_TAIL_BYTES {
+        let boundary = tail.start;
+        Some(if boundary < end { boundary } else { end - DEFAULT_TAIL_BYTES })
+    } else {
+        None
+    };
+    for (offset, text) in tail.lines.iter().rev() {
+        let line = StreamLine::from_text(*offset, text);
+        if line.entry.at.is_some_and(|time| time < since)
+            || line.entry.at.is_none()
+            || !matches_line(&line, level, &keyword)
+        {
+            continue;
+        }
+        if lines.len() == 120 {
+            older = lines.last().map(|line: &StreamLine| line.id.offset);
+            break;
+        }
+        lines.push(line);
+    }
+    Ok(HistoryPage { lines, older })
+}
+
+pub fn matches_line(line: &StreamLine, level: LevelFilter, keyword_lowercase: &str) -> bool {
+    level.matches(&line.entry.level)
+        && (keyword_lowercase.is_empty() || line.detail.to_lowercase().contains(keyword_lowercase))
 }
 
 /// Filters entries by level and a case-insensitive keyword in the display text.

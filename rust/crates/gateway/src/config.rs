@@ -372,6 +372,8 @@ pub struct GatewayConfig {
     /// Candidate mode (the default); `false` selects the explicit production
     /// binding policy.
     pub candidate: bool,
+    /// A separately supervised, loopback-only desktop instance.
+    pub desktop_instance: bool,
     /// The broker instance key file; `None` disables the instance channel.
     pub instance_key_file: Option<PathBuf>,
     /// The instance-channel AF_UNIX socket path prefix.
@@ -439,6 +441,7 @@ impl Default for GatewayConfig {
             retry_delay_base: DEFAULT_RETRY_DELAY_BASE,
             slow_retry_threshold: DEFAULT_SLOW_RETRY_THRESHOLD,
             candidate: true,
+            desktop_instance: false,
             instance_key_file: None,
             instance_pipe_prefix: None,
             registration_file: None,
@@ -703,6 +706,15 @@ impl GatewayConfig {
                 self.bind_host
             )));
         }
+        if self.desktop_instance
+            && (self.role != Role::Local
+                || self.share_config.is_some()
+                || self.control_token_file.is_none())
+        {
+            return Err(ConfigError(
+                "desktop instances require the local role, a control token file, and no share configuration".to_string(),
+            ));
+        }
         if self.candidate {
             if self.bind_port != 0 {
                 return Err(ConfigError(format!(
@@ -713,6 +725,18 @@ impl GatewayConfig {
             if governed_ports().contains(&self.bind_port) {
                 return Err(ConfigError(format!(
                     "refusing to bind governed production port {}",
+                    self.bind_port
+                )));
+            }
+        } else if self.desktop_instance {
+            // Keep the owned listener outside the shared repository segments
+            // and their legacy aliases. 7998/7999 are already desktop ports.
+            if matches!(
+                self.bind_port,
+                0 | 5173 | 5901 | 8000..=8009 | 8090..=8119 | 8300..=8399 | 18096
+            ) {
+                return Err(ConfigError(format!(
+                    "desktop production port is reserved: {}",
                     self.bind_port
                 )));
             }

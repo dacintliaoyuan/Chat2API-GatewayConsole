@@ -1227,7 +1227,11 @@ fn record_usage(
         status,
         protocol: Some("responses"),
         key_id: context.key_id,
-        request_id: context.request_id,
+        request_id: crate::ledger::request_id(
+            context.request_id,
+            context.http_request_id,
+            context.state.config.desktop_instance,
+        ),
         attribution: context.attribution,
     });
 }

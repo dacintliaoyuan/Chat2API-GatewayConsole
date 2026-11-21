@@ -13,34 +13,35 @@
 
 mod tray;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::TimeZone;
-use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use um_desktop::account::{
     self, account_view, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState, HttpAuthAdmin,
     LoadOutcome,
 };
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
 use um_desktop::gateway::{
-    load_control_token, quit_app, resolve_gateway_binary, GatewayState, GatewayStatus,
-    GatewaySupervisor, HttpGateway, InstancePaths, PortSwitch, StopReason, SystemLauncher,
+    load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus,
+    GatewaySupervisor, HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logs::LogEntry;
-use um_desktop::logstream::{filter_entries, LevelFilter, LogStream};
+use um_desktop::logstream::{matches_line, read_history, LevelFilter, LogStream, StreamLine};
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
+use um_desktop::usage::{self, Coverage, Range, UsageView};
 
 slint::include_modules!();
 
 static PAUSED: AtomicBool = AtomicBool::new(false);
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -50,8 +51,8 @@ static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// One log-page update produced by the reader thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LogUpdate {
-    entries: Vec<LogEntry>,
-    appended: Vec<LogEntry>,
+    entries: Vec<StreamLine>,
+    appended: Vec<StreamLine>,
     reset: bool,
     trimmed: usize,
     failure: Option<String>,
@@ -69,11 +70,11 @@ impl LogUpdate {
     }
 }
 
-fn tone_color(tone: Tone) -> slint::Color {
+fn status_tone(tone: Tone) -> i32 {
     match tone {
-        Tone::Good => slint::Color::from_rgb_u8(23, 106, 60),
-        Tone::Warn => slint::Color::from_rgb_u8(139, 76, 12),
-        Tone::Bad => slint::Color::from_rgb_u8(180, 35, 24),
+        Tone::Good => 0,
+        Tone::Warn => 1,
+        Tone::Bad => 2,
     }
 }
 
@@ -83,21 +84,17 @@ fn clock(at: Option<i64>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn muted_color() -> slint::Color {
-    slint::Color::from_rgb_u8(81, 93, 112)
-}
-
 fn apply_account(window: &MainWindow, view: &AccountView) {
     window.set_account_saved(view.saved_account.clone().into());
     window.set_account_saved_detail(view.saved_detail.clone().into());
-    window.set_account_state(view.state_value.clone().into());
-    window.set_account_state_detail(view.state_detail.clone().into());
-    window.set_account_state_tone(tone_color(view.state_tone));
     window.set_account_can_clear(view.can_clear);
     window.set_account_can_continue(view.can_continue_login);
     window.set_account_label(view.overview_label.clone().into());
     window.set_account_detail(view.overview_detail.clone().into());
-    window.set_account_tone(tone_color(view.overview_tone));
+    window.set_account_tone(status_tone(view.overview_tone));
+    if view.state_tone == Tone::Good || view.state_value.starts_with("正在") {
+        window.set_login_status("".into());
+    }
 }
 
 fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved: &LoadOutcome) {
@@ -109,17 +106,11 @@ fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved
     window.set_credential_account_input(form.borrow().account().to_string().into());
     window.set_credential_password_input("".into());
     window.set_password_visible(false);
-    window.set_account_form_visible(true);
-    let (status, tone) = match saved {
-        LoadOutcome::Unusable(reason) => (
-            format!("凭据不可用：{reason}；请重新录入账号密码"),
-            tone_color(Tone::Bad),
-        ),
-        _ => (String::new(), muted_color()),
-    };
-    window.set_credential_status(status.into());
-    window.set_credential_tone(tone);
+    window.set_credential_status("".into());
+    window.set_credential_tone(3);
+    window.set_show_intro(false);
     window.set_page(2);
+    window.set_account_form_visible(true);
 }
 
 fn read_auth(auth_admin: &HttpAuthAdmin, token_path: &Path, gateway: &GatewayStatus) -> AuthRead {
@@ -185,101 +176,366 @@ fn gateway_bin_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn log_rows(entries: &[LogEntry]) -> Vec<LogRow> {
-    entries
-        .iter()
-        .map(|entry| LogRow {
-            at: clock(entry.at).into(),
-            level: entry.level.to_uppercase().into(),
-            text: entry.text.clone().into(),
-        })
-        .collect()
+const LOG_ROW_HEIGHT: f32 = 36.0;
+
+fn log_row(line: &StreamLine) -> LogRow {
+    let at = line.entry.at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single());
+    let (time, precise) = match at {
+        Some(time) => {
+            let text = if time.date_naive() == chrono::Local::now().date_naive() {
+                time.format("%H:%M:%S").to_string()
+            } else {
+                time.format("%m-%d %H:%M:%S").to_string()
+            };
+            (text, time.format("%Y-%m-%d %H:%M:%S %:z").to_string())
+        }
+        None => ("时间未知".to_string(), "时间未知".to_string()),
+    };
+    let level = match line.entry.level.to_ascii_lowercase().as_str() {
+        "error" => "错误",
+        "warn" | "warning" => "警告",
+        "info" => "信息",
+        "debug" => "调试",
+        "raw" => "原始",
+        _ => "未分级",
+    };
+    LogRow {
+        id: format!("{}:{:x}", line.id.offset, line.id.hash).into(),
+        at: time.into(),
+        level: level.into(),
+        text: line.entry.text.clone().into(),
+        detail: format!("{precise}  {level}\n\n{}", line.detail).into(),
+    }
 }
 
-fn apply(window: &MainWindow, overview: &Overview, logs: &LogUpdate, account: &AccountView) {
+fn apply_overview(window: &MainWindow, overview: &Overview, account: &AccountView) {
     window.set_gateway_value(overview.gateway.value.clone().into());
     window.set_gateway_detail(overview.gateway.detail.clone().into());
-    window.set_gateway_tone(tone_color(overview.gateway.tone));
+    window.set_gateway_tone(status_tone(overview.gateway.tone));
     window.set_supervision_value(overview.supervision.value.clone().into());
     window.set_supervision_detail(overview.supervision.detail.clone().into());
-    window.set_supervision_tone(tone_color(overview.supervision.tone));
-    window.set_auth_value(overview.auth.value.clone().into());
-    window.set_auth_detail(overview.auth.detail.clone().into());
-    window.set_auth_tone(tone_color(overview.auth.tone));
+    window.set_supervision_tone(status_tone(overview.supervision.tone));
     window.set_upstream_value(overview.upstream.value.clone().into());
     window.set_upstream_detail(overview.upstream.detail.clone().into());
-    window.set_upstream_tone(tone_color(overview.upstream.tone));
+    window.set_upstream_tone(status_tone(overview.upstream.tone));
     apply_account(window, account);
     window.set_status_line(overview::status_line(overview).into());
     window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
-
-    apply_logs(window, logs);
 }
 
 fn apply_logs(window: &MainWindow, update: &LogUpdate) {
+    if window.get_log_period() != 0 {
+        return;
+    }
     if let Some(reason) = &update.failure {
         window.set_log_status(format!("日志读取失败：{reason}").into());
-        window.set_log_tone(tone_color(Tone::Bad));
+        window.set_log_tone(status_tone(Tone::Bad));
         return;
     }
 
     let level = LevelFilter::from_index(window.get_log_filter_level());
-    let keyword = window.get_log_filter_keyword().to_string();
+    let keyword = window.get_log_filter_keyword().trim().to_lowercase();
     let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
     let filter_changed = APPLIED_FILTER_EPOCH.swap(epoch, Ordering::SeqCst) != epoch;
-    let rebuild = update.reset || update.trimmed > 0 || filter_changed;
     let follow = window.get_log_follow();
-    let saved_scroll = window.get_log_scroll_y();
-
     let model = window.get_logs();
     let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
         return;
     };
-    let visible = if rebuild {
-        let rows = log_rows(&filter_entries(&update.entries, level, &keyword));
-        let count = rows.len();
-        let previous = model.row_count();
+    let matches = |line: &&StreamLine| matches_line(line, level, &keyword);
+    let added = update.appended.iter().filter(matches).count();
+    if update.reset || update.trimmed > 0 || filter_changed {
+        let rows: Vec<_> = update.entries.iter().filter(matches).map(log_row).collect();
+        let scroll = window.get_log_scroll_y().min(0.0);
+        let first = (-scroll / LOG_ROW_HEIGHT).floor() as usize;
+        let remainder = -scroll - first as f32 * LOG_ROW_HEIGHT;
+        let anchor = (!follow && !filter_changed && !update.reset)
+            .then(|| model.row_data(first))
+            .flatten();
+        let new_first = anchor.and_then(|anchor| rows.iter().position(|row| row.id == anchor.id));
         model.set_vec(rows);
-        if follow {
-            window.set_new_log_count(0);
-        } else if filter_changed {
-            window.set_log_scroll_y(0.0);
-        } else if update.trimmed > 0 || previous > count {
-            let removed = update.trimmed.max(previous.saturating_sub(count));
-            window.set_log_scroll_y(saved_scroll + removed as f32 * 25.0);
-        } else {
-            window.set_log_scroll_y(saved_scroll);
-        }
-        count
-    } else {
-        let rows = log_rows(&filter_entries(&update.appended, level, &keyword));
-        let count = rows.len();
-        if !rows.is_empty() {
-            model.extend(rows.iter().cloned());
-            if follow {
-                window.set_new_log_count(0);
+        if !follow {
+            if let Some(new_first) = new_first {
+                window.set_log_scroll_y(-(new_first as f32 * LOG_ROW_HEIGHT + remainder));
             } else {
-                window.set_new_log_count(window.get_new_log_count() + count as i32);
+                window.set_log_scroll_y(0.0);
             }
         }
-        model.row_count()
-    };
+    } else if added > 0 {
+        model.extend(update.appended.iter().filter(matches).map(log_row));
+    }
+    if follow || filter_changed {
+        window.set_new_log_count(0);
+    } else {
+        window.set_new_log_count(window.get_new_log_count().saturating_add(added as i32));
+    }
 
-    window.set_log_total(update.entries.len() as i32);
-    let status = if update.entries.is_empty() {
-        "暂无日志记录（本实例）".to_string()
-    } else if level == LevelFilter::All && keyword.trim().is_empty() {
-        format!("实时增量 · 最近 {} 条", update.entries.len())
+    let total = update.entries.len();
+    let visible = model.row_count();
+    let status = if total == 0 {
+        "本实例暂无日志记录".to_string()
+    } else if visible == 0 {
+        format!("最新 {total} 条中没有匹配的日志")
+    } else if visible == total {
+        format!("实时 · 最近 {total} 条")
     } else {
-        format!("实时增量 · 显示 {visible} / 共 {} 条", update.entries.len())
+        format!("实时 · 显示 {visible} / {total} 条")
     };
+    window.set_log_total(total as i32);
     window.set_log_status(status.into());
-    window.set_log_tone(tone_color(if update.entries.is_empty() {
-        Tone::Warn
+    window.set_log_tone(3);
+    window.set_log_version(window.get_log_version().wrapping_add(1));
+}
+
+#[derive(Default)]
+struct HistoryNav {
+    pages: Vec<Option<u64>>,
+    older: Option<u64>,
+    generation: u64,
+}
+
+fn load_historical_logs(
+    window: &MainWindow,
+    path: &Path,
+    navigation: &Arc<Mutex<HistoryNav>>,
+    direction: i32,
+) {
+    let period = window.get_log_period();
+    if period == 0 {
+        window.set_log_status("正在读取实时日志…".into());
+        window.set_log_follow(true);
+        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
+        REFRESH_LOGS.store(true, Ordering::SeqCst);
+        return;
+    }
+
+    let (before, generation) = {
+        let mut nav = navigation.lock().expect("log history navigation poisoned");
+        match direction {
+            1 => match nav.older {
+                Some(cursor) => nav.pages.push(Some(cursor)),
+                None => return,
+            },
+            -1 if nav.pages.len() > 1 => {
+                nav.pages.pop();
+            }
+            -1 => return,
+            _ => {
+                nav.pages.clear();
+                nav.pages.push(None);
+            }
+        }
+        nav.generation = nav.generation.wrapping_add(1);
+        (nav.pages.last().copied().flatten(), nav.generation)
+    };
+    let path = path.to_path_buf();
+    let weak = window.as_weak();
+    let navigation = Arc::clone(navigation);
+    let level = LevelFilter::from_index(window.get_log_filter_level());
+    let keyword = window.get_log_filter_keyword().to_string();
+    window.set_older_logs(false);
+    window.set_newer_logs(false);
+    window.set_log_status("正在读取历史日志…".into());
+    window.set_log_tone(3);
+    std::thread::spawn(move || {
+        let now = chrono::Local::now();
+        let days = match period { 2 => 6, 3 => 29, _ => 0 };
+        let since = now.date_naive()
+            .checked_sub_days(chrono::Days::new(days))
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
+            .map_or_else(|| (now - chrono::Duration::days(days as i64 + 1)).timestamp_millis(), |time| time.timestamp_millis());
+        let result = read_history(&path, before, since, level, &keyword);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut nav = navigation.lock().expect("log history navigation poisoned");
+            if window.get_log_period() != period || nav.generation != generation {
+                return;
+            }
+            let model = window.get_logs();
+            let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else { return };
+            match result {
+                Ok(result) => {
+                    let count = result.lines.len();
+                    nav.older = result.older;
+                    window.set_older_logs(nav.older.is_some());
+                    window.set_newer_logs(nav.pages.len() > 1);
+                    model.set_vec(result.lines.iter().map(log_row).collect::<Vec<_>>());
+                    window.set_log_scroll_y(0.0);
+                    let text = if count == 0 {
+                        "本页没有符合条件的记录".to_string()
+                    } else {
+                        format!("历史日志 · 本页 {count} 条")
+                    };
+                    window.set_log_status(text.into());
+                }
+                Err(error) => {
+                    nav.older = None;
+                    window.set_newer_logs(nav.pages.len() > 1);
+                    model.set_vec(Vec::new());
+                    window.set_log_status(format!("历史日志读取失败：{error}").into());
+                    window.set_log_tone(status_tone(Tone::Bad));
+                }
+            }
+        });
+    });
+}
+
+fn coverage_tone(coverage: Coverage) -> i32 {
+    match coverage {
+        Coverage::Unavailable => status_tone(Tone::Bad),
+        Coverage::Partial => status_tone(Tone::Warn),
+        Coverage::Complete | Coverage::Empty => 3,
+    }
+}
+
+fn apply_usage(window: &MainWindow, view: UsageView) {
+    let to_ticks = |labels: Vec<String>| {
+        let ticks: Vec<SharedString> = labels.into_iter().map(Into::into).collect();
+        ModelRc::from(ticks.as_slice())
+    };
+    let token_axis = to_ticks(view.token_ticks);
+    let request_axis = to_ticks(view.request_ticks);
+    let points = if matches!(view.coverage, Coverage::Empty | Coverage::Unavailable) {
+        Vec::new()
     } else {
-        Tone::Good
-    }));
-    window.set_log_version(window.get_log_version() + 1);
+        view.buckets.into_iter().map(|bucket| UsagePoint {
+            label: bucket.label.clone().into(),
+            detail_label: format!("北京时间 {}", bucket.label).into(),
+            token_value: bucket.tokens.into(),
+            request_value: bucket.requests.into(),
+            token_height: bucket.token_fraction.unwrap_or(-1.0),
+            request_height: bucket.request_fraction.unwrap_or(-1.0),
+        }).collect::<Vec<_>>()
+    };
+    window.set_token_ticks(token_axis);
+    window.set_request_ticks(request_axis);
+    window.set_token_total(view.token_total.into());
+    window.set_request_total(view.request_total.into());
+    window.set_usage_points(ModelRc::from(points.as_slice()));
+    window.set_usage_status(view.message.into());
+    window.set_usage_tone(coverage_tone(view.coverage));
+    window.set_usage_loading(false);
+}
+
+#[derive(Default)]
+struct RequestNav {
+    pages: Vec<Option<String>>,
+    earlier: Option<String>,
+    rows: Vec<usage::RequestRow>,
+    now: i64,
+    generation: u64,
+}
+
+fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>>, direction: i32) {
+    let (cursor, now, generation) = {
+        let mut nav = nav.lock().expect("request navigation poisoned");
+        match direction {
+            1 => match nav.earlier.take() {
+                Some(cursor) => nav.pages.push(Some(cursor)),
+                None => return,
+            },
+            -1 if nav.pages.len() > 1 => {
+                nav.pages.pop();
+                nav.earlier = None;
+            }
+            -1 => return,
+            _ => {
+                nav.pages.clear();
+                nav.pages.push(None);
+                nav.earlier = None;
+                nav.now = chrono::Utc::now().timestamp_millis();
+            }
+        }
+        nav.generation = nav.generation.wrapping_add(1);
+        (nav.pages.last().cloned().flatten(), nav.now, nav.generation)
+    };
+    let range = Range::from_index(window.get_request_period());
+    let result = window.get_request_result();
+    let keyword = window.get_request_keyword().to_string();
+    let weak = window.as_weak();
+    let ledger = ledger.to_path_buf();
+    let nav = Arc::clone(nav);
+    window.set_selected_request("".into());
+    window.set_request_status("正在读取请求记录…".into());
+    window.set_request_tone(3);
+    window.set_older_requests(false);
+    window.set_newer_requests(false);
+    std::thread::spawn(move || {
+        let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = weak.upgrade() else { return; };
+            let mut nav = nav.lock().expect("request navigation poisoned");
+            if nav.generation != generation { return; }
+            let rows = page.rows.iter().map(|row| RequestRow {
+                id: row.key.clone().into(),
+                at: row.at.clone().into(),
+                model: row.model.clone().into(),
+                outcome: row.result.clone().into(),
+                tone: match row.result.as_str() {
+                    "成功" => status_tone(Tone::Good),
+                    "失败" => status_tone(Tone::Bad),
+                    _ => status_tone(Tone::Warn),
+                },
+                summary: format!("{}  {}", row.duration, row.request_id.as_deref().unwrap_or("")).into(),
+                detail: "".into(),
+            }).collect::<Vec<_>>();
+            let count = rows.len();
+            window.set_requests(ModelRc::from(rows.as_slice()));
+            if count == 0 || !page.message.is_empty() {
+                window.set_request_status(page.message.into());
+            } else {
+                window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
+            }
+            window.set_request_tone(coverage_tone(page.coverage));
+            window.set_older_requests(page.earlier.is_some());
+            window.set_newer_requests(nav.pages.len() > 1);
+            nav.rows = page.rows;
+            nav.earlier = page.earlier;
+        });
+    });
+}
+
+fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<RequestNav>, key: &str) {
+    let nav = nav.lock().expect("request navigation poisoned");
+    let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else { return; };
+    let key = row.key.clone();
+    let weak = window.as_weak();
+    let log = log.to_path_buf();
+    let detail = format!(
+        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
+        row.at, row.result, row.model, row.request_id.as_deref().unwrap_or("—"),
+        row.duration, row.input, row.output, row.detail
+    );
+    window.set_selected_request(key.clone().into());
+    window.set_request_detail_title("请求详情".into());
+    window.set_request_detail(format!("{detail}\n\n正在读取关联运行日志…").into());
+    std::thread::spawn(move || {
+        let logs = usage::read_request_logs(&log, row.request_id.as_deref(), chrono::Utc::now().timestamp_millis());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                if window.get_selected_request().as_str() == key {
+                    window.set_request_detail(format!("{detail}\n\n运行日志\n{}\n{}", logs.message, logs.lines.join("\n")).into());
+                }
+            }
+        });
+    });
+}
+
+#[cfg(windows)]
+fn allow_motion() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut allowed = 0i32;
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some((&mut allowed as *mut i32).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        ).is_ok() && allowed != 0
+    }
 }
 
 fn hide_now(window: &MainWindow) {
@@ -297,24 +553,38 @@ fn show_now(window: &MainWindow) {
 type SharedSupervisor = Arc<Mutex<Option<GatewaySupervisor>>>;
 type SharedStatus = Arc<Mutex<GatewayStatus>>;
 
-fn stop_gateway(supervisor: &SharedSupervisor, status: &SharedStatus) {
-    let stopped = {
-        let mut guard = supervisor
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match guard.take() {
-            Some(mut supervisor) => quit_app(&mut supervisor, &mut || {}),
-            None => return,
+fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &SharedStatus) {
+    if QUIT_REQUESTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let supervisor = Arc::clone(supervisor);
+    let status = Arc::clone(status);
+    let weak = window.as_weak();
+    window.set_status_line("正在停止本实例网关…".into());
+    std::thread::spawn(move || {
+        let stopped = {
+            let mut guard = supervisor.lock().expect("gateway supervisor poisoned");
+            guard.as_mut().map(|supervisor| supervisor.stop(StopReason::UserRequested))
+        };
+        if let Some(stopped) = stopped {
+            let failure = match &stopped.state {
+                GatewayState::StopFailed { reason } => Some(reason.clone()),
+                _ => None,
+            };
+            *status.lock().expect("gateway status poisoned") = stopped;
+            if let Some(error) = failure {
+                QUIT_REQUESTED.store(false, Ordering::SeqCst);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        show_now(&window);
+                        window.set_status_line(format!("网关未停止：{error}").into());
+                    }
+                });
+                return;
+            }
         }
-    };
-    *status
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = stopped;
-}
-
-fn request_quit(supervisor: &SharedSupervisor, status: &SharedStatus) {
-    stop_gateway(supervisor, status);
-    QUIT.store(true, Ordering::SeqCst);
+        QUIT.store(true, Ordering::SeqCst);
+    });
 }
 
 #[cfg(windows)]
@@ -338,6 +608,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let window = MainWindow::new()?;
+    window.set_allow_motion(allow_motion());
     let config_path = config::default_config_path();
     let (loaded_config, settings_status, settings_tone) = match &config_path {
         Ok(path) => match config::load_from(path) {
@@ -370,6 +641,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paths = InstancePaths::under(&app_data_root);
     let current_config = Arc::new(Mutex::new(loaded_config.clone()));
     window.set_port_input(loaded_config.model_api_port.to_string().into());
+    window.set_active_address(config::model_api_bind(&loaded_config).into());
     window.set_config_path(
         config_path
             .as_ref()
@@ -379,7 +651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     window.set_instance_path(paths.instance_dir.display().to_string().into());
     window.set_settings_status(settings_status.into());
-    window.set_settings_tone(tone_color(settings_tone));
+    window.set_settings_tone(status_tone(settings_tone));
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -391,6 +663,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => account::load_from(path),
         None => LoadOutcome::Unusable("LOCALAPPDATA 未设置，无法定位凭据文件".to_string()),
     };
+    window.set_show_intro(!loaded_config.intro_dismissed && matches!(saved_credentials, LoadOutcome::Missing));
     let saved_state = Arc::new(Mutex::new(saved_credentials.clone()));
     let auth_state: Arc<Mutex<Option<AuthRead>>> = Arc::new(Mutex::new(None));
     let account_form = Rc::new(RefCell::new(AccountForm::new(None)));
@@ -449,55 +722,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_state = Arc::clone(&auth_state);
         let auth_admin = Arc::clone(&auth_admin);
         std::thread::spawn(move || {
-            let mut last_overview: Option<Overview> = None;
-            let mut last_logs: Option<LogUpdate> = None;
-            let mut last_account: Option<AccountView> = None;
-            let mut last_filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
-            let mut stream: Option<LogStream> = None;
-            loop {
-                if QUIT.load(Ordering::SeqCst) {
-                    break;
-                }
-                if PAUSED.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(200));
-                    continue;
-                }
+            let mut last = None;
+            while !QUIT.load(Ordering::SeqCst) {
                 let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
                 let supervision = gateway_status
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .card();
                 let overview = overview::read_overview(&probe, &base, supervision);
-                let logs = match stream.as_mut() {
-                    Some(stream) => match stream.poll() {
-                        Ok(outcome) => LogUpdate {
-                            entries: stream.entries(),
-                            appended: outcome
-                                .appended
-                                .into_iter()
-                                .map(|line| line.entry)
-                                .collect(),
-                            reset: outcome.reset,
-                            trimmed: outcome.trimmed,
-                            failure: None,
-                        },
-                        Err(reason) => LogUpdate::failed(reason),
-                    },
-                    None => match LogStream::open(&service_log) {
-                        Ok(opened) => {
-                            let entries = opened.entries();
-                            stream = Some(opened);
-                            LogUpdate {
-                                entries,
-                                appended: Vec::new(),
-                                reset: true,
-                                trimmed: 0,
-                                failure: None,
-                            }
-                        }
-                        Err(reason) => LogUpdate::failed(reason),
-                    },
-                };
                 let auth = match load_control_token(&control_token_path) {
                     Ok(token) => match auth_admin.read_status(&base, &token) {
                         Ok(status) => AuthRead::Status(status),
@@ -513,32 +745,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *auth_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
-                let filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
-                let changed = last_overview.as_ref() != Some(&overview)
-                    || last_logs.as_ref() != Some(&logs)
-                    || last_account.as_ref() != Some(&account)
-                    || filter_epoch != last_filter_epoch;
-                if changed {
-                    last_filter_epoch = filter_epoch;
-                    last_overview = Some(overview.clone());
-                    last_logs = Some(logs.clone());
-                    last_account = Some(account.clone());
+                if last.as_ref().is_none_or(|(last_overview, last_account)| *last_overview != overview || *last_account != account) {
+                    last = Some((overview.clone(), account.clone()));
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
-                            apply(&window, &overview, &logs, &account);
+                            apply_overview(&window, &overview, &account);
                         }
                     });
                 }
-                for _ in 0..10 {
-                    if QUIT.load(Ordering::SeqCst)
-                        || !PAUSED.load(Ordering::SeqCst)
-                        || REFRESH_LOGS.swap(false, Ordering::SeqCst)
-                    {
-                        break;
+                std::thread::sleep(Duration::from_secs(if PAUSED.load(Ordering::SeqCst) { 3 } else { 1 }));
+            }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let service_log = service_log.clone();
+        std::thread::spawn(move || {
+            let mut last_failure = None;
+            let mut stream: Option<LogStream> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                if !PAUSED.load(Ordering::SeqCst) {
+                    let refresh = REFRESH_LOGS.swap(false, Ordering::SeqCst);
+                    let update = if let Some(opened) = stream.as_mut() {
+                        match opened.poll() {
+                            Ok(outcome) if refresh || outcome.reset || !outcome.appended.is_empty() || last_failure.is_some() => Some(LogUpdate {
+                                entries: opened.lines().iter().cloned().collect(),
+                                appended: outcome.appended,
+                                reset: outcome.reset || last_failure.is_some(),
+                                trimmed: outcome.trimmed,
+                                failure: None,
+                            }),
+                            Ok(_) => None,
+                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => Some(LogUpdate::failed(reason)),
+                            Err(_) => None,
+                        }
+                    } else {
+                        match LogStream::open(&service_log) {
+                            Ok(opened) => {
+                                let entries = opened.lines().iter().cloned().collect();
+                                stream = Some(opened);
+                                Some(LogUpdate { entries, appended: Vec::new(), reset: true, trimmed: 0, failure: None })
+                            }
+                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => Some(LogUpdate::failed(reason)),
+                            Err(_) => None,
+                        }
+                    };
+                    if let Some(update) = update {
+                        last_failure = update.failure.clone();
+                        let weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(window) = weak.upgrade() {
+                                apply_logs(&window, &update);
+                            }
+                        });
                     }
-                    std::thread::sleep(Duration::from_millis(200));
                 }
+                std::thread::sleep(Duration::from_millis(160));
             }
         });
     }
@@ -551,11 +815,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    window.set_tray_available(tray.is_some());
+    let tray_available = tray.is_some();
     let shell = Rc::new(RefCell::new(ShellState::new()));
 
     let weak_close = window.as_weak();
     let shell_close = shell.clone();
+    let close_supervisor = Arc::clone(&gateway_supervisor);
+    let close_status = Arc::clone(&gateway_status);
     window.window().on_close_requested(move || {
+        if !tray_available {
+            if let Some(window) = weak_close.upgrade() {
+                request_quit(&window, &close_supervisor, &close_status);
+            }
+            return CloseRequestResponse::KeepWindowShown;
+        }
         shell_close.borrow_mut().apply(ShellEvent::CloseRequested);
         if let Some(window) = weak_close.upgrade() {
             hide_now(&window);
@@ -563,31 +837,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CloseRequestResponse::HideWindow
     });
 
-    let weak_hide = window.as_weak();
-    let shell_hide = shell.clone();
-    window.on_hide_requested(move || {
-        shell_hide.borrow_mut().apply(ShellEvent::CloseRequested);
-        if let Some(window) = weak_hide.upgrade() {
-            hide_now(&window);
-        }
-    });
-
     let supervisor_quit = Arc::clone(&gateway_supervisor);
     let status_quit = Arc::clone(&gateway_status);
     let weak_quit = window.as_weak();
     window.on_quit_requested(move || {
-        request_quit(&supervisor_quit, &status_quit);
         if let Some(window) = weak_quit.upgrade() {
-            let _ = window.hide();
+            request_quit(&window, &supervisor_quit, &status_quit);
         }
     });
 
+    let request_nav = Arc::new(Mutex::new(RequestNav::default()));
+    let ledger = paths.usage_log.clone();
+    let request_ledger = ledger.clone();
+    let request_page_nav = Arc::clone(&request_nav);
+    let weak_request = window.as_weak();
+    window.on_query_requests(move |direction| {
+        if let Some(window) = weak_request.upgrade() {
+            load_requests(&window, &request_ledger, &request_page_nav, direction);
+        }
+    });
+    let request_log = service_log.clone();
+    let weak_request = window.as_weak();
+    window.on_open_request(move |key| {
+        if let Some(window) = weak_request.upgrade() {
+            show_request(&window, &request_log, &request_nav, &key);
+        }
+    });
+
+    let usage_range = Arc::new(AtomicI32::new(0));
+    {
+        let weak = window.as_weak();
+        let range = Arc::clone(&usage_range);
+        window.on_usage_range_changed(move |period| {
+            range.store(period, Ordering::SeqCst);
+            if let Some(window) = weak.upgrade() {
+                window.set_usage_points(ModelRc::default());
+                window.set_token_total("—".into());
+                window.set_request_total("—".into());
+                window.set_usage_loading(true);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let mut last = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                if !PAUSED.load(Ordering::SeqCst) {
+                    let period = usage_range.load(Ordering::SeqCst);
+                    let metadata = std::fs::metadata(&ledger).map(|meta| (meta.len(), meta.modified().ok()));
+                    let day = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("Beijing offset")).date_naive();
+                    let stamp = (period, metadata.as_ref().copied().map_err(|error| error.kind()), day);
+                    if last.as_ref() != Some(&stamp) {
+                        last = Some(stamp);
+                        let view = usage::read_usage(&ledger, Range::from_index(period), chrono::Utc::now().timestamp_millis());
+                        let weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(window) = weak.upgrade() {
+                                if window.get_usage_period() == period {
+                                    apply_usage(&window, view);
+                                }
+                            }
+                        });
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(350));
+            }
+        });
+    }
+
     let weak_navigate = window.as_weak();
+    let requests_opened = Cell::new(false);
     window.on_navigate(move |page| {
         if let Some(window) = weak_navigate.upgrade() {
             window.set_page(page);
-            if page == 1 {
+            if page == 3 {
                 REFRESH_LOGS.store(true, Ordering::SeqCst);
+            } else if page == 1 && !requests_opened.replace(true) {
+                window.invoke_query_requests(0);
             }
         }
     });
@@ -596,9 +923,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
-    window.on_apply_log_filter(|_level, _keyword| {
-        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
-        REFRESH_LOGS.store(true, Ordering::SeqCst);
+    let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
+    let weak_history = window.as_weak();
+    let history_path = service_log.clone();
+    let nav_for_filter = Arc::clone(&history_navigation);
+    window.on_apply_log_filter(move |_, _| {
+        if let Some(window) = weak_history.upgrade() {
+            if window.get_log_period() != 0 {
+                load_historical_logs(&window, &history_path, &nav_for_filter, 0);
+            } else {
+                FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
+                REFRESH_LOGS.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+    let weak_history = window.as_weak();
+    window.on_log_history(move |_, direction| {
+        if let Some(window) = weak_history.upgrade() {
+            load_historical_logs(&window, &service_log, &history_navigation, direction);
+        }
+    });
+
+    let weak_skip = window.as_weak();
+    let skip_config = Arc::clone(&current_config);
+    let skip_path = config_path.as_ref().ok().cloned();
+    window.on_skip_login(move || {
+        let Some(window) = weak_skip.upgrade() else { return };
+        window.set_show_intro(false);
+        let Some(path) = &skip_path else { return };
+        let mut config = skip_config.lock().expect("desktop config poisoned");
+        config.intro_dismissed = true;
+        if !matches!(config::load_from(path), ConfigLoadOutcome::Invalid(_)) {
+            if let Err(error) = config::save_to(path, &config) {
+                window.set_settings_status(format!("无法保存首次登录偏好：{error}").into());
+                window.set_settings_tone(status_tone(Tone::Bad));
+            }
+        }
     });
 
     let weak_configure = window.as_weak();
@@ -673,19 +1033,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(credentials) => credentials,
                 Err(error) => {
                     window.set_credential_status(format!("无法保存：{error}").into());
-                    window.set_credential_tone(tone_color(Tone::Bad));
+                    window.set_credential_tone(status_tone(Tone::Bad));
                     return;
                 }
             }
         };
         let Some(path) = credentials_save_path.clone() else {
             window.set_credential_status("无法保存：LOCALAPPDATA 未设置".into());
-            window.set_credential_tone(tone_color(Tone::Bad));
+            window.set_credential_tone(status_tone(Tone::Bad));
             return;
         };
         window.set_account_form_visible(false);
+        window.set_account_busy(true);
         window.set_credential_status("正在保存账号密码并应用到本实例网关…".into());
-        window.set_credential_tone(tone_color(Tone::Warn));
+        window.set_credential_tone(status_tone(Tone::Warn));
 
         let supervisor = Arc::clone(&supervisor_save_credentials);
         let gateway_status = Arc::clone(&status_save_credentials);
@@ -698,8 +1059,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(error) = account::save_to(&path, &credentials) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = weak.upgrade() {
+                        window.set_account_busy(false);
                         window.set_credential_status(format!("保存失败：{error}").into());
-                        window.set_credential_tone(tone_color(Tone::Bad));
+                        window.set_credential_tone(status_tone(Tone::Bad));
                         window.set_account_form_visible(true);
                     }
                 });
@@ -732,12 +1094,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (message, tone) = save_message(&auth, &view);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
+                    window.set_account_busy(false);
                     window.set_credential_password_input("".into());
                     window.set_password_visible(false);
                     window.set_account_form_visible(false);
                     apply_account(&window, &view);
                     window.set_credential_status(message.into());
-                    window.set_credential_tone(tone_color(tone));
+                    window.set_credential_tone(status_tone(tone));
                 }
             });
         });
@@ -758,7 +1121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let Some(path) = credentials_clear_path.clone() else {
             window.set_credential_status("无法清除：LOCALAPPDATA 未设置".into());
-            window.set_credential_tone(tone_color(Tone::Bad));
+            window.set_credential_tone(status_tone(Tone::Bad));
             return;
         };
         *form_clear.borrow_mut() = AccountForm::new(None);
@@ -767,7 +1130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.set_password_visible(false);
         window.set_account_form_visible(false);
         window.set_credential_status("正在清除已保存的账号密码…".into());
-        window.set_credential_tone(tone_color(Tone::Warn));
+        window.set_credential_tone(status_tone(Tone::Warn));
 
         let supervisor = Arc::clone(&supervisor_clear);
         let gateway_status = Arc::clone(&status_clear);
@@ -783,7 +1146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
                             window.set_credential_status(format!("清除失败：{error}").into());
-                            window.set_credential_tone(tone_color(Tone::Bad));
+                            window.set_credential_tone(status_tone(Tone::Bad));
                         }
                     });
                     return;
@@ -830,7 +1193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = weak.upgrade() {
                     apply_account(&window, &view);
                     window.set_credential_status(message.into());
-                    window.set_credential_tone(tone_color(tone));
+                    window.set_credential_tone(status_tone(tone));
                 }
             });
         });
@@ -849,8 +1212,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if LOGIN_IN_FLIGHT.swap(true, Ordering::SeqCst) {
             return;
         }
-        window.set_credential_status("正在打开可见 Edge 登录…".into());
-        window.set_credential_tone(tone_color(Tone::Warn));
+        window.set_account_busy(true);
+        window.set_login_status("正在打开 Edge 登录窗口…".into());
+        window.set_login_tone(status_tone(Tone::Warn));
         let base = format!(
             "http://127.0.0.1:{}",
             current_port_continue.load(Ordering::SeqCst)
@@ -880,11 +1244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let view = account_view(&saved, Some(&auth));
             let (message, tone) = match &auth {
                 AuthRead::Status(status) => match status.state {
-                    AuthState::Valid => ("已登录".to_string(), Tone::Good),
-                    AuthState::LoggingIn => (
-                        "已打开可见 Edge；请完成 UMPASS/Duo 登录".to_string(),
-                        Tone::Warn,
-                    ),
+                    AuthState::Valid | AuthState::LoggingIn => (String::new(), Tone::Good),
                     _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
                 },
                 AuthRead::Unavailable(reason) => {
@@ -893,9 +1253,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
+                    window.set_account_busy(false);
                     apply_account(&window, &view);
-                    window.set_credential_status(message.into());
-                    window.set_credential_tone(tone_color(tone));
+                    window.set_login_status(message.into());
+                    window.set_login_tone(status_tone(tone));
                 }
             });
         });
@@ -915,12 +1276,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(port) => port,
             Err(error) => {
                 window.set_settings_status(format!("端口无效：{error}").into());
-                window.set_settings_tone(tone_color(Tone::Bad));
+                window.set_settings_tone(status_tone(Tone::Bad));
                 return;
             }
         };
-        window.set_settings_status(format!("正在切换到 127.0.0.1:{port}…").into());
-        window.set_settings_tone(tone_color(Tone::Warn));
+        window.set_port_busy(true);
+        window.set_settings_status(format!("正在检查端口 {port}…").into());
+        window.set_settings_tone(status_tone(Tone::Warn));
 
         let supervisor = Arc::clone(&save_supervisor);
         let status = Arc::clone(&save_status);
@@ -940,20 +1302,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let path = path
                         .as_ref()
                         .ok_or_else(|| "无法保存：LOCALAPPDATA 未设置".to_string())?;
-                    config::save_to(
-                        path,
-                        &DesktopConfig {
-                            model_api_port: port,
-                        },
-                    )?;
-                    *config
+                    let mut config = config
                         .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = DesktopConfig {
-                        model_api_port: port,
-                    };
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let next = DesktopConfig { model_api_port: port, ..*config };
+                    config::save_to(path, &next)?;
+                    *config = next;
                     Ok(())
                 };
-                let outcome = supervisor.switch_port(port, &mut save);
+                let progress_window = weak.clone();
+                let mut progress = move |stage| {
+                    let text = match stage {
+                        PortSwitchProgress::Waiting { in_flight } => format!("等待 {in_flight} 个在途请求结束…"),
+                        PortSwitchProgress::Switching => format!("正在切换到 127.0.0.1:{port}…"),
+                        PortSwitchProgress::Restoring => "正在恢复原端口…".to_string(),
+                    };
+                    let weak = progress_window.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_settings_status(text.into());
+                        }
+                    });
+                };
+                let outcome = supervisor.switch_port_with_progress(port, &mut save, &mut progress, &|| QUIT_REQUESTED.load(Ordering::SeqCst));
                 (outcome, supervisor.status())
             };
             current_port.store(next_status.port, Ordering::SeqCst);
@@ -988,9 +1359,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let next_port = next_status.port;
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
+                    window.set_port_busy(false);
                     window.set_port_input(next_port.to_string().into());
+                    window.set_active_address(format!("127.0.0.1:{next_port}").into());
                     window.set_settings_status(message.into());
-                    window.set_settings_tone(tone_color(tone));
+                    window.set_settings_tone(status_tone(tone));
                 }
             });
         });
@@ -1031,9 +1404,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Some(tray::QUIT) => {
-                    if shell_timer.borrow_mut().apply(ShellEvent::TrayQuit) == ShellAction::Quit {
-                        request_quit(&supervisor_tray, &status_tray);
-                    }
+                    request_quit(&window, &supervisor_tray, &status_tray);
                 }
                 _ => {}
             }

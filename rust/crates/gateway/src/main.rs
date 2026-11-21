@@ -26,6 +26,7 @@ fn main() -> ExitCode {
                 Some(BindMode::Production) => config.candidate = false,
                 None => return usage("--mode must be candidate or production"),
             },
+            "--desktop-instance" => config.desktop_instance = true,
             "--role" => match args.next().as_deref().and_then(Role::parse) {
                 Some(value) => role = Some(value),
                 None => return usage("--role must be local or cloud"),
@@ -114,7 +115,7 @@ fn main() -> ExitCode {
             "--help" | "-h" => {
                 println!(
                     "usage: um-gateway-candidate [--mode candidate|production] \
-                     [--role local|cloud] --upstream-base-url URL [--host 127.0.0.1] \
+                     [--role local|cloud] [--desktop-instance] --upstream-base-url URL [--host 127.0.0.1] \
                      [--port 0|8000|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
@@ -137,7 +138,13 @@ fn main() -> ExitCode {
     }
     // Apply `--role` and `--port` only after the whole argv is parsed, so
     // `validate_bind_policy` sees the final pair regardless of flag order.
-    config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
+    config.role = role.unwrap_or_else(|| {
+        if config.desktop_instance {
+            Role::Local
+        } else {
+            Role::for_port(config.bind_port)
+        }
+    });
     if let Some(value) = auth_wait_budget_cli {
         config.auth_wait_budget = Some(resolve_auth_wait_budget(Some(value), None, config.role));
     }

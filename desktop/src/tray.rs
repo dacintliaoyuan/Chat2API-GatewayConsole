@@ -95,7 +95,7 @@ mod imp {
             let menu = CreatePopupMenu().map_err(|error| error.to_string())?;
             AppendMenuW(menu, MF_STRING, ID_SHOW, windows::core::w!("显示主窗口"))
                 .map_err(|error| error.to_string())?;
-            AppendMenuW(menu, MF_STRING, ID_QUIT, windows::core::w!("退出 App"))
+            AppendMenuW(menu, MF_STRING, ID_QUIT, windows::core::w!("退出并停止网关"))
                 .map_err(|error| error.to_string())?;
             let icon = LoadIconW(None, IDI_APPLICATION).map_err(|error| error.to_string())?;
             let mut data = NOTIFYICONDATAW {

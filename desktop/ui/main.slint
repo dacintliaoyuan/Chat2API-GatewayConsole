@@ -1,163 +1,173 @@
-import { Button, CheckBox, ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, TextEdit } from "std-widgets.slint";
+import { Theme, Panel, Heading, Hint, Selectable } from "theme.slint";
+import { UsageChart, UsagePoint } from "usage-chart.slint";
+export { UsagePoint }
 
 export struct LogRow {
+    id: string,
     at: string,
     level: string,
     text: string,
+    detail: string,
 }
 
-global Palette {
-    out property <color> background: #f4f6fa;
-    out property <color> surface: #ffffff;
-    out property <color> border: #dce2ed;
-    out property <color> ink: #19222e;
-    out property <color> muted: #515d70;
-    out property <color> accent: #1b5ccc;
-    out property <color> accent-soft: #e6eefc;
-    out property <color> good: #176a3c;
-    out property <color> bad: #b42318;
-    out property <color> warn: #8b4c0c;
+export struct RequestRow {
+    id: string,
+    at: string,
+    model: string,
+    outcome: string,
+    tone: int,
+    summary: string,
+    detail: string,
 }
 
-component NavItem inherits Rectangle {
-    in property <string> label;
-    in property <bool> active: false;
-    callback clicked();
-
-    height: 34px;
-    border-radius: 6px;
-    background: root.active ? Palette.accent-soft : transparent;
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-action-default => { root.clicked(); }
-
+component NavItem inherits Selectable {
+    height: 38px;
     Text {
-        text: root.label;
-        font-size: 13px;
-        font-weight: root.active ? 650 : 500;
-        color: root.active ? Palette.accent : Palette.ink;
-        vertical-alignment: center;
-        x: 10px;
-        width: parent.width - 20px;
-    }
-
-    TouchArea {
-        clicked => { root.clicked(); }
+        x: 10px; width: parent.width - 20px;
+        text: root.label; color: root.selected ? Theme.accent : Theme.ink;
+        font-size: 13px; font-weight: root.selected ? 650 : 500;
+        vertical-alignment: center; overflow: elide;
     }
 }
 
-component Card inherits Rectangle {
+component StateCell inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
     in property <string> detail;
-    in property <color> tone: Palette.accent;
-
-    height: 86px;
-    border-radius: 10px;
-    background: Palette.surface;
-    border-width: 1px;
-    border-color: Palette.border;
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 3px;
-        Text {
-            text: root.label;
-            font-size: 12px;
-            color: Palette.muted;
-        }
-        Text {
-            text: root.value;
-            font-size: 16px;
-            font-weight: 650;
-            color: root.tone;
-            overflow: elide;
-        }
-        Text {
-            text: root.detail;
-            font-size: 11px;
-            color: Palette.muted;
-            overflow: elide;
-        }
+    in property <int> tone: 3;
+    spacing: 5px;
+    alignment: start;
+    Text { text: root.label; color: Theme.muted; font-size: 12px; }
+    HorizontalLayout {
+        spacing: 7px;
+        alignment: start;
+        Rectangle { width: 7px; height: 7px; y: (parent.height - self.height) / 2; border-radius: 4px; background: Theme.status(root.tone); }
+        Text { text: root.value; color: Theme.ink; font-weight: 650; font-size: 15px; vertical-alignment: center; wrap: word-wrap; }
     }
+    Hint { text: root.detail; visible: !root.detail.is-empty; }
+    @children
 }
 
-component PageTitle inherits VerticalLayout {
+component Divider inherits Rectangle { height: 1px; background: Theme.edge; }
+component VerticalDivider inherits Rectangle { width: 1px; background: Theme.edge; }
+
+component TextDetails inherits Panel {
     in property <string> title;
-    in property <string> subtitle;
-    alignment: start;
-    spacing: 2px;
-    Text {
-        text: root.title;
-        font-size: 19px;
-        font-weight: 700;
-        color: Palette.ink;
-    }
-    Text {
-        text: root.subtitle;
-        font-size: 12px;
-        color: Palette.muted;
+    in property <string> body;
+    callback closed();
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
+            Button { text: "复制全文"; clicked => { full-text.select-all(); full-text.copy(); } }
+            Button { text: "关闭"; clicked => { root.closed(); } }
+        }
+        full-text := TextEdit {
+            text: root.body;
+            read-only: true;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+            accessible-label: root.title;
+        }
     }
 }
 
 export component MainWindow inherits Window {
     title: "本机控制台";
-    width: 1060px;
-    height: 720px;
-    background: Palette.background;
+    preferred-width: 1060px;
+    preferred-height: 720px;
+    min-width: 540px;
+    min-height: 420px;
+    background: Theme.background;
     default-font-family: "Segoe UI";
     default-font-size: 13px;
+    private property <bool> compact: root.width < 800px;
 
     in-out property <int> page: 0;
     in property <string> gateway-value: "检测中";
-    in property <string> gateway-detail: "";
-    in property <color> gateway-tone: Palette.warn;
-    in property <string> supervision-value: "检测中";
-    in property <string> supervision-detail: "";
-    in property <color> supervision-tone: Palette.warn;
-    in property <string> auth-value: "读取中";
-    in property <string> auth-detail: "";
-    in property <color> auth-tone: Palette.warn;
-    in property <string> upstream-value: "读取中";
-    in property <string> upstream-detail: "";
-    in property <color> upstream-tone: Palette.warn;
+    in property <string> gateway-detail;
+    in property <int> gateway-tone: 3;
+    in property <string> supervision-value;
+    in property <string> supervision-detail;
+    in property <int> supervision-tone: 3;
+    in property <string> upstream-value: "检测中";
+    in property <string> upstream-detail;
+    in property <int> upstream-tone: 3;
     in property <string> account-label: "读取中";
-    in property <string> account-detail: "";
-    in property <color> account-tone: Palette.warn;
-    in property <string> account-saved: "未保存账号";
-    in property <string> account-saved-detail: "";
-    in property <string> account-state: "认证状态读取中";
-    in property <string> account-state-detail: "";
-    in property <color> account-state-tone: Palette.warn;
-    in property <bool> account-can-clear: false;
-    in property <bool> account-can-continue: false;
-    in property <bool> account-form-visible: false;
-    in-out property <string> credential-account-input: "";
-    in-out property <string> credential-password-input: "";
-    in property <bool> password-visible: false;
-    in property <string> credential-status: "";
-    in property <color> credential-tone: Palette.muted;
-    in property <string> account-note: "首次打开可跳过登录；之后可从「配置账号」进入。账号密码只保存在本机，并交给本实例网关使用。";
-    in property <string> status-line: "正在启动本实例网关";
+    in property <string> account-detail;
+    in property <int> account-tone: 3;
+    in property <string> account-saved: "未配置账号";
+    in property <string> account-saved-detail;
+    in property <bool> account-can-clear;
+    in property <bool> account-can-continue;
+    in property <bool> account-form-visible;
+    in property <bool> account-busy;
+    in property <bool> show-intro;
+    in-out property <string> credential-account-input;
+    in-out property <string> credential-password-input;
+    in property <bool> password-visible;
+    in property <string> credential-status;
+    in property <int> credential-tone: 3;
+    in property <string> login-status;
+    in property <int> login-tone: 3;
+    in property <string> status-line;
     in property <string> last-update: "—";
+    in-out property <int> usage-period: 0;
+    in property <[UsagePoint]> usage-points: [];
+    in property <[string]> token-ticks: [];
+    in property <[string]> request-ticks: [];
+    in property <string> token-total: "—";
+    in property <string> request-total: "—";
+    in property <bool> usage-loading: true;
+    in property <string> usage-status;
+    in property <int> usage-tone: 3;
+    in property <bool> allow-motion: false;
+
     in property <string> log-status: "尚未读取日志";
-    in property <color> log-tone: Palette.muted;
+    in property <int> log-tone: 3;
     in property <[LogRow]> logs: [];
     in-out property <int> log-filter-level: 0;
-    in-out property <string> log-filter-keyword: "";
+    in-out property <string> log-filter-keyword;
     in-out property <bool> log-follow: true;
     in-out property <length> log-scroll-y: 0px;
-    in-out property <int> new-log-count: 0;
-    in property <int> log-total: 0;
-    in property <int> log-version: 0;
+    in-out property <int> new-log-count;
+    in property <int> log-total;
+    in property <int> log-version;
+    in-out property <int> log-period;
+    in property <bool> older-logs;
+    in property <bool> newer-logs;
+    private property <string> open-log-id;
+    private property <string> open-log-title;
+    private property <string> open-log-body;
+
+    in property <[RequestRow]> requests: [];
+    in property <string> request-status: "等待从本实例读取请求记录…";
+    in property <int> request-tone: 3;
+    in property <bool> older-requests;
+    in property <bool> newer-requests;
+    in-out property <string> request-keyword;
+    in-out property <int> request-period;
+    in-out property <int> request-result;
+    in-out property <string> selected-request;
+    in property <string> request-detail-title;
+    in property <string> request-detail;
+
     in-out property <string> port-input: "7999";
-    in property <string> settings-status: "";
-    in property <color> settings-tone: Palette.muted;
-    in property <string> config-path: "";
-    in property <string> instance-path: "";
+    in property <string> active-address;
+    in property <bool> port-busy;
+    in property <string> settings-status;
+    in property <int> settings-tone: 3;
+    in property <string> config-path;
+    in property <string> instance-path;
+    private property <bool> show-technical;
+    in property <bool> tray-available: true;
 
     callback navigate(int);
     callback configure-account();
+    callback skip-login();
     callback open-account-form();
     callback close-account-form();
     callback save-credentials(string, string);
@@ -167,557 +177,408 @@ export component MainWindow inherits Window {
     callback save-port(string);
     callback refresh-logs();
     callback apply-log-filter(int, string);
-    callback hide-requested();
+    callback log-history(int, int);
+    callback query-requests(int);
+    callback open-request(string);
+    callback usage-range-changed(int);
     callback quit-requested();
 
+    changed account-form-visible => {
+        if (root.account-form-visible) {
+            if (root.credential-account-input.is-empty) { account-input.focus(); }
+            else { password-input.focus(); }
+        } else if (root.page == 2) {
+            edit-account.focus();
+        }
+    }
     changed log-version => {
-        if (root.log-follow && root.logs.length > 0) {
+        if (root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
     }
     changed page => {
-        if (root.page == 1 && root.log-follow && root.logs.length > 0) {
+        if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
     }
 
-    VerticalLayout {
-        padding: 16px;
-        spacing: 12px;
-
-        HorizontalLayout {
-            spacing: 8px;
+    HorizontalLayout {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        Rectangle {
+            width: root.compact ? 110px : 172px;
+            background: Theme.sidebar;
             VerticalLayout {
-                alignment: start;
-                spacing: 1px;
+                padding: root.compact ? 8px : 14px;
+                spacing: 5px;
                 Text {
-                    text: "本机控制台";
-                    font-size: 20px;
-                    font-weight: 700;
-                    color: Palette.ink;
+                    text: "本机控制台"; color: Theme.ink; font-size: root.compact ? 14px : 17px;
+                    font-weight: 650; height: 44px; vertical-alignment: center;
                 }
-                Text {
-                    text: "桌面版 · 本实例网关监督";
-                    font-size: 12px;
-                    color: Palette.muted;
+                for label[index] in ["总览", "请求诊断", "运行日志", "设置"] : NavItem {
+                    label: label;
+                    selected: root.page == (index == 2 ? 3 : index == 3 ? 2 : index);
+                    activate => { root.navigate(index == 2 ? 3 : index == 3 ? 2 : index); }
                 }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            Button {
-                text: "隐藏到托盘";
-                clicked => { root.hide-requested(); }
-            }
-            Button {
-                text: "退出 App";
-                clicked => { root.quit-requested(); }
+                Rectangle { vertical-stretch: 1; }
+                Hint { text: "关窗后继续运行"; visible: root.tray-available; }
+                Button { text: "退出并停止网关"; visible: !root.tray-available; clicked => { root.quit-requested(); } }
             }
         }
 
-        HorizontalLayout {
+        VerticalLayout {
+            padding: root.compact ? 12px : 20px;
             spacing: 12px;
+            HorizontalLayout {
+                spacing: 8px;
+                Heading {
+                    text: root.page == 0 ? "总览" : root.page == 1 ? "请求与诊断" : root.page == 3 ? "运行日志" : "设置";
+                    font-size: 22px; horizontal-stretch: 1; vertical-alignment: center;
+                }
+                Hint { text: root.active-address; visible: !root.active-address.is-empty; vertical-alignment: center; }
+            }
 
-            Rectangle {
-                width: 168px;
-                border-radius: 10px;
-                background: Palette.surface;
-                border-width: 1px;
-                border-color: Palette.border;
-
+            overview-scroll := ScrollView {
+                visible: root.page == 0;
+                vertical-stretch: 1;
+                content-width: self.visible-width;
                 VerticalLayout {
-                    padding: 8px;
-                    spacing: 4px;
-                    NavItem {
-                        label: "总览";
-                        active: root.page == 0;
-                        clicked => { root.navigate(0); }
+                    spacing: 12px;
+                    Panel {
+                        VerticalLayout {
+                            padding: 14px; spacing: 12px;
+                            visible: root.compact;
+                            StateCell {
+                                label: "网关"; value: root.gateway-value; detail: root.gateway-detail; tone: root.gateway-tone;
+                            }
+                            Divider { }
+                            StateCell {
+                                label: "UM 登录"; value: root.account-label; detail: root.account-detail; tone: root.account-tone;
+                            }
+                            Divider { }
+                            StateCell {
+                                label: "上游"; value: root.upstream-value; detail: root.upstream-detail; tone: root.upstream-tone;
+                            }
+                        }
+                        HorizontalLayout {
+                            visible: !root.compact;
+                            padding: 14px; spacing: 14px;
+                            StateCell {
+                                horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
+                                detail: root.gateway-detail; tone: root.gateway-tone;
+                            }
+                            VerticalDivider { }
+                            StateCell {
+                                horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
+                                detail: root.account-detail; tone: root.account-tone;
+                            }
+                            VerticalDivider { }
+                            StateCell {
+                                horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
+                                detail: root.upstream-detail; tone: root.upstream-tone;
+                            }
+                        }
                     }
-                    NavItem {
-                        label: "运行日志";
-                        active: root.page == 1;
-                        clicked => { root.navigate(1); }
+                    Panel {
+                        visible: root.show-intro || !root.login-status.is-empty || root.account-can-continue
+                            || (!root.account-can-clear && root.account-label != "已登录")
+                            || !root.account-saved-detail.is-empty;
+                        VerticalLayout {
+                            padding: 14px; spacing: 10px;
+                            Hint {
+                                visible: root.show-intro;
+                                text: "登录 UM 后可以调用模型。也可以先查看网关和日志。";
+                            }
+                            Hint { text: root.login-status; color: Theme.status(root.login-tone); visible: !root.login-status.is-empty; }
+                            HorizontalLayout {
+                                spacing: 8px; alignment: start;
+                                Button {
+                                    visible: !root.account-can-clear || root.account-can-continue || !root.account-saved-detail.is-empty;
+                                    text: root.account-can-continue ? "继续登录" : "配置账号";
+                                    enabled: !root.account-busy;
+                                    primary: true;
+                                    clicked => {
+                                        if (root.account-can-continue) { root.continue-login(); }
+                                        else { root.configure-account(); }
+                                    }
+                                }
+                                Button {
+                                    visible: root.show-intro; text: "稍后登录";
+                                    clicked => { root.skip-login(); }
+                                }
+                            }
+                        }
                     }
-                    NavItem {
-                        label: "模型与设置";
-                        active: root.page == 2;
-                        clicked => { root.navigate(2); }
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                    Text {
-                        text: "关闭窗口后收起到托盘";
-                        font-size: 11px;
-                        color: Palette.muted;
-                        wrap: word-wrap;
+                    UsageChart {
+                        period <=> root.usage-period;
+                        points: root.usage-points;
+                        token-ticks: root.token-ticks;
+                        request-ticks: root.request-ticks;
+                        token-total: root.token-total;
+                        request-total: root.request-total;
+                        loading: root.usage-loading;
+                        status-text: root.usage-status;
+                        status-tone: Theme.status(root.usage-tone);
+                        allow-motion: root.allow-motion;
+                        period-changed(index) => { root.usage-range-changed(index); }
                     }
                 }
             }
 
-            Rectangle {
-                horizontal-stretch: 1;
-                border-radius: 10px;
-
+            HorizontalLayout {
+                visible: root.page == 1;
+                vertical-stretch: 1;
+                spacing: 12px;
                 VerticalLayout {
-                    visible: root.page == 0;
-                    spacing: 12px;
-
-                    Rectangle {
-                        height: 56px;
-                        border-radius: 10px;
-                        background: Palette.surface;
-                        border-width: 1px;
-                        border-color: Palette.border;
-
-                        HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
-                            spacing: 10px;
-                            alignment: center;
-                            Text {
-                                text: "UM 账号";
-                                font-size: 12px;
-                                color: Palette.muted;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                text: root.account-label;
-                                font-size: 15px;
-                                font-weight: 650;
-                                color: root.account-tone;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                text: root.account-detail;
-                                font-size: 12px;
-                                color: Palette.muted;
-                                vertical-alignment: center;
-                                overflow: elide;
-                                horizontal-stretch: 1;
-                            }
-                            Button {
-                                text: "配置账号";
-                                clicked => { root.configure-account(); }
-                            }
-                            Button {
-                                text: "继续登录";
-                                visible: root.account-can-continue;
-                                clicked => { root.continue-login(); }
-                            }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Card {
-                            label: "本实例网关";
-                            value: root.gateway-value;
-                            detail: root.gateway-detail;
-                            tone: root.gateway-tone;
-                            horizontal-stretch: 1;
-                        }
-                        Card {
-                            label: "网关监督";
-                            value: root.supervision-value;
-                            detail: root.supervision-detail;
-                            tone: root.supervision-tone;
-                            horizontal-stretch: 1;
-                        }
-                        Card {
-                            label: "UM 认证";
-                            value: root.auth-value;
-                            detail: root.auth-detail;
-                            tone: root.auth-tone;
-                            horizontal-stretch: 1;
-                        }
-                        Card {
-                            label: "上游";
-                            value: root.upstream-value;
-                            detail: root.upstream-detail;
-                            tone: root.upstream-tone;
-                            horizontal-stretch: 1;
-                        }
-                    }
-
-                    Text {
-                        text: root.account-note;
-                        font-size: 12px;
-                        color: Palette.muted;
-                        wrap: word-wrap;
-                    }
-
-                    Rectangle { vertical-stretch: 1; }
-                }
-
-                VerticalLayout {
-                    visible: root.page == 1;
-                    spacing: 12px;
-
+                    horizontal-stretch: 1;
+                    visible: !root.compact || root.selected-request.is-empty;
+                    spacing: 8px;
                     HorizontalLayout {
                         spacing: 8px;
-                        PageTitle {
-                            title: "请求与诊断";
-                            subtitle: "本实例运行日志 · 实时增量与断线补读";
-                            horizontal-stretch: 1;
-                        }
-                        Button {
-                            text: "刷新";
-                            clicked => { root.refresh-logs(); }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            text: "级别";
-                            font-size: 12px;
-                            color: Palette.muted;
-                            vertical-alignment: center;
+                        ComboBox {
+                            width: 84px; model: ["今天", "7 天", "30 天"]; current-index <=> root.request-period;
+                            accessible-label: "请求日期范围";
+                            selected(_) => { root.query-requests(0); }
                         }
                         ComboBox {
-                            width: 108px;
-                            model: ["全部", "信息", "警告", "错误", "原始"];
-                            current-index <=> root.log-filter-level;
-                            selected(value) => {
-                                root.apply-log-filter(root.log-filter-level, root.log-filter-keyword);
-                            }
+                            width: 92px; model: ["全部结果", "成功", "失败"]; current-index <=> root.request-result;
+                            accessible-label: "请求结果";
+                            selected(_) => { root.query-requests(0); }
                         }
                         LineEdit {
-                            width: 180px;
-                            placeholder-text: "关键字（不区分大小写）";
-                            text: root.log-filter-keyword;
-                            edited(text) => {
-                                root.log-filter-keyword = text;
-                                root.apply-log-filter(root.log-filter-level, text);
-                            }
+                            horizontal-stretch: 1;
+                            placeholder-text: "模型或请求 ID";
+                            accessible-label: "查找请求";
+                            text <=> root.request-keyword;
+                            accepted(_) => { root.query-requests(0); }
                         }
-                        Rectangle { horizontal-stretch: 1; }
-                        Text {
-                            text: root.logs.length + " / " + root.log-total + " 条";
-                            font-size: 12px;
-                            color: Palette.muted;
-                            vertical-alignment: center;
-                        }
-                        Button {
-                            visible: root.new-log-count > 0;
-                            text: "有新日志 " + root.new-log-count + " 条";
-                            clicked => {
-                                root.log-follow = true;
-                                root.new-log-count = 0;
-                                if (root.logs.length > 0) {
-                                    log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
-                                }
-                            }
-                        }
+                        Button { text: "查询"; clicked => { root.query-requests(0); } }
                     }
-
-                    Rectangle {
+                    Hint { text: root.request-status; color: Theme.status(root.request-tone); }
+                    Panel {
                         vertical-stretch: 1;
-                        border-radius: 10px;
-                        background: Palette.surface;
-                        border-width: 1px;
-                        border-color: Palette.border;
-
-                        VerticalLayout {
-                            padding: 10px;
-                            spacing: 6px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Text {
-                                    text: root.log-status;
-                                    font-size: 12px;
-                                    color: root.log-tone;
-                                    vertical-alignment: center;
-                                }
-                                Rectangle { horizontal-stretch: 1; }
-                                Text {
-                                    text: root.log-follow ? "跟随最新" : "已暂停跟随";
-                                    font-size: 11px;
-                                    color: Palette.muted;
-                                    vertical-alignment: center;
-                                }
-                            }
-                            log-list := ListView {
-                                vertical-stretch: 1;
-                                content-y <=> root.log-scroll-y;
-                                scrolled => {
-                                    root.log-follow = (-log-list.content-y + log-list.visible-height) >= (log-list.content-height - 8px);
-                                    if (root.log-follow) {
-                                        root.new-log-count = 0;
-                                    }
-                                }
-                                for row in root.logs : Rectangle {
-                                    height: 25px;
-                                    width: parent.width;
+                        ListView {
+                            for item in root.requests : Selectable {
+                                label: item.at + " " + item.model + " " + item.outcome;
+                                height: 50px;
+                                selected: root.selected-request == item.id;
+                                activate => { root.open-request(item.id); }
+                                VerticalLayout {
+                                    padding-left: 10px; padding-right: 10px; padding-top: 5px; padding-bottom: 5px;
+                                    spacing: 2px;
                                     HorizontalLayout {
                                         spacing: 8px;
-                                        padding-left: 4px;
-                                        padding-right: 4px;
-                                        Text {
-                                            text: row.at;
-                                            width: 92px;
-                                            font-size: 11px;
-                                            color: Palette.muted;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                        }
-                                        Text {
-                                            text: row.level;
-                                            width: 58px;
-                                            font-size: 11px;
-                                            font-weight: 600;
-                                            color: row.level == "ERROR" ? Palette.bad : row.level == "WARN" ? Palette.warn : Palette.muted;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: row.text;
-                                            horizontal-stretch: 1;
-                                            font-size: 12px;
-                                            color: Palette.ink;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                        }
+                                        Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
+                                        Text { text: item.outcome; color: Theme.status(item.tone); }
                                     }
+                                    Hint { text: item.at + "  " + item.summary; overflow: elide; wrap: no-wrap; }
                                 }
                             }
                         }
                     }
-
-                }
-
-                VerticalLayout {
-                    visible: root.page == 2;
-                    spacing: 12px;
-
-                    PageTitle {
-                        title: "模型与设置";
-                        subtitle: "本实例的 UM 账号与模型 API 端口";
+                    HorizontalLayout {
+                        spacing: 8px; alignment: end;
+                        Button { text: "较新"; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
+                        Button { text: "较早"; enabled: root.older-requests; clicked => { root.query-requests(1); } }
                     }
+                }
+                TextDetails {
+                    visible: !root.selected-request.is-empty;
+                    width: root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
+                    title: root.request-detail-title;
+                    body: root.request-detail;
+                    closed => { root.selected-request = ""; }
+                }
+            }
 
-                    Rectangle {
-                        border-radius: 10px;
-                        background: Palette.surface;
-                        border-width: 1px;
-                        border-color: Palette.border;
+            VerticalLayout {
+                visible: root.page == 3; vertical-stretch: 1; spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    ComboBox {
+                        width: 96px; model: ["实时", "今天", "7 天", "30 天"]; current-index <=> root.log-period;
+                        accessible-label: "日志日期范围";
+                        selected(_) => { root.log-history(root.log-period, 0); }
+                    }
+                    ComboBox {
+                        width: 80px; model: ["全部", "信息", "警告", "错误", "原始"];
+                        accessible-label: "日志级别";
+                        current-index <=> root.log-filter-level;
+                        selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                    }
+                    LineEdit {
+                        horizontal-stretch: 1; placeholder-text: "搜索日志"; accessible-label: "搜索日志";
+                        text <=> root.log-filter-keyword;
+                        edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                    }
+                    Button {
+                        text: "刷新";
+                        clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Hint { text: root.log-status; color: Theme.status(root.log-tone); horizontal-stretch: 1; vertical-alignment: center; }
+                    Button {
+                        visible: root.log-period == 0;
+                        text: root.log-follow ? "暂停跟随" : root.new-log-count > 0 ? "跳到最新（" + root.new-log-count + "）" : "恢复跟随";
+                        clicked => {
+                            root.log-follow = !root.log-follow;
+                            if (root.log-follow) {
+                                root.new-log-count = 0;
+                                if (root.logs.length > 0) { log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant); }
+                            }
+                        }
+                    }
+                    Button { visible: root.log-period != 0; enabled: root.newer-logs; text: "较新"; clicked => { root.log-history(root.log-period, -1); } }
+                    Button { visible: root.log-period != 0; enabled: root.older-logs; text: "较早"; clicked => { root.log-history(root.log-period, 1); } }
+                }
+                Panel {
+                    vertical-stretch: 1;
+                    log-list := ListView {
+                        content-y <=> root.log-scroll-y;
+                        scrolled => {
+                            if (root.log-period == 0 && (-self.content-y + self.visible-height) < self.content-height - 8px) {
+                                root.log-follow = false;
+                            }
+                        }
+                        for row in root.logs : Selectable {
+                            label: row.at + " " + row.level + " " + row.text;
+                            height: 36px;
+                            selected: row.id == root.open-log-id;
+                            activate => {
+                                root.open-log-id = row.id;
+                                root.open-log-title = row.at + "  " + row.level;
+                                root.open-log-body = row.detail;
+                            }
+                            HorizontalLayout {
+                                padding-left: 8px; padding-right: 8px; spacing: 8px;
+                                Text { text: row.at; width: root.compact ? 122px : 160px; font-size: 12px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+                                Text { text: row.level; width: 49px; font-size: 12px; font-weight: 650; color: row.level == "错误" ? Theme.bad : row.level == "警告" ? Theme.warn : Theme.muted; vertical-alignment: center; }
+                                Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                            }
+                        }
+                    }
+                }
+                TextDetails {
+                    visible: !root.open-log-id.is-empty;
+                    height: root.compact ? 130px : 170px;
+                    title: root.open-log-title;
+                    body: root.open-log-body;
+                    closed => { root.open-log-id = ""; }
+                }
+            }
 
+            settings-scroll := ScrollView {
+                visible: root.page == 2;
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                VerticalLayout {
+                    spacing: 12px;
+                    Panel {
                         VerticalLayout {
-                            padding: 14px;
-                            spacing: 10px;
-                            Text {
-                                text: "UM 账号";
-                                font-size: 14px;
-                                font-weight: 650;
-                                color: Palette.ink;
-                            }
+                            padding: 14px; spacing: 9px;
+                            Heading { text: "UM 账号"; }
+                            Hint { text: root.account-saved; }
+                            Text { text: root.account-label; color: Theme.status(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
+                            Hint { visible: !root.account-detail.is-empty; text: root.account-detail; }
                             HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: "已保存账号";
-                                    font-size: 12px;
-                                    color: Palette.muted;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: root.account-saved;
-                                    font-size: 13px;
-                                    font-weight: 600;
-                                    color: Palette.ink;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
-                                }
-                                Text {
-                                    text: root.account-state;
-                                    font-size: 13px;
-                                    font-weight: 650;
-                                    color: root.account-state-tone;
-                                    vertical-alignment: center;
-                                }
-                            }
-                            Text {
-                                text: root.account-saved-detail;
-                                visible: !root.account-saved-detail.is-empty;
-                                font-size: 12px;
-                                color: Palette.bad;
-                                wrap: word-wrap;
-                            }
-                            Text {
-                                text: root.account-state-detail;
-                                font-size: 12px;
-                                color: Palette.muted;
-                                wrap: word-wrap;
-                            }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Button {
+                                spacing: 8px; alignment: start;
+                                edit-account := Button {
+                                    visible: !root.account-form-visible; enabled: !root.account-busy;
                                     text: root.account-can-clear ? "更新账号密码" : "配置账号";
                                     clicked => { root.open-account-form(); }
                                 }
                                 Button {
-                                    text: "继续登录";
-                                    enabled: root.account-can-continue;
+                                    visible: root.account-can-continue && !root.account-form-visible;
+                                    enabled: !root.account-busy; primary: true; text: "继续登录";
                                     clicked => { root.continue-login(); }
                                 }
-                                Button {
-                                    text: "清除已保存的账号密码";
-                                    enabled: root.account-can-clear;
-                                    clicked => { root.clear-credentials(); }
+                            }
+                            Hint { visible: !root.credential-status.is-empty; text: root.credential-status; color: Theme.status(root.credential-tone); }
+                            Hint { visible: !root.login-status.is-empty; text: root.login-status; color: Theme.status(root.login-tone); }
+                            VerticalLayout {
+                                visible: root.account-form-visible;
+                                spacing: 8px;
+                                Divider { }
+                                Heading { text: "录入账号密码"; }
+                                Hint { text: "账号密码保存在本机，供此网关重新登录。"; }
+                                account-input := LineEdit {
+                                    text <=> root.credential-account-input;
+                                    placeholder-text: "UMPASS 账号";
+                                    accessible-label: "UMPASS 账号";
+                                    accepted(_) => { password-input.focus(); }
                                 }
-                            }
-                            Text {
-                                text: root.credential-status;
-                                visible: !root.credential-status.is-empty;
-                                font-size: 12px;
-                                color: root.credential-tone;
-                                wrap: word-wrap;
-                            }
-                            if root.account-form-visible : Rectangle {
-                                border-radius: 8px;
-                                background: Palette.background;
-                                border-width: 1px;
-                                border-color: Palette.border;
-
-                                VerticalLayout {
-                                    padding: 10px;
-                                    spacing: 8px;
-                                    Text {
-                                        text: "录入 UM 账号密码";
-                                        font-size: 13px;
-                                        font-weight: 650;
-                                        color: Palette.ink;
+                                password-input := LineEdit {
+                                    text <=> root.credential-password-input;
+                                    input-type: root.password-visible ? InputType.text : InputType.password;
+                                    placeholder-text: "UMPASS 密码";
+                                    accessible-label: "UMPASS 密码";
+                                    accepted(_) => {
+                                        if (!root.account-busy) { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Text {
-                                            text: "账号";
-                                            width: 42px;
-                                            font-size: 13px;
-                                            color: Palette.ink;
-                                            vertical-alignment: center;
-                                        }
-                                        LineEdit {
-                                            horizontal-stretch: 1;
-                                            text: root.credential-account-input;
-                                            placeholder-text: "UMPASS 账号";
-                                            edited(text) => { root.credential-account-input = text; }
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Text {
-                                            text: "密码";
-                                            width: 42px;
-                                            font-size: 13px;
-                                            color: Palette.ink;
-                                            vertical-alignment: center;
-                                        }
-                                        LineEdit {
-                                            horizontal-stretch: 1;
-                                            text: root.credential-password-input;
-                                            input-type: root.password-visible ? InputType.text : InputType.password;
-                                            placeholder-text: "UMPASS 密码";
-                                            edited(text) => { root.credential-password-input = text; }
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        CheckBox {
-                                            text: "显示密码";
-                                            checked: root.password-visible;
-                                            toggled => { root.toggle-password-visible(); }
-                                        }
-                                        Rectangle { horizontal-stretch: 1; }
-                                        Button {
-                                            text: "保存账号";
-                                            clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
-                                        }
-                                        Button {
-                                            text: "取消";
-                                            clicked => { root.close-account-form(); }
-                                        }
+                                }
+                                CheckBox { text: "显示密码"; checked: root.password-visible; toggled => { root.toggle-password-visible(); } }
+                                HorizontalLayout {
+                                    alignment: end; spacing: 8px;
+                                    Button { text: "取消"; clicked => { root.close-account-form(); } }
+                                    Button {
+                                        text: "保存账号"; primary: true; enabled: !root.account-busy;
+                                        clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
                                 }
                             }
                         }
                     }
-
-                    Rectangle {
-                        border-radius: 10px;
-                        background: Palette.surface;
-                        border-width: 1px;
-                        border-color: Palette.border;
-
+                    Panel {
                         VerticalLayout {
-                            padding: 14px;
-                            spacing: 10px;
-                            Text {
-                                text: "模型 API 端口";
-                                font-size: 14px;
-                                font-weight: 650;
-                                color: Palette.ink;
+                            padding: 14px; spacing: 9px;
+                            Heading { text: "模型 API 地址"; }
+                            Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
+                            HorizontalLayout {
+                                spacing: 8px; alignment: start;
+                                Hint { text: "127.0.0.1:"; vertical-alignment: center; }
+                                LineEdit {
+                                    width: 96px; text <=> root.port-input; enabled: !root.port-busy;
+                                    accessible-label: "模型 API 端口";
+                                    accepted(_) => { if (!root.port-busy) { root.save-port(root.port-input); } }
+                                }
+                                Button { text: "切换端口"; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
-                            Text {
-                                text: "只绑定本机回环，默认 127.0.0.1:7999；测试实例可用 7998。保存后停止旧实例并在新端口启动；失败会恢复原端口。";
-                                font-size: 12px;
-                                color: Palette.muted;
-                                wrap: word-wrap;
-                            }
+                            Hint { text: root.settings-status; color: Theme.status(root.settings-tone); }
+                        }
+                    }
+                    Panel {
+                        VerticalLayout {
+                            padding: 14px; spacing: 9px;
                             HorizontalLayout {
                                 spacing: 8px;
-                                Text {
-                                    text: "127.0.0.1:";
-                                    font-size: 13px;
-                                    color: Palette.ink;
-                                    vertical-alignment: center;
-                                }
-                                LineEdit {
-                                    width: 96px;
-                                    text: root.port-input;
-                                    edited(text) => { root.port-input = text; }
-                                }
+                                Heading { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
                                 Button {
-                                    text: "保存";
-                                    clicked => { root.save-port(root.port-input); }
+                                    text: root.show-technical ? "收起详情" : "查看详情";
+                                    clicked => { root.show-technical = !root.show-technical; }
                                 }
                             }
-                            Text {
-                                text: root.settings-status;
-                                font-size: 12px;
-                                color: root.settings-tone;
-                                wrap: word-wrap;
-                            }
-                            Text {
-                                text: "配置文件：" + root.config-path;
-                                font-size: 11px;
-                                color: Palette.muted;
-                                wrap: word-wrap;
-                            }
-                            Text {
-                                text: "实例数据：" + root.instance-path;
-                                font-size: 11px;
-                                color: Palette.muted;
-                                wrap: word-wrap;
+                            VerticalLayout {
+                                visible: root.show-technical; spacing: 8px;
+                                Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status(root.supervision-tone); }
+                                Hint { text: root.account-saved-detail; visible: !root.account-saved-detail.is-empty; }
+                                Hint { text: "配置文件  " + root.config-path; }
+                                Hint { text: "实例数据  " + root.instance-path; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Button { text: "清除已保存的账号密码"; enabled: root.account-can-clear && !root.account-busy; clicked => { root.clear-credentials(); } }
+                                }
                             }
                         }
                     }
-
-                    Rectangle { vertical-stretch: 1; }
                 }
             }
-        }
 
-        HorizontalLayout {
-            spacing: 8px;
-            Text {
-                text: root.status-line;
-                font-size: 12px;
-                color: Palette.muted;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: "最近更新 " + root.last-update;
-                font-size: 12px;
-                color: Palette.muted;
-                vertical-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
+                Hint { text: "更新于 " + root.last-update; wrap: no-wrap; }
             }
         }
     }

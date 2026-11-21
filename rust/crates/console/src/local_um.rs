@@ -424,35 +424,35 @@ fn ledger_read_error(detail: String) -> LedgerRead {
 }
 
 pub fn read_ledger(path: &Path) -> LedgerRead {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return LedgerRead::default()
         }
         Err(error) => return ledger_read_error(error.to_string()),
     };
-    let size = metadata.len();
-    let mut truncated = false;
-    let data = if size > UM_MAX_READ_BYTES {
-        truncated = true;
-        let Ok(mut file) = std::fs::File::open(path) else {
-            return ledger_read_error("ledger unreadable".to_string());
-        };
-        use std::io::{Read as _, Seek as _, SeekFrom};
-        if file.seek(SeekFrom::End(-(UM_MAX_READ_BYTES as i64))).is_err() {
-            return ledger_read_error("ledger unreadable".to_string());
-        }
-        let mut data = Vec::new();
-        if file.read_to_end(&mut data).is_err() {
-            return ledger_read_error("ledger unreadable".to_string());
-        }
-        data
-    } else {
-        match std::fs::read(path) {
-            Ok(data) => data,
-            Err(error) => return ledger_read_error(error.to_string()),
-        }
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => return ledger_read_error(error.to_string()),
     };
+    let size = metadata.len();
+    let offset = size.saturating_sub(UM_MAX_READ_BYTES);
+    let mut truncated = offset > 0;
+    if !metadata.is_file() {
+        return ledger_read_error("ledger not a file".to_string());
+    }
+    if offset > 0 {
+        if let Err(error) = file.seek(SeekFrom::Start(offset)) {
+            return ledger_read_error(error.to_string());
+        }
+    }
+    // Bound the snapshot to its observed length even while a writer appends.
+    let mut data = Vec::new();
+    if let Err(error) = file.take(size - offset).read_to_end(&mut data) {
+        return ledger_read_error(error.to_string());
+    }
     let text = String::from_utf8_lossy(&data);
     let mut lines = text.lines();
     let mut events = Vec::new();
@@ -1225,6 +1225,59 @@ fn empty_trend(
         "timezone": "Asia/Shanghai",
         "checked_epoch": (now_ms / 1000.0).floor() as i64,
     })
+}
+
+/// Desktop summary over the same ledger and token/retry rules as the web
+/// console. Today uses Beijing hours, the other periods use calendar days.
+pub fn desktop_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQueryError> {
+    if !matches!(range, "today" | "7d" | "30d") || !now_ms.is_finite() {
+        return Err(UmQueryError("invalid desktop usage range or time".to_string()));
+    }
+    let (start, end, _) = window_bounds(range, now_ms)?;
+    let hourly = range == "today";
+    let step = if hourly { 3_600_000.0 } else { 86_400_000.0 };
+    let count = ((end - start) / step) as usize;
+    let read = read_ledger(ledger);
+    let (status, note) = ledger_status(&read);
+    let mut groups = vec![Vec::new(); count];
+    let mut scanned = 0;
+    for event in &read.events {
+        if let Some(at) = event.ms.filter(|at| start <= *at && *at < end) {
+            groups[((at - start) / step) as usize].push(event);
+            scanned += 1;
+        }
+    }
+    let mut buckets = Vec::with_capacity(count);
+    for (index, events) in groups.iter().enumerate() {
+        let label = if hourly {
+            format!("{index:02}:00")
+        } else {
+            beijing_day(Some(start + index as f64 * step)).unwrap_or_default()
+        };
+        let mut bucket = if matches!(status, "missing" | "unavailable") {
+            let missing = Reading::missing(&note).to_json();
+            json!({ "tokens": missing, "requests": missing })
+        } else {
+            json!({
+                "tokens": sum_readings(&events.iter().map(|event| total_reading(event)).collect::<Vec<_>>()).to_json(),
+                "requests": Reading::exact_int(events.iter().filter(|event| !is_retry(event)).count() as i64).to_json(),
+            })
+        };
+        bucket["label"] = json!(label);
+        buckets.push(bucket);
+    }
+    let mut total = merge_buckets(&buckets);
+    if status == "partial" {
+        for bucket in &mut buckets {
+            mark_trend_bucket(bucket, &note);
+        }
+        mark_trend_bucket(&mut total, &note);
+    }
+    Ok(json!({
+        "buckets": buckets,
+        "total": total,
+        "coverage": { "status": status, "note": note, "scanned": scanned },
+    }))
 }
 
 pub fn um_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQueryError> {

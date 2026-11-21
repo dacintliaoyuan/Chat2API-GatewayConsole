@@ -445,12 +445,12 @@ fn not_logged_in_stays_not_logged_in_in_the_overview_and_offers_login() {
     );
     assert_eq!(logging_in.state_value, "登录中");
     assert_eq!(logging_in.overview_label, "登录中");
-    assert!(logging_in.can_continue_login);
+    assert!(!logging_in.can_continue_login);
 
     let failed = account_view(&saved, Some(&AuthRead::Status(status(AuthState::Failed))));
     assert_eq!(failed.state_value, "登录失败");
     assert_eq!(failed.state_tone, Tone::Bad);
-    assert_eq!(failed.overview_label, "尚未登录");
+    assert_eq!(failed.overview_label, "登录失败");
     assert!(failed.can_continue_login);
 }
 
@@ -461,7 +461,7 @@ fn unusable_credentials_are_reported_with_a_reentry_path() {
         &saved,
         Some(&AuthRead::Status(status(AuthState::NeedsLogin))),
     );
-    assert_eq!(view.saved_account, "凭据不可用");
+    assert_eq!(view.saved_account, "已保存的账号信息无法读取");
     assert!(
         view.saved_detail.contains("凭据缺少密码"),
         "{}",
@@ -475,7 +475,7 @@ fn unusable_credentials_are_reported_with_a_reentry_path() {
 #[test]
 fn missing_credentials_are_not_shown_as_configured() {
     let view = account_view(&LoadOutcome::Missing, None);
-    assert_eq!(view.saved_account, "凭据不可用");
+    assert_eq!(view.saved_account, "未配置账号");
     assert_eq!(view.state_value, "认证状态读取中");
     assert!(!view.can_clear);
     assert!(!view.can_continue_login);

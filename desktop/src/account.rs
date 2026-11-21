@@ -525,14 +525,14 @@ pub struct AccountView {
 
 pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView {
     let (saved_account, saved_detail, can_clear) = match saved {
-        LoadOutcome::Missing => ("凭据不可用".to_string(), String::new(), false),
+        LoadOutcome::Missing => ("未配置账号".to_string(), String::new(), false),
         LoadOutcome::Loaded(credentials) => (credentials.account.clone(), String::new(), true),
-        LoadOutcome::Unusable(reason) => ("凭据不可用".to_string(), reason.clone(), true),
+        LoadOutcome::Unusable(reason) => ("已保存的账号信息无法读取".to_string(), reason.clone(), true),
     };
     let (state_value, state_detail, state_tone, can_continue) = match auth {
         None => (
             "认证状态读取中".to_string(),
-            "正在读取本实例网关的认证状态".to_string(),
+            String::new(),
             Tone::Warn,
             false,
         ),
@@ -540,31 +540,46 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
             ("认证未知".to_string(), reason.clone(), Tone::Warn, false)
         }
         Some(AuthRead::Status(status)) => {
-            let detail = match (&status.manual_reason, &status.detail) {
-                (Some(reason), _) => manual_reason_label(reason),
-                (None, Some(detail)) if !detail.is_empty() => detail.clone(),
-                _ => status.label.clone(),
+            let detail = status
+                .manual_reason_label()
+                .or_else(|| status.detail.clone())
+                .unwrap_or_default();
+            let (label, tone, next) = match (status.state, status.phase.as_deref()) {
+                (AuthState::Valid, _) => ("已登录", Tone::Good, false),
+                (AuthState::LoggingIn, Some("awaiting_duo")) => ("正在完成 Duo 验证", Tone::Warn, status.manual_reason.is_some()),
+                (AuthState::LoggingIn, _) if status.manual_reason.as_deref() == Some("duo_prompt_waiting") => {
+                    ("正在完成 Duo 验证", Tone::Warn, true)
+                }
+                (AuthState::LoggingIn, Some("verifying_login")) => ("正在核验登录结果", Tone::Warn, false),
+                (AuthState::LoggingIn, _) => ("登录中", Tone::Warn, status.manual_reason.is_some()),
+                (AuthState::NeedsLogin, _) => ("尚未登录", Tone::Warn, true),
+                (AuthState::Failed, _) => ("登录失败", Tone::Bad, true),
+                (AuthState::Cancelled, _) => ("已取消登录", Tone::Warn, true),
+                (AuthState::Unknown, _) => ("暂时无法核验", Tone::Warn, status.manual_reason.is_some()),
             };
-            match status.state {
-                AuthState::Valid => ("已登录".to_string(), detail, Tone::Good, false),
-                AuthState::LoggingIn => ("登录中".to_string(), detail, Tone::Warn, true),
-                AuthState::NeedsLogin => ("尚未登录".to_string(), detail, Tone::Warn, true),
-                AuthState::Failed => ("登录失败".to_string(), detail, Tone::Bad, true),
-                AuthState::Cancelled => ("已取消登录".to_string(), detail, Tone::Warn, true),
-                AuthState::Unknown => ("认证未知".to_string(), detail, Tone::Warn, true),
-            }
+            let detail = if status.state == AuthState::Valid {
+                String::new()
+            } else if status.label == "UM 已拒绝当前凭据（尚未到期）" {
+                status.label.clone()
+            } else if detail.is_empty() && status.error.as_deref() == Some("timeout") {
+                "登录窗口已超时，可重新登录。".to_string()
+            } else {
+                detail
+            };
+            (label.to_string(), detail, tone, next)
         }
     };
     let can_continue_login = can_continue && matches!(saved, LoadOutcome::Loaded(_));
-    let (overview_label, overview_tone) = match auth {
-        Some(AuthRead::Status(status)) if status.state == AuthState::Valid => {
-            ("已登录".to_string(), Tone::Good)
-        }
-        Some(AuthRead::Status(status)) if status.state == AuthState::LoggingIn => {
-            ("登录中".to_string(), Tone::Warn)
-        }
-        Some(AuthRead::Status(_)) => ("尚未登录".to_string(), Tone::Warn),
-        Some(AuthRead::Unavailable(_)) | None => ("认证未知".to_string(), Tone::Warn),
+    let (overview_label, overview_detail) = match saved {
+        LoadOutcome::Unusable(_) if state_tone != Tone::Good => (
+            state_value.clone(),
+            "已保存的账号信息无法读取，请重新录入。".to_string(),
+        ),
+        LoadOutcome::Missing if auth.is_none() => (
+            "尚未登录".to_string(),
+            String::new(),
+        ),
+        _ => (state_value.clone(), state_detail.clone()),
     };
     AccountView {
         saved_account,
@@ -575,8 +590,8 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         can_clear,
         can_continue_login,
         overview_label,
-        overview_detail: state_detail,
-        overview_tone,
+        overview_detail,
+        overview_tone: state_tone,
     }
 }
 
