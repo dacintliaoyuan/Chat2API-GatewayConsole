@@ -171,6 +171,60 @@ fn overview_content_is_visible_and_scrolls_at_minimum_size() {
 }
 
 #[test]
+fn the_state_card_splits_its_width_into_three_equal_cells() {
+    for (width, height) in [(1060.0, 720.0), (800.0, 540.0)] {
+        let window = window_at(width, height);
+        let widths = [
+            window.get_overview_state_gateway_width(),
+            window.get_overview_state_login_width(),
+            window.get_overview_state_upstream_width(),
+        ];
+        // The card content width includes its 16 px inset on both sides.
+        let inner_width = window.get_overview_state_content_width() - 32.0;
+        println!("state widths at {width}: {widths:?} inner={inner_width}");
+        assert!(
+            widths.iter().all(|width| *width > 100.0),
+            "every state cell must have a usable width"
+        );
+        assert!(
+            (widths[0] - widths[1]).abs() < 1.0 && (widths[1] - widths[2]).abs() < 1.0,
+            "the three state cells must be equally wide"
+        );
+        assert!(
+            (widths.iter().sum::<f32>() + 28.0 - inner_width).abs() < 1.0,
+            "the three cells and their two gutters must fill the card"
+        );
+    }
+}
+
+#[test]
+fn the_address_chips_are_vertically_centered_with_the_page_title() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    println!(
+        "title y={} h={} base y={} h={} v1 y={} h={}",
+        window.get_overview_title_y(),
+        window.get_overview_title_height(),
+        window.get_overview_address_y(),
+        window.get_overview_address_height(),
+        window.get_overview_v1_y(),
+        window.get_overview_v1_height(),
+    );
+    let title_center = window.get_overview_title_y() + window.get_overview_title_height() / 2.0;
+    let base_center = window.get_overview_address_y() + window.get_overview_address_height() / 2.0;
+    let v1_center = window.get_overview_v1_y() + window.get_overview_v1_height() / 2.0;
+    assert!(
+        (title_center - base_center).abs() < 1.0,
+        "the address chip must be vertically centered with the page title"
+    );
+    assert!(
+        (title_center - v1_center).abs() < 1.0,
+        "the /v1 chip must be vertically centered with the page title"
+    );
+}
+
+#[test]
 fn settings_scrolls_to_the_account_form_at_minimum_size() {
     let window = window_at(540.0, 420.0);
     window.set_page(2);

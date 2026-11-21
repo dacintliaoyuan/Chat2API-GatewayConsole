@@ -440,6 +440,23 @@ export component MainWindow inherits Window {
     out property <length> overview-login-content-height: login-card.content-height;
     out property <length> overview-chart-y: usage-chart.y;
     out property <length> overview-chart-height: usage-chart.height;
+    out property <length> overview-chart-x: usage-chart.absolute-position.x;
+    out property <length> overview-chart-width: usage-chart.width;
+    out property <length> overview-chart-absolute-y: usage-chart.absolute-position.y;
+    out property <length> overview-chart-content-height: usage-chart.content-height;
+    out property <length> overview-title-y: page-title.absolute-position.y;
+    out property <length> overview-title-height: page-title.height;
+    out property <length> overview-state-gateway-width: state-gateway.width;
+    out property <length> overview-state-login-width: state-login.width;
+    out property <length> overview-state-upstream-width: state-upstream.width;
+    out property <length> usage-metric-x: usage-chart.metric-x;
+    out property <length> usage-metric-y: usage-chart.metric-y;
+    out property <length> usage-metric-width: usage-chart.metric-width;
+    out property <length> usage-metric-height: usage-chart.metric-height;
+    out property <length> usage-controls-y: usage-chart.controls-y;
+    out property <length> usage-controls-height: usage-chart.controls-height;
+    out property <length> usage-selection-y: usage-chart.selection-y;
+    out property <length> usage-selection-height: usage-chart.selection-height;
     out property <length> overview-address-x: overview-address.absolute-position.x;
     out property <length> overview-address-y: overview-address.absolute-position.y;
     out property <length> overview-address-width: overview-address.width;
@@ -966,6 +983,9 @@ export component MainWindow inherits Window {
             spacing: 12px;
             HorizontalLayout {
                 spacing: 8px;
+                // The title sets the row height; the chips opt into the same
+                // vertical center instead of sitting on the baseline.
+                cross-axis-alignment: center;
                 page-title := Heading {
                     text: root.page-titles[root.page];
                     font-size: 22px;
@@ -1016,46 +1036,55 @@ export component MainWindow inherits Window {
                     // the page, never inside a card.
                     padding-right: 8px;
                     state-card := Card {
-                        if root.compact : VerticalLayout {
-                            spacing: 12px;
-                            StateCell {
-                                horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
-                                detail: root.gateway-detail; tone: root.gateway-tone;
-                                pulse: root.gateway-pulse;
+                        // Three equal stretches divide the card content in a
+                        // row, so no blank strip sits on the right. The compact
+                        // stack is a conditional element, while the wide row
+                        // stays a plain layout so its cell widths stay
+                        // measurable; collapsing its height to zero and keeping
+                        // no gap between the two orientations keeps it out of
+                        // the compact card.
+                        VerticalLayout {
+                            spacing: 0px;
+                            wide-state := HorizontalLayout {
+                                visible: !root.compact;
+                                height: root.compact ? 0px : self.preferred-height;
+                                spacing: 14px;
+                                state-gateway := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "网关"; value: root.gateway-value;
+                                    detail: root.gateway-detail; tone: root.gateway-tone;
+                                    pulse: root.gateway-pulse;
+                                }
+                                state-login := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "UM 登录"; value: root.account-label;
+                                    detail: root.account-state-detail(); tone: root.account-tone;
+                                    pulse: root.account-pulse;
+                                }
+                                state-upstream := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "上游"; value: root.upstream-value;
+                                    detail: root.upstream-detail; tone: root.upstream-tone;
+                                    pulse: root.upstream-pulse;
+                                }
                             }
-                            StateCell {
-                                horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
-                                detail: root.account-state-detail(); tone: root.account-tone;
-                                pulse: root.account-pulse;
-                            }
-                            StateCell {
-                                horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
-                                detail: root.upstream-detail; tone: root.upstream-tone;
-                                pulse: root.upstream-pulse;
-                            }
-                        }
-                        if !root.compact : HorizontalLayout {
-                            spacing: 14px;
-                            // The card content is the window minus the rail, the page
-                            // padding and the card inset; three equal cells leave the
-                            // same gutter on every width.
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "网关"; value: root.gateway-value;
-                                detail: root.gateway-detail; tone: root.gateway-tone;
-                                pulse: root.gateway-pulse;
-                            }
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "UM 登录"; value: root.account-label;
-                                detail: root.account-state-detail(); tone: root.account-tone;
-                                pulse: root.account-pulse;
-                            }
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "上游"; value: root.upstream-value;
-                                detail: root.upstream-detail; tone: root.upstream-tone;
-                                pulse: root.upstream-pulse;
+                            if root.compact : VerticalLayout {
+                                spacing: 12px;
+                                StateCell {
+                                    horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
+                                    detail: root.gateway-detail; tone: root.gateway-tone;
+                                    pulse: root.gateway-pulse;
+                                }
+                                StateCell {
+                                    horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
+                                    detail: root.account-state-detail(); tone: root.account-tone;
+                                    pulse: root.account-pulse;
+                                }
+                                StateCell {
+                                    horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
+                                    detail: root.upstream-detail; tone: root.upstream-tone;
+                                    pulse: root.upstream-pulse;
+                                }
                             }
                         }
                     }
