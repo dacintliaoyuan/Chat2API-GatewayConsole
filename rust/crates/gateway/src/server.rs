@@ -71,11 +71,17 @@ pub struct AppState {
     /// Set by `POST /admin/shutdown`; the process entry waits on it and then
     /// performs the graceful stop (listener, login browser, instance channel).
     pub shutdown_request: Arc<AtomicBool>,
-    desktop_drain: Option<Mutex<DesktopDrain>>,
+    /// The desktop-only port-switch gate; `None` outside `--desktop-instance`.
+    ///
+    /// Handler tests construct `AppState` directly and pass `None`; the gateway
+    /// start path derives the gate from `config.desktop_instance`.
+    #[doc(hidden)]
+    pub desktop_drain: Option<Mutex<DesktopDrain>>,
 }
 
+#[doc(hidden)]
 #[derive(Default)]
-struct DesktopDrain {
+pub struct DesktopDrain {
     active: usize,
     lease: Option<DrainLease>,
     stopping: bool,

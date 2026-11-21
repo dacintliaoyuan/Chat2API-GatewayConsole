@@ -66,7 +66,7 @@ systemd
 ### 2.3 Rust 二进制启动模式
 
 - Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8000/8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
-- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
+- production 模式必须显式选择 `--mode production`：默认只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；加 `--desktop-instance` 时允许任意未保留的 loopback 端口（见 §2.7）。非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
 - 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：7998/7999/8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
@@ -225,6 +225,33 @@ systemd
   替换描述符，覆盖 Started → AlreadyRunning → Stopped（含
   `terminated_process_ids`）→ AlreadyStopped 与端口冲突 `Conflict`；
   `python_exe` 指向不存在路径时 `service.start` 仍成功。
+
+### 2.7 桌面实例网关（#122/#132）
+
+- 桌面 App 只监督唯一一个网关子进程：按 `UM_DESKTOP_GATEWAY_BIN`、同目录
+  `um-gateway.exe`、祖先目录 `rust/target/release/um-gateway-candidate.exe` 的顺序
+  解析二进制，以 `--mode production --desktop-instance --port <port> --role local`
+  启动；不启动第二套网关，也不监听 8000/8001。默认端口 7999，隔离测试实例 7998。
+- `--desktop-instance` 把 production 绑定限制在 loopback，并要求 local 角色、控制令牌
+  文件和无 share 配置；除 0/5173/5901/8000–8009/8090–8119/8300–8399/18096 外
+  允许任意 loopback 端口。没有该标志时 production 仍只允许 §2.3 列出的固定端口。
+- 端口切换只使用桌面实例的 `POST /admin/desktop/port-switch`，请求头
+  `X-Admin-Control`、`X-Desktop-Port-Switch`（32 位十六进制租约）与
+  `X-Desktop-Port-Switch-Action: wait|cancel|commit`：
+  - `wait` 返回 200 `{"in_flight": n}` 并续租 8 秒；其他租约、或 `commit` 后返回 409。
+  - `cancel` 返回 200 `{"status": "accepting"}` 并恢复准入；租约在 `wait` 后过期
+    同样恢复准入。
+  - `commit` 只接受当前租约且 `in_flight == 0`，返回 202
+    `{"status": "stopping"}` 后进程立即停止监听并退出；未 `commit` 前 `/health`
+    保持 200。
+- 租约存在期间，`/v1/*` 与 `/api/*` 的新请求返回 503
+  `desktop_port_switch_in_progress`（`Retry-After: 1`、`X-Should-Retry: true`）；
+  已准入的 SSE 请求正常收尾，`/health` 与控制面不受准入门影响。
+- `POST /admin/shutdown` 不等待在途请求：返回 202 后进程立即退出，客户端流被中断；
+  桌面 App 托盘的「退出并停止网关」走这条路径。
+- 切换端口先拒绝新请求并等待在途请求结束，再停止旧监听、保存新端口、核验新端口
+  `/health` 200；端口被占用、新端口启动失败或等待超时都显示原因，并保留或恢复原端口
+  服务。等待期间点托盘退出会取消切换、不保存新端口，并立即停止旧网关。
 
 ## 3. 云端 idle RSS 基线
 
