@@ -4777,6 +4777,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
+ "i-slint-backend-testing",
  "serde_json",
  "slint",
  "slint-build",
