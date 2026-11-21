@@ -1,6 +1,6 @@
 import { ComboBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
-import { ChartEngine } from "@slintplot";
+import { ChartEngine, ChartTheme } from "@slintplot";
 import { AppIcon } from "icons.slint";
 export { ChartEngine }
 import { UsageChart, UsagePoint } from "usage-chart.slint";
@@ -66,15 +66,25 @@ component TextDetails inherits Panel {
         HorizontalLayout {
             spacing: 8px;
             Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
-            ActionButton { width: 30px; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
-            ActionButton { width: 30px; label: "关闭"; icon: "close"; icon-only: true; quiet: true; clicked => { root.closed(); } }
+            ActionButton { width: 30px; height: 30px; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
+            ActionButton { width: 30px; height: 30px; label: "关闭"; icon: "close"; icon-only: true; quiet: true; clicked => { root.closed(); } }
         }
-        full-text := TextEdit {
-            text: root.body;
-            read-only: true;
-            wrap: word-wrap;
+        // The platform text editor draws an accent underline when focused; the
+        // wrapper clips those last two pixels so the detail panel keeps the
+        // neutral console surface while selection and copy still work.
+        Rectangle {
             vertical-stretch: 1;
-            accessible-label: root.title;
+            clip: true;
+            full-text := TextEdit {
+                width: parent.width;
+                height: parent.height + 2px;
+                text: root.body;
+                read-only: true;
+                wrap: word-wrap;
+                font-family: Theme.font-data;
+                font-size: 11px;
+                accessible-label: root.title;
+            }
         }
     }
 }
@@ -83,17 +93,24 @@ component TextDetails inherits Panel {
 // preferred height and stretch 1, so it would absorb the viewport height and
 // leave no room for the following siblings. Size it from its content instead and
 // opt out of the layout's extra space, so the page scrolls when content overflows.
+//
+// A clickable card is one target: the pointer and the keyboard activate the same
+// callback, hover steps the neutral surface and edge, and focus uses the same
+// neutral step instead of a blue outline.
 component Card inherits Panel {
     in property <length> inset: 16px;
     in property <length> gap: 10px;
     in property <bool> clickable: false;
     callback activated();
+    out property <bool> hovered: root.clickable && pointer.has-hover;
+    out property <bool> focused: root.clickable && keyboard.has-focus;
     out property <length> content-height: content.preferred-height;
     out property <length> content-width: content.width;
     vertical-stretch: 0;
     preferred-height: content.preferred-height;
-    background: root.clickable && pointer.has-hover ? Theme.surface-2 : Theme.surface;
-    animate background { duration: 120ms; easing: ease-in-out; }
+    background: root.hovered ? Theme.surface-2 : Theme.surface;
+    border-color: root.hovered || root.focused ? Theme.edge-strong : Theme.edge;
+    animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     drop-shadow-offset-y: 1px;
     drop-shadow-blur: 3px;
     drop-shadow-color: Theme.card-shadow;
@@ -102,11 +119,31 @@ component Card inherits Panel {
         spacing: root.gap;
         @children
     }
+    keyboard := FocusScope {
+        enabled: root.clickable;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+    }
     pointer := TouchArea {
         enabled: root.clickable;
         mouse-cursor: MouseCursor.pointer;
-        clicked => { root.activated(); }
+        clicked => { keyboard.focus(); root.activated(); }
     }
+}
+
+// The instance card is one target: the pointer and the keyboard both toggle the
+// detail, and hover or focus steps the same neutral surface and edge.
+component ClickableCard inherits Card {
+    in property <string> card-label;
+    clickable: true;
+    accessible-role: button;
+    accessible-label: root.card-label;
+    accessible-action-default => { root.activated(); }
 }
 
 export component MainWindow inherits Window {
@@ -127,6 +164,20 @@ export component MainWindow inherits Window {
     in-out property <int> page: 0;
     private property <float> page-opacity: 1;
     private property <float> page-scale: 1;
+    private property <int> pending-page: 0;
+    init => { Theme.motion = root.allow-motion; root.apply-chart-theme(); }
+    changed allow-motion => { Theme.motion = root.allow-motion; }
+    changed visible => { if (root.visible && root.allow-motion) { pulse-timer.start(); } }
+    // The chart library owns a second theme; align its axes and motion with the
+    // console so the plot does not read as a second design system.
+    function apply-chart-theme() {
+        ChartTheme.dark = Theme.dark;
+        ChartTheme.text-color = Theme.muted;
+        ChartTheme.grid-color = Theme.grid;
+        ChartTheme.axis-color = Theme.edge;
+        ChartTheme.font-size = 11px;
+        ChartTheme.animation-duration = root.allow-motion ? 420ms : 0ms;
+    }
     in property <string> gateway-value: "检测中";
     in property <string> gateway-detail;
     in property <int> gateway-tone: 3;
@@ -298,20 +349,36 @@ export component MainWindow inherits Window {
         }
     }
     changed page => {
-        root.page-opacity = 0.6;
-        root.page-scale = 0.985;
-        page-fade-timer.start();
         if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
     }
-    page-fade-timer := Timer {
-        interval: 1ms;
+    public function navigate-to(page: int) {
+        if (root.page == page) { return; }
+        if (!root.allow-motion) { root.navigate(page); return; }
+        root.pending-page = page;
+        root.page-opacity = 0;
+        root.page-scale = 0.99;
+        page-out-timer.start();
+    }
+    // Fade the old page out, swap while it is invisible, then fade the new page
+    // in. The out timer stops just before the fade reaches zero so the swap never
+    // shows a hard cut.
+    page-out-timer := Timer {
+        interval: 160ms;
         running: false;
         triggered => {
+            root.navigate(root.pending-page);
             root.page-opacity = 1;
             root.page-scale = 1;
         }
+    }
+    // One root timer drives the shared breathing phase, so the dots keep pulsing
+    // even when a nested component is not active.
+    pulse-timer := Timer {
+        interval: 700ms;
+        running: root.allow-motion;
+        triggered => { Theme.pulse-on = !Theme.pulse-on; }
     }
 
     FocusScope {
@@ -333,7 +400,7 @@ export component MainWindow inherits Window {
         width: root.width; height: root.height;
         Rectangle {
             width: root.compact ? 84px : 196px;
-            animate width { duration: 150ms; easing: ease-in-out; }
+            animate width { duration: Theme.motion ? 150ms : 0ms; easing: ease-in-out; }
             background: Theme.rail;
             VerticalLayout {
                 padding: root.compact ? 6px : 14px;
@@ -346,12 +413,11 @@ export component MainWindow inherits Window {
                     font-weight: 650;
                     height: 44px;
                     vertical-alignment: center;
-                    letter-spacing: 0.1px;
                 }
                 for label[index] in ["总览", "请求诊断", "运行日志", "设置"] : NavItem {
                     label: label;
                     selected: root.page == (index == 2 ? 3 : index == 3 ? 2 : index);
-                    activate => { root.navigate(index == 2 ? 3 : index == 3 ? 2 : index); }
+                    activate => { root.navigate-to(index == 2 ? 3 : index == 3 ? 2 : index); }
                 }
                 Rectangle { vertical-stretch: 1; }
                 Hint { text: root.compact ? "托盘运行" : "关窗后继续运行"; color: Theme.rail-muted; visible: root.tray-available; }
@@ -363,6 +429,14 @@ export component MainWindow inherits Window {
                     visible: !root.tray-available;
                     clicked => { root.quit-requested(); }
                 }
+            }
+            // Hairline between the second neutral layer and the page.
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                background: Theme.rail-edge;
             }
         }
 
@@ -388,9 +462,9 @@ export component MainWindow inherits Window {
                 transform-origin: { x: self.width / 2, y: self.height / 2 };
                 transform-scale-x: root.page-scale;
                 transform-scale-y: root.page-scale;
-                animate opacity { duration: 180ms; easing: ease-out; }
-                animate transform-scale-x { duration: 180ms; easing: ease-out; }
-                animate transform-scale-y { duration: 180ms; easing: ease-out; }
+                animate opacity { duration: Theme.glide; easing: ease-out; }
+                animate transform-scale-x { duration: Theme.glide; easing: ease-out; }
+                animate transform-scale-y { duration: Theme.glide; easing: ease-out; }
             overview-scroll := ScrollView {
                 visible: root.page == 0;
                 vertical-stretch: 1;
@@ -498,6 +572,7 @@ export component MainWindow inherits Window {
                             spacing: 0px;
                             HorizontalLayout {
                                 spacing: 8px;
+                                alignment: center;
                                 MaterialField {
                                     horizontal-stretch: 1;
                                     icon: "search";
@@ -512,30 +587,42 @@ export component MainWindow inherits Window {
                     Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); }
                     request-list-panel := Panel {
                         vertical-stretch: 1;
-                        ListView {
-                            content-y <=> root.request-scroll-y;
-                            for item in root.requests : Selectable {
-                                label: item.at + " " + item.model + " " + item.outcome;
-                                height: 50px;
-                                selected: root.selected-request == item.id;
-                                activate => { root.open-request(item.id); }
-                                VerticalLayout {
-                                    padding-left: 10px; padding-right: 10px; padding-top: 5px; padding-bottom: 5px;
-                                    spacing: 2px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
-                                        Tag { label: item.outcome; tone: item.tone; }
+                        VerticalLayout {
+                            padding: 6px;
+                            if root.requests.length == 0 : VerticalLayout {
+                                vertical-stretch: 1;
+                                alignment: center;
+                                spacing: 4px;
+                                Hint { text: "暂无请求记录"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
+                                Hint { text: "本实例收到请求后会列在这里"; horizontal-alignment: center; }
+                            }
+                            ListView {
+                                visible: root.requests.length > 0;
+                                vertical-stretch: 1;
+                                content-y <=> root.request-scroll-y;
+                                for item in root.requests : Selectable {
+                                    label: item.at + " " + item.model + " " + item.outcome;
+                                    height: 46px;
+                                    selected: root.selected-request == item.id;
+                                    activate => { root.open-request(item.id); }
+                                    VerticalLayout {
+                                        padding-left: 10px; padding-right: 10px; padding-top: 5px; padding-bottom: 5px;
+                                        spacing: 2px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
+                                            Tag { label: item.outcome; tone: item.tone; }
+                                        }
+                                        Hint { text: item.at + "  " + item.summary; overflow: elide; wrap: no-wrap; }
                                     }
-                                    Hint { text: item.at + "  " + item.summary; overflow: elide; wrap: no-wrap; }
                                 }
                             }
                         }
                     }
                     HorizontalLayout {
                         spacing: 8px; alignment: end;
-                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: 28px; height: 28px; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
-                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: 28px; height: 28px; enabled: root.older-requests; clicked => { root.query-requests(1); } }
+                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: 30px; height: 30px; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
+                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: 30px; height: 30px; enabled: root.older-requests; clicked => { root.query-requests(1); } }
                     }
                 }
                 if !root.selected-request.is-empty : TextDetails {
@@ -582,7 +669,7 @@ export component MainWindow inherits Window {
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
                     ActionButton {
-                        width: 32px;
+                        width: 34px;
                         height: 34px;
                         label: "刷新";
                         icon: "refresh";
@@ -616,31 +703,43 @@ export component MainWindow inherits Window {
                 }
                 Panel {
                     vertical-stretch: 1;
-                    log-list := ListView {
-                        content-y <=> root.log-scroll-y;
-                        scrolled => {
-                            if (root.log-period == 0 && (-self.content-y + self.visible-height) < self.content-height - 8px) {
-                                root.log-follow = false;
-                            }
+                    VerticalLayout {
+                        padding: 6px;
+                        if root.logs.length == 0 : VerticalLayout {
+                            vertical-stretch: 1;
+                            alignment: center;
+                            spacing: 4px;
+                            Hint { text: "暂无日志"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
+                            Hint { text: "网关输出会实时显示在这里"; horizontal-alignment: center; }
                         }
-                        for row in root.logs : Selectable {
-                            label: row.at + " " + row.level + " " + row.text;
-                            height: 36px;
-                            selected: row.id == root.open-log-id;
-                            activate => {
-                                root.open-log-id = row.id;
-                                root.open-log-title = row.at + "  " + row.level;
-                                root.open-log-body = row.detail;
-                            }
-                            HorizontalLayout {
-                                padding-left: 8px; padding-right: 8px; spacing: 8px;
-                                DataText { text: row.at; width: root.compact ? 118px : 152px; font-size: 11px; vertical-alignment: center; overflow: elide; }
-                                Tag {
-                                    label: row.level;
-                                    tone: row.level == "错误" ? 2 : row.level == "警告" ? 1 : 3;
-                                    width: 54px;
+                        log-list := ListView {
+                            visible: root.logs.length > 0;
+                            vertical-stretch: 1;
+                            content-y <=> root.log-scroll-y;
+                            scrolled => {
+                                if (root.log-period == 0 && (-self.content-y + self.visible-height) < self.content-height - 8px) {
+                                    root.log-follow = false;
                                 }
-                                Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                            }
+                            for row in root.logs : Selectable {
+                                label: row.at + " " + row.level + " " + row.text;
+                                height: 36px;
+                                selected: row.id == root.open-log-id;
+                                activate => {
+                                    root.open-log-id = row.id;
+                                    root.open-log-title = row.at + "  " + row.level;
+                                    root.open-log-body = row.detail;
+                                }
+                                HorizontalLayout {
+                                    padding-left: 8px; padding-right: 8px; spacing: 8px;
+                                    DataText { text: row.at; width: root.compact ? 92px : 96px; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                    Tag {
+                                        label: row.level;
+                                        tone: row.level == "错误" ? 2 : row.level == "警告" ? 1 : 3;
+                                        width: 54px;
+                                    }
+                                    Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                }
                             }
                         }
                     }
@@ -748,7 +847,7 @@ export component MainWindow inherits Window {
                             Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
-                                Hint { text: "127.0.0.1:"; vertical-alignment: center; }
+                                Hint { text: "127.0.0.1:"; height: 34px; vertical-alignment: center; }
                                 MaterialField {
                                     width: 148px;
                                     placeholder: "端口";
@@ -758,11 +857,11 @@ export component MainWindow inherits Window {
                                 }
                                 ActionButton { height: 34px; label: "切换端口"; icon: "swap"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
-                            Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
+                            if !root.settings-status.is-empty : Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
                         }
                     }
-                    Card {
-                        clickable: true;
+                    technical-card := ClickableCard {
+                        card-label: "实例管理";
                         activated => { root.show-technical = !root.show-technical; }
                         VerticalLayout {
                             spacing: 9px;
@@ -770,21 +869,27 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
                                 AppIcon {
-                                    width: 16px;
-                                    height: 16px;
+                                    size: 16px;
                                     kind: "chevron-right";
-                                    tint: Theme.accent;
+                                    tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
                                     transform-origin: { x: self.width / 2, y: self.height / 2 };
                                     transform-rotation: root.show-technical ? 90deg : 0deg;
-                                    animate transform-rotation { duration: 120ms; easing: ease-in-out; }
+                                    animate transform-rotation { duration: Theme.settle; easing: ease-out; }
+                                    animate tint { duration: Theme.quick; easing: ease-in-out; }
                                 }
                             }
-                            if root.show-technical : VerticalLayout {
-                                spacing: 8px;
-                                Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status_ink(root.supervision-tone); }
-                                Hint { text: root.account-saved-detail; visible: !root.account-saved-detail.is-empty; }
-                                Hint { text: "配置文件  " + root.config-path; }
-                                Hint { text: "实例数据  " + root.instance-path; }
+                            details := Rectangle {
+                                visible: root.show-technical || self.height > 0px;
+                                preferred-height: root.show-technical ? details-content.preferred-height : 0px;
+                                height: self.preferred-height;
+                                clip: true;
+                                animate preferred-height { duration: Theme.settle; easing: ease-out; }
+                                details-content := VerticalLayout {
+                                    spacing: 8px;
+                                    Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status_ink(root.supervision-tone); }
+                                    Hint { text: "配置文件  " + root.config-path; }
+                                    Hint { text: "实例数据  " + root.instance-path; }
+                                }
                             }
                         }
                     }

@@ -2,22 +2,31 @@ import { Palette } from "std-widgets.slint";
 import { AppIcon } from "icons.slint";
 
 // Magpie's product palette: near-neutral surfaces, one blue accent, green for
-// live/healthy states. The tokens and the 120/150 ms motion follow the Magpie
-// desktop frontend so the console reads as the same instrument.
+// live/healthy states. Tokens and motion follow the Magpie desktop frontend so the
+// console reads as the same instrument.
+//
+// Focus is always a neutral step: a darker field background plus a stronger edge,
+// never a blue outline. Blue stays on selection, primary actions and live state.
 export global Theme {
+    // Global motion switch; the shell copies the OS animation setting into it.
+    in-out property <bool> motion: true;
+    // One shared 1.4 s breathing phase for every live status dot.
+    in-out property <bool> pulse-on: false;
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
     out property <color> background: dark ? #1a1a1c : #f5f5f7;
     out property <color> surface: dark ? #1c1c1e : #ffffff;
     out property <color> surface-2: dark ? #2c2c2e : #f0f0f2;
     out property <color> field: dark ? #2c2c2e : #f0f0f2;
+    out property <color> field-strong: dark ? #35353a : #e6e6ea;
     out property <color> edge: dark ? #38383a : #d2d2d7;
-    out property <color> edge-strong: dark ? #48484a : #b8b8be;
+    out property <color> edge-strong: dark ? #56565a : #b0b0b8;
     out property <color> ink: dark ? #f5f5f7 : #1d1d1f;
-    out property <color> muted: dark ? #b0b0b8 : #6e6e73;
+    out property <color> muted: dark ? #b4b4bc : #63636a;
     out property <color> accent: dark ? #0a84ff : #0071e3;
-    out property <color> accent-strong: dark ? #3a99ff : #0062c4;
+    out property <color> accent-strong: dark ? #409cff : #0062c4;
     out property <color> on-accent: #ffffff;
-    out property <color> accent-soft: dark ? #0a2a44 : #e8f2ff;
+    out property <color> accent-soft: dark ? #0b2946 : #e8f2ff;
     out property <color> series-b: dark ? #34c759 : #1f8a3a;
     out property <color> series-b-soft: dark ? #12301c : #e8f8ec;
     out property <color> good: #34c759;
@@ -26,20 +35,27 @@ export global Theme {
     out property <color> good-text: dark ? #4ade80 : #13743a;
     out property <color> warn-text: dark ? #fbbf24 : #9a5b0b;
     out property <color> bad-text: dark ? #fca5a5 : #a9271c;
-    out property <color> rail: dark ? #1c1c1e : #f5f5f7;
-    out property <color> rail-2: dark ? #161616 : #ececf0;
+    // The rail is the second neutral layer: one step off the page, with a hairline.
+    out property <color> rail: dark ? #1f1f21 : #ededf0;
+    out property <color> rail-edge: dark ? #2e2e30 : #e0e0e4;
     out property <color> rail-ink: dark ? #f5f5f7 : #1d1d1f;
-    out property <color> rail-muted: dark ? #98989d : #6e6e73;
+    out property <color> rail-muted: dark ? #a0a0a8 : #63636a;
     out property <color> rail-selected: dark ? #2c2c2e : #e8f2ff;
-    out property <color> rail-hover: dark ? #242426 : #ececf0;
-    out property <color> grid: dark ? #2c2c2e : #e4e4e4;
+    out property <color> rail-hover: dark ? #262628 : #e4e4e9;
+    out property <color> grid: dark ? #2c2c2e : #e4e4e7;
     out property <color> data: dark ? #f5f5f7 : #1d1d1f;
     out property <color> hover: dark ? #2c2c2e : #f0f0f2;
     out property <color> selected: dark ? #2c2c2e : #e8f2ff;
-    out property <color> card-shadow: dark ? #00000066 : #00000014;
+    out property <color> card-shadow: dark ? #00000066 : #00000012;
     out property <string> font-display: "Segoe UI";
     out property <string> font-body: "Segoe UI";
     out property <string> font-data: "Consolas";
+
+    // 120 ms for controls, 160 ms for selection and disclosure, 220 ms for
+    // page changes. Collapse to zero when the OS asks for reduced motion.
+    out property <duration> quick: motion ? 120ms : 0ms;
+    out property <duration> settle: motion ? 160ms : 0ms;
+    out property <duration> glide: motion ? 200ms : 0ms;
 
     public pure function status(tone: int) -> color {
         return tone == 0 ? Theme.good : tone == 1 ? Theme.warn : tone == 2 ? Theme.bad : Theme.muted;
@@ -70,7 +86,6 @@ export component Heading inherits Text {
     font-family: Theme.font-display;
     font-size: 17px;
     font-weight: 650;
-    letter-spacing: 0.1px;
 }
 
 export component Hint inherits Text {
@@ -84,7 +99,6 @@ export component SectionLabel inherits Text {
     font-family: Theme.font-display;
     font-size: 15px;
     font-weight: 650;
-    letter-spacing: 0.1px;
 }
 
 export component DataText inherits Text {
@@ -96,19 +110,18 @@ export component DataText inherits Text {
 export component StatusDot inherits Rectangle {
     in property <int> tone: 3;
     in property <bool> pulsing: false;
-    private property <bool> pulse-on: false;
     width: 8px;
     height: 8px;
     border-radius: 4px;
     background: Theme.status(root.tone);
-    opacity: root.pulsing && root.pulse-on ? 0.35 : 1;
-    animate background { duration: 120ms; easing: ease-in-out; }
+    opacity: root.pulsing && Theme.pulse-on ? 0.45 : 1;
+    transform-scale-x: root.pulsing && Theme.pulse-on ? 0.78 : 1;
+    transform-scale-y: root.pulsing && Theme.pulse-on ? 0.78 : 1;
+    animate background { duration: Theme.quick; easing: ease-in-out; }
+    // One 1.4 s breathing cycle: 700 ms out, 700 ms back.
     animate opacity { duration: 700ms; easing: ease-in-out; }
-    Timer {
-        interval: 700ms;
-        running: root.pulsing;
-        triggered => { root.pulse-on = !root.pulse-on; }
-    }
+    animate transform-scale-x { duration: 700ms; easing: ease-in-out; }
+    animate transform-scale-y { duration: 700ms; easing: ease-in-out; }
 }
 
 export component Tag inherits Rectangle {
@@ -117,35 +130,40 @@ export component Tag inherits Rectangle {
     height: 20px;
     border-radius: 5px;
     background: Theme.soft(root.tone);
-    animate background { duration: 120ms; easing: ease-in-out; }
+    animate background { duration: Theme.quick; easing: ease-in-out; }
     HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
+        padding-left: 7px;
+        padding-right: 7px;
         Text {
             text: root.label;
             color: Theme.status_ink(root.tone);
-            font-family: Theme.font-data;
             font-size: 11px;
-            font-weight: 650;
+            font-weight: 600;
             vertical-alignment: center;
-            animate color { duration: 120ms; easing: ease-in-out; }
+            animate color { duration: Theme.quick; easing: ease-in-out; }
         }
     }
 }
 
+// A list row. The hover and selected fills sit inside the row so adjacent rows
+// stay separate instead of forming one solid block.
 export component Selectable inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     callback activate();
     min-height: 36px;
-    border-radius: 6px;
-    background: root.selected ? Theme.selected
-        : keyboard.has-focus ? Theme.hover
-        : pointer.has-hover ? Theme.hover : transparent;
-    animate background { duration: 120ms; easing: ease-in-out; }
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-action-default => { root.activate(); }
+    background: transparent;
+    row-fill := Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 5px;
+        background: root.selected ? Theme.selected
+            : keyboard.has-focus ? Theme.hover
+            : pointer.has-hover ? Theme.hover : transparent;
+        animate background { duration: Theme.quick; easing: ease-in-out; }
+    }
     @children
     keyboard := FocusScope {
         key-pressed(event) => {
@@ -160,6 +178,9 @@ export component Selectable inherits Rectangle {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }
     }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.activate(); }
 }
 
 export component FocusAction inherits Rectangle {
@@ -177,27 +198,28 @@ export component FocusAction inherits Rectangle {
     public function take-focus() { focus.focus(); }
     height: 32px;
     border-radius: 6px;
+    // Keyboard focus darkens the fill or steps the neutral edge up; it never
+    // draws a blue outline.
     background: !root.enabled ? Theme.field
-        : root.primary ? (pointer.pressed ? Theme.accent-strong : pointer.has-hover ? Theme.accent-strong : focus.has-focus ? Theme.accent-strong : Theme.accent)
+        : root.primary ? (pointer.pressed || pointer.has-hover || focus.has-focus ? Theme.accent-strong : Theme.accent)
         : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
         : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
     border-width: root.quiet || root.link ? 0px : 1px;
     border-color: root.danger ? Theme.bad : root.primary ? Theme.accent : focus.has-focus ? Theme.edge-strong : Theme.edge;
     opacity: root.enabled ? 1 : 0.55;
-    animate background { duration: 120ms; easing: ease-in-out; }
-    animate border-color { duration: 120ms; easing: ease-in-out; }
-    animate border-width { duration: 120ms; easing: ease-in-out; }
-    animate opacity { duration: 120ms; easing: ease-in-out; }
+    animate background { duration: Theme.quick; easing: ease-in-out; }
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
+    animate opacity { duration: Theme.quick; easing: ease-in-out; }
     HorizontalLayout {
         padding-left: root.icon-only ? 0px : 10px;
         padding-right: root.icon-only ? 0px : 10px;
         alignment: center;
         spacing: 6px;
         if !root.icon.is-empty : AppIcon {
-            width: root.icon-only ? 17px : 15px;
-            height: root.icon-only ? 17px : 15px;
+            size: root.icon-only ? 17px : 15px;
             kind: root.icon;
             tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+            cross-axis-self-alignment: center;
         }
         if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
@@ -205,7 +227,7 @@ export component FocusAction inherits Rectangle {
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
-            animate color { duration: 120ms; easing: ease-in-out; }
+            animate color { duration: Theme.quick; easing: ease-in-out; }
         }
         if !root.badge.is-empty : Rectangle {
             height: 17px;
@@ -256,19 +278,24 @@ export component Segmented inherits Rectangle {
     in property <string> label: "选项";
     callback selected(int);
     height: 30px;
-    background: Theme.field;
+    background: focus.has-focus ? Theme.field-strong : Theme.field;
     border-radius: 6px;
     border-width: 1px;
-    border-color: Theme.edge;
+    border-color: focus.has-focus ? Theme.edge-strong : Theme.edge;
+    animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     private property <int> count: root.options.length > 0 ? root.options.length : 1;
     selection := Rectangle {
         x: 2px + root.current-index * ((root.width - 4px) / root.count);
         y: 2px;
         width: (root.width - 4px) / root.count - 2px;
         height: root.height - 4px;
-        border-radius: 4px;
+        border-radius: 5px;
         background: Theme.accent-soft;
-        animate x, width { duration: 160ms; easing: ease-in-out; }
+        drop-shadow-offset-y: 1px;
+        drop-shadow-blur: 2px;
+        drop-shadow-color: #00000014;
+        animate x, width { duration: Theme.settle; easing: ease-out; }
+        animate background { duration: Theme.quick; easing: ease-in-out; }
     }
     focus := FocusScope {
         key-pressed(event) => {
@@ -290,16 +317,16 @@ export component Segmented inherits Rectangle {
         spacing: 2px;
         for item[index] in root.options : Rectangle {
             horizontal-stretch: 1;
-            border-radius: 4px;
+            border-radius: 5px;
             background: transparent;
             Text {
                 text: item.text;
-                color: root.current-index == index ? Theme.accent : Theme.muted;
+                color: root.current-index == index ? Theme.accent-strong : Theme.muted;
                 font-size: 12px;
                 font-weight: root.current-index == index ? 650 : 500;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                animate color { duration: 120ms; easing: ease-in-out; }
+                animate color { duration: Theme.quick; easing: ease-in-out; }
             }
             pointer := TouchArea {
                 mouse-cursor: MouseCursor.pointer;
@@ -326,7 +353,7 @@ export component Field inherits VerticalLayout {
     callback accepted();
     callback edited(string);
     public function take-focus() { input.focus(); }
-    spacing: 5px;
+    spacing: root.label.is-empty ? 0px : 5px;
     if !root.label.is-empty : Text {
         text: root.label;
         color: Theme.muted;
@@ -335,44 +362,51 @@ export component Field inherits VerticalLayout {
     }
     Rectangle {
         height: 34px;
-        background: Theme.field;
+        background: root.invalid ? Theme.soft(2) : input.has-focus ? Theme.field-strong : Theme.field;
         border-radius: 6px;
         border-width: 1px;
         border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.edge-strong : Theme.edge;
-        animate border-color { duration: 120ms; easing: ease-in-out; }
+        animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
         if !root.icon.is-empty : AppIcon {
             x: 9px;
             y: (parent.height - self.height) / 2;
-            width: 15px;
-            height: 15px;
+            size: 15px;
             kind: root.icon;
             tint: Theme.muted;
         }
+        // The input fills the box below the border and centers its single line,
+        // so the text sits in the middle at any font metric or DPI.
         input := TextInput {
-            x: root.icon.is-empty ? 10px : 31px;
-            y: 8px;
-            width: parent.width - (root.icon.is-empty ? 20px : 41px);
-            height: parent.height - 16px;
+            x: root.icon.is-empty ? 10px : 30px;
+            y: 1px;
+            width: parent.width - (root.icon.is-empty ? 20px : 40px);
+            height: parent.height - 2px;
             vertical-alignment: center;
             text <=> root.text;
             font-family: Theme.font-body;
             font-size: 12px;
             color: Theme.ink;
+            selection-background-color: Theme.accent-soft;
+            selection-foreground-color: Theme.ink;
             input-type: root.password ? InputType.password : InputType.text;
             enabled: root.enabled;
             accepted => { root.accepted(); }
             edited => { root.edited(self.text); }
         }
         Text {
-            x: root.icon.is-empty ? 10px : 31px;
-            y: 0px;
-            width: parent.width - (root.icon.is-empty ? 20px : 41px);
-            height: parent.height;
+            x: root.icon.is-empty ? 10px : 30px;
+            y: 1px;
+            width: parent.width - (root.icon.is-empty ? 20px : 40px);
+            height: parent.height - 2px;
             text: root.placeholder;
             color: Theme.muted;
             font-size: 12px;
             vertical-alignment: center;
             visible: root.text.is-empty && !input.has-focus;
+        }
+        pointer := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => { input.focus(); }
         }
     }
 }
@@ -396,11 +430,10 @@ export component Toggle inherits Rectangle {
             width: 17px;
             height: 17px;
             border-radius: 4px;
-            background: root.checked ? Theme.accent : Theme.field;
-            border-width: focus.has-focus ? 2px : 1px;
-            border-color: focus.has-focus ? Theme.edge-strong : root.checked ? Theme.accent : Theme.edge;
-            animate background { duration: 120ms; easing: ease-in-out; }
-            animate border-color { duration: 120ms; easing: ease-in-out; }
+            background: root.checked ? Theme.accent : focus.has-focus ? Theme.field-strong : Theme.field;
+            border-width: 1px;
+            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-strong : pointer.has-hover ? Theme.edge-strong : Theme.edge;
+            animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
             Path {
                 x: 3px;
                 y: 3px;
@@ -456,12 +489,12 @@ export component NavItem inherits Rectangle {
     in property <bool> selected;
     in property <bool> show-label: true;
     callback activate();
-    height: 36px;
+    height: 34px;
     border-radius: 6px;
     background: root.selected ? Theme.rail-selected
         : keyboard.has-focus ? Theme.rail-hover
         : pointer.has-hover ? Theme.rail-hover : transparent;
-    animate background { duration: 120ms; easing: ease-in-out; }
+    animate background { duration: Theme.quick; easing: ease-in-out; }
     keyboard := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
@@ -478,11 +511,11 @@ export component NavItem inherits Rectangle {
         spacing: 8px;
         Text {
             text: root.label;
-            color: root.selected ? Theme.accent : Theme.rail-muted;
+            color: root.selected ? Theme.accent : keyboard.has-focus ? Theme.rail-ink : Theme.rail-muted;
             font-size: root.show-label ? 12px : 11px;
             font-weight: root.selected ? 650 : 500;
             vertical-alignment: center;
-            animate color { duration: 120ms; easing: ease-in-out; }
+            animate color { duration: Theme.quick; easing: ease-in-out; }
         }
     }
     pointer := TouchArea {

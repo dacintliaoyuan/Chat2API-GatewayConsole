@@ -4,8 +4,15 @@ export component AppIcon inherits Image {
     in property <string> kind;
     in property <length> size: 16px;
     in property <color> tint: #000;
-    width: root.size;
-    height: root.size;
+    // Layouts size children from their min/preferred/max size; pin all three so
+    // an icon keeps the requested square inside a button or a row.
+    min-width: root.size;
+    max-width: root.size;
+    preferred-width: root.size;
+    min-height: root.size;
+    max-height: root.size;
+    preferred-height: root.size;
+    image-fit: contain;
     colorize: root.tint;
     source: root.kind == "search" ? @image-url("icons/search.svg")
         : root.kind == "refresh" ? @image-url("icons/refresh-cw.svg")

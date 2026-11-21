@@ -33,6 +33,8 @@ export component UsageChart inherits Panel {
     private property <bool> has-selection: root.active >= 0 && root.active < root.points.length;
     private property <string> metric: root.show-requests ? "请求数" : "Token";
     private property <string> keyboard-help: "左右方向键查看时段 · Enter 固定 · Esc 取消固定";
+    private property <string> empty-title: root.loading ? "正在读取本实例用量…"
+        : !root.status-text.is-empty ? root.status-text : "暂无用量数据";
 
     out property <length> plot-x: plot.absolute-position.x;
     out property <length> plot-y: plot.absolute-position.y;
@@ -131,14 +133,19 @@ export component UsageChart inherits Panel {
                 vertical-stretch: 1;
                 min-height: 142px;
 
-                Hint {
+                VerticalLayout {
                     visible: !root.has-data;
-                    width: parent.width;
-                    height: parent.height;
-                    text: root.loading ? "正在读取本实例用量…" : root.status-text;
-                    color: root.loading ? Theme.muted : root.status-tone;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    alignment: center;
+                    spacing: 3px;
+                    Hint {
+                        text: root.empty-title;
+                        color: root.loading ? Theme.muted : root.status-tone;
+                        horizontal-alignment: center;
+                    }
+                    if !root.loading && root.status-text.is-empty : Hint {
+                        text: "调用模型后这里会显示用量趋势";
+                        horizontal-alignment: center;
+                    }
                 }
 
                 plot := BarChart {
@@ -160,8 +167,8 @@ export component UsageChart inherits Panel {
                     show-points: false;
                     show-tooltip: false;
                     animated: root.allow-motion;
-                    bar-radius: 3px;
-                    fill-opacity: root.show-line ? 0.16 : 0.45;
+                    bar-radius: 4px;
+                    fill-opacity: root.show-line ? 0.14 : 0.78;
                     accessible-label: "用量趋势图";
                     accessible-description: root.has-selection
                         ? root.selection-label + "，" + root.selection-value + "。" + root.keyboard-help
@@ -188,7 +195,7 @@ export component UsageChart inherits Panel {
                     height: 40px;
                     spacing: 8px;
                     Hint {
-                        text: root.has-selection ? root.selection-label : "悬停查看数值，点击固定";
+                        text: root.has-selection ? root.selection-label : "悬停查看数值";
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
@@ -214,7 +221,7 @@ export component UsageChart inherits Panel {
                     y: 40px;
                     width: parent.width;
                     height: 18px;
-                    text: root.keyboard-help;
+                    text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
                     vertical-alignment: center;
                     wrap: no-wrap;
                 }
