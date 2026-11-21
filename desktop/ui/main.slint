@@ -383,6 +383,9 @@ export component MainWindow inherits Window {
     out property <length> usage-period-x: usage-chart.period-x;
     out property <length> usage-period-y: usage-chart.period-y;
     out property <length> usage-period-width: usage-chart.period-width;
+    out property <length> request-period-x: request-period-control.absolute-position.x;
+    out property <length> request-period-y: request-period-control.absolute-position.y;
+    out property <length> request-period-width: request-period-control.width;
     out property <length> technical-card-x: technical-card.absolute-position.x;
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
@@ -854,9 +857,9 @@ export component MainWindow inherits Window {
                     FlexboxLayout {
                         flex-wrap: wrap;
                         spacing: 8px;
-                        Segmented {
-                            width: 224px;
-                            options: [{ text: "今天" }, { text: "7 天" }, { text: "30 天" }];
+                        request-period-control := Segmented {
+                            width: 280px;
+                            options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
                             current-index <=> root.request-period;
                             label: "请求日期范围";
                             selected(_) => { root.query-requests(0); }

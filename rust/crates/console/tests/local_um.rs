@@ -12,7 +12,7 @@ use std::fs;
 use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use um_console::local_um::{
-    um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
+    desktop_trend, um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
 };
 use um_console::operations::OperationsReader;
 
@@ -188,6 +188,90 @@ fn trend_aligns_daily_buckets_and_ranks_models() {
 
     let error = um_trend(&ledger, "90d", now()).expect_err("bad range");
     assert!(error.0.contains("invalid trend range"), "{error}");
+}
+
+#[test]
+fn desktop_trend_accepts_24h_and_all_windows() {
+    let temp = temp();
+    let ledger = ledger(&temp);
+
+    let rolling = desktop_trend(&ledger, "24h", now()).expect("24h trend");
+    assert_eq!(rolling["range"], json!("24h"));
+    let buckets = rolling["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 24);
+    assert_eq!(buckets[22]["label"], json!("10:00"));
+    assert_eq!(
+        buckets[22]["tokens"],
+        json!({"kind": "exact", "value": 125})
+    );
+    assert_eq!(
+        buckets[22]["requests"],
+        json!({"kind": "exact", "value": 1})
+    );
+    assert_eq!(buckets[23]["label"], json!("11:00"));
+    assert_eq!(
+        buckets[23]["tokens"],
+        json!({"kind": "atLeast", "value": 30,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        rolling["total"]["tokens"],
+        json!({"kind": "atLeast", "value": 155,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        rolling["total"]["requests"],
+        json!({"kind": "exact", "value": 2})
+    );
+
+    let all = desktop_trend(&ledger, "all", now()).expect("all trend");
+    assert_eq!(all["range"], json!("all"));
+    let buckets = all["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0]["label"], json!("2026-11-16"));
+    assert_eq!(buckets[0]["tokens"], json!({"kind": "exact", "value": 10}));
+    assert_eq!(buckets[1]["label"], json!("2026-11-17"));
+    assert_eq!(
+        all["total"]["tokens"],
+        json!({"kind": "atLeast", "value": 165,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        all["total"]["requests"],
+        json!({"kind": "exact", "value": 3})
+    );
+
+    assert!(desktop_trend(&ledger, "90d", now()).is_err());
+}
+
+#[test]
+fn requests_accept_24h_and_all_windows_and_report_the_range() {
+    let temp = temp();
+    let ledger = ledger(&temp);
+
+    let today =
+        um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("today requests");
+    assert_eq!(today["range"], json!("today"));
+
+    let rolling =
+        um_requests(&ledger, "24h", None, "all", "", None, 50, now()).expect("24h requests");
+    assert_eq!(rolling["range"], json!("24h"));
+    let rows = rolling["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["model"], json!("m2"));
+    assert_eq!(rows[1]["model"], json!("m1"));
+
+    let all = um_requests(&ledger, "all", None, "all", "", None, 50, now()).expect("all requests");
+    assert_eq!(all["range"], json!("all"));
+    let rows = all["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["model"], json!("m2"));
+    assert_eq!(rows[1]["model"], json!("m1"));
+    assert_eq!(rows[2]["model"], json!("m1"));
+    assert_eq!(
+        all["page"]["scope"].as_str().expect("scope"),
+        "全部时间的 UM 账本（chat2api），时间倒序；物理重试不单独成行"
+    );
 }
 
 #[test]
