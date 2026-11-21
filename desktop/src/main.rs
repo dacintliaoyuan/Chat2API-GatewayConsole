@@ -33,7 +33,9 @@ use um_desktop::gateway::{
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logstream::{matches_line, read_history, LevelFilter, LogStream, StreamLine};
+use um_desktop::logstream::{
+    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
+};
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::usage::{self, Coverage, Range, UsageView};
@@ -51,6 +53,7 @@ static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// One log-page update produced by the reader thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LogUpdate {
+    previous: Vec<StreamLine>,
     entries: Vec<StreamLine>,
     appended: Vec<StreamLine>,
     reset: bool,
@@ -61,6 +64,7 @@ struct LogUpdate {
 impl LogUpdate {
     fn failed(reason: String) -> Self {
         Self {
+            previous: Vec::new(),
             entries: Vec::new(),
             appended: Vec::new(),
             reset: false,
@@ -176,21 +180,8 @@ fn gateway_bin_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-const LOG_ROW_HEIGHT: f32 = 36.0;
-
 fn log_row(line: &StreamLine) -> LogRow {
-    let at = line.entry.at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single());
-    let (time, precise) = match at {
-        Some(time) => {
-            let text = if time.date_naive() == chrono::Local::now().date_naive() {
-                time.format("%H:%M:%S").to_string()
-            } else {
-                time.format("%m-%d %H:%M:%S").to_string()
-            };
-            (text, time.format("%Y-%m-%d %H:%M:%S %:z").to_string())
-        }
-        None => ("时间未知".to_string(), "时间未知".to_string()),
-    };
+    let time = format_log_time(line.entry.at, chrono::Local::now());
     let level = match line.entry.level.to_ascii_lowercase().as_str() {
         "error" => "错误",
         "warn" | "warning" => "警告",
@@ -201,10 +192,10 @@ fn log_row(line: &StreamLine) -> LogRow {
     };
     LogRow {
         id: format!("{}:{:x}", line.id.offset, line.id.hash).into(),
-        at: time.into(),
+        at: time.label.into(),
         level: level.into(),
         text: line.entry.text.clone().into(),
-        detail: format!("{precise}  {level}\n\n{}", line.detail).into(),
+        detail: format!("{}  {level}\n\n{}", time.precise, line.detail).into(),
     }
 }
 
@@ -242,33 +233,28 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
         return;
     };
-    let matches = |line: &&StreamLine| matches_line(line, level, &keyword);
-    let added = update.appended.iter().filter(matches).count();
-    if update.reset || update.trimmed > 0 || filter_changed {
-        let rows: Vec<_> = update.entries.iter().filter(matches).map(log_row).collect();
-        let scroll = window.get_log_scroll_y().min(0.0);
-        let first = (-scroll / LOG_ROW_HEIGHT).floor() as usize;
-        let remainder = -scroll - first as f32 * LOG_ROW_HEIGHT;
-        let anchor = (!follow && !filter_changed && !update.reset)
-            .then(|| model.row_data(first))
-            .flatten();
-        let new_first = anchor.and_then(|anchor| rows.iter().position(|row| row.id == anchor.id));
-        model.set_vec(rows);
-        if !follow {
-            if let Some(new_first) = new_first {
-                window.set_log_scroll_y(-(new_first as f32 * LOG_ROW_HEIGHT + remainder));
-            } else {
-                window.set_log_scroll_y(0.0);
-            }
-        }
-    } else if added > 0 {
-        model.extend(update.appended.iter().filter(matches).map(log_row));
+    let plan = plan_log_page(
+        &update.previous,
+        &update.entries,
+        &update.appended,
+        update.reset,
+        update.trimmed,
+        filter_changed,
+        follow,
+        window.get_log_scroll_y(),
+        window.get_new_log_count(),
+        level,
+        &keyword,
+    );
+    if plan.rebuild {
+        model.set_vec(plan.rows.iter().map(log_row).collect::<Vec<_>>());
+    } else if plan.added > 0 {
+        model.extend(plan.rows.iter().skip(model.row_count()).map(log_row));
     }
-    if follow || filter_changed {
-        window.set_new_log_count(0);
-    } else {
-        window.set_new_log_count(window.get_new_log_count().saturating_add(added as i32));
+    if let Some(scroll_y) = plan.scroll_y {
+        window.set_log_scroll_y(scroll_y);
     }
+    window.set_new_log_count(plan.new_count);
 
     let total = update.entries.len();
     let visible = model.row_count();
@@ -765,8 +751,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !PAUSED.load(Ordering::SeqCst) {
                     let refresh = REFRESH_LOGS.swap(false, Ordering::SeqCst);
                     let update = if let Some(opened) = stream.as_mut() {
+                        let previous: Vec<_> = opened.lines().iter().cloned().collect();
                         match opened.poll() {
                             Ok(outcome) if refresh || outcome.reset || !outcome.appended.is_empty() || last_failure.is_some() => Some(LogUpdate {
+                                previous,
                                 entries: opened.lines().iter().cloned().collect(),
                                 appended: outcome.appended,
                                 reset: outcome.reset || last_failure.is_some(),
@@ -782,7 +770,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(opened) => {
                                 let entries = opened.lines().iter().cloned().collect();
                                 stream = Some(opened);
-                                Some(LogUpdate { entries, appended: Vec::new(), reset: true, trimmed: 0, failure: None })
+                                Some(LogUpdate { previous: Vec::new(), entries, appended: Vec::new(), reset: true, trimmed: 0, failure: None })
                             }
                             Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => Some(LogUpdate::failed(reason)),
                             Err(_) => None,

@@ -163,7 +163,9 @@ export component MainWindow inherits Window {
     in-out property <int> log-period;
     in property <bool> older-logs;
     in property <bool> newer-logs;
-    private property <string> open-log-id;
+    // Test seam: the log detail state is set by row activation and read by the
+    // layout test that checks the list height after closing the detail.
+    in-out property <string> open-log-id;
     private property <string> open-log-title;
     private property <string> open-log-body;
 
@@ -221,6 +223,8 @@ export component MainWindow inherits Window {
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
     out property <length> request-list-height: request-list-panel.height;
+    out property <length> log-list-height: log-list.height;
+    out property <length> log-details-height: log-details.height;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -533,7 +537,7 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
-                TextDetails {
+                log-details := TextDetails {
                     visible: !root.open-log-id.is-empty;
                     height: root.open-log-id.is-empty ? 0px : root.compact ? 130px : 170px;
                     title: root.open-log-title;
