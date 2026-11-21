@@ -344,6 +344,13 @@ fn range_switches_keep_ledger_bucket_counts_labels_and_totals() {
     assert_eq!(today.token_total, "12");
     assert_eq!(today.request_total, "1");
 
+    let day = read_usage(&ledger, Range::Day, now);
+    assert_eq!(day.buckets.len(), 24);
+    assert_eq!(day.buckets.first().unwrap().label, "19:00");
+    assert_eq!(day.buckets.last().unwrap().label, "18:00");
+    assert_eq!(day.token_total, "36");
+    assert_eq!(day.request_total, "2");
+
     let week = read_usage(&ledger, Range::Week, now);
     assert_eq!(week.buckets.len(), 7);
     assert_eq!(week.buckets.first().unwrap().label, "2026-11-14");
@@ -360,6 +367,23 @@ fn range_switches_keep_ledger_bucket_counts_labels_and_totals() {
     assert_eq!(month.buckets.last().unwrap().tokens, today.token_total);
     assert_eq!(month.token_total, "120");
     assert_eq!(month.request_total, "4");
+
+    let all = read_usage(&ledger, Range::All, now);
+    assert_eq!(all.buckets.len(), 32);
+    assert_eq!(all.buckets.first().unwrap().label, "2026-10-20");
+    assert_eq!(all.buckets.last().unwrap().label, "2026-11-20");
+    assert_eq!(all.token_total, "180");
+    assert_eq!(all.request_total, "5");
+}
+
+#[test]
+fn range_indices_match_the_segmented_control_order() {
+    assert_eq!(Range::from_index(0), Range::Today);
+    assert_eq!(Range::from_index(1), Range::Day);
+    assert_eq!(Range::from_index(2), Range::Week);
+    assert_eq!(Range::from_index(3), Range::Month);
+    assert_eq!(Range::from_index(4), Range::All);
+    assert_eq!(Range::from_index(5), Range::Today);
 }
 
 #[test]
@@ -462,6 +486,12 @@ fn diagnostics_filter_by_time_result_and_keyword() {
         2
     );
     assert_eq!(
+        read_requests(&ledger, Range::Day, 0, "", None, now)
+            .rows
+            .len(),
+        2
+    );
+    assert_eq!(
         read_requests(&ledger, Range::Week, 0, "", None, now)
             .rows
             .len(),
@@ -472,6 +502,12 @@ fn diagnostics_filter_by_time_result_and_keyword() {
             .rows
             .len(),
         4
+    );
+    assert_eq!(
+        read_requests(&ledger, Range::All, 0, "", None, now)
+            .rows
+            .len(),
+        5
     );
 
     let success = read_requests(&ledger, Range::Month, 1, "", None, now);

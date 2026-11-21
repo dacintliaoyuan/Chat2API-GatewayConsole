@@ -166,7 +166,7 @@ export component UsageChart inherits Panel {
                 VerticalLayout {
                     spacing: 3px;
                     Heading { text: "用量趋势"; }
-                    Hint { text: root.period == 0 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+                    Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 refresh-button := ActionButton {
@@ -203,8 +203,8 @@ export component UsageChart inherits Panel {
                 flex-wrap: wrap;
                 spacing: 8px;
                 period-control := Segmented {
-                    width: 248px;
-                    options: [{ text: "今天" }, { text: "7 天" }, { text: "30 天" }];
+                    width: 300px;
+                    options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
                     label: "用量时间范围";
                     current-index <=> root.period;
                     selected(index) => {

@@ -17,7 +17,7 @@ use crate::operations::OperationsReader;
 use um_gateway::login::history::{read_records, sanitize_reason, LoginRoundRecord};
 
 pub const UM_LEDGER_SOURCE: &str = "chat2api";
-pub const UM_WINDOWS: [&str; 4] = ["today", "24h", "7d", "30d"];
+pub const UM_WINDOWS: [&str; 5] = ["today", "24h", "7d", "30d", "all"];
 pub const UM_TREND_RANGES: [&str; 3] = ["7d", "14d", "30d"];
 pub const UM_RESULTS: [&str; 6] = [
     "success",
@@ -547,6 +547,15 @@ fn beijing_day(ms: Option<f64>) -> Option<String> {
         .map(|stamp| stamp.format("%Y-%m-%d").to_string())
 }
 
+fn beijing_hour(ms: Option<f64>) -> Option<String> {
+    let ms = ms?;
+    let seconds = (ms / 1000.0).floor() as i64;
+    beijing()
+        .timestamp_opt(seconds, 0)
+        .single()
+        .map(|stamp| stamp.format("%H:00").to_string())
+}
+
 fn iso(ms: f64) -> Option<String> {
     let seconds = (ms / 1000.0).floor() as i64;
     beijing()
@@ -579,7 +588,14 @@ fn window_bounds(window: &str, now_ms: f64) -> Result<(f64, f64, String), UmQuer
         return Ok((start, start + 86_400_000.0, "今天".to_string()));
     }
     if window == "24h" {
-        return Ok((now_ms - 86_400_000.0, now_ms + 1.0, "近 24 小时".to_string()));
+        return Ok((
+            now_ms - 86_400_000.0,
+            now_ms + 1.0,
+            "近 24 小时".to_string(),
+        ));
+    }
+    if window == "all" {
+        return Ok((0.0, now_ms + 1.0, "全部".to_string()));
     }
     let days = if window == "7d" { 7 } else { 30 };
     let start = window_day_keys(days, now_ms)
@@ -1228,17 +1244,44 @@ fn empty_trend(
 }
 
 /// Desktop summary over the same ledger and token/retry rules as the web
-/// console. Today uses Beijing hours, the other periods use calendar days.
+/// console. Today and the rolling 24h window use Beijing hours, the other
+/// periods use calendar days. `all` starts at the earliest dated event so the
+/// bucket count stays proportional to the ledger instead of reaching 1970.
 pub fn desktop_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQueryError> {
-    if !matches!(range, "today" | "7d" | "30d") || !now_ms.is_finite() {
-        return Err(UmQueryError("invalid desktop usage range or time".to_string()));
+    if !matches!(range, "today" | "24h" | "7d" | "30d" | "all") || !now_ms.is_finite() {
+        return Err(UmQueryError(
+            "invalid desktop usage range or time".to_string(),
+        ));
     }
-    let (start, end, _) = window_bounds(range, now_ms)?;
-    let hourly = range == "today";
-    let step = if hourly { 3_600_000.0 } else { 86_400_000.0 };
-    let count = ((end - start) / step) as usize;
     let read = read_ledger(ledger);
     let (status, note) = ledger_status(&read);
+    let hourly = range == "today" || range == "24h";
+    let step = if hourly { 3_600_000.0 } else { 86_400_000.0 };
+    let (start, end) = if range == "all" {
+        let today_start = window_day_keys(1, now_ms)
+            .first()
+            .and_then(|day| day_start_ms(day))
+            .unwrap_or(now_ms);
+        let earliest = read
+            .events
+            .iter()
+            .filter_map(|event| event.ms)
+            .reduce(f64::min);
+        let start = earliest
+            .and_then(|ms| beijing_day(Some(ms)))
+            .and_then(|day| day_start_ms(&day))
+            .unwrap_or(today_start)
+            .clamp(0.0, today_start);
+        (start, now_ms + 1.0)
+    } else {
+        let (start, end, _) = window_bounds(range, now_ms)?;
+        (start, end)
+    };
+    let count = if range == "all" {
+        (((end - start) / step).ceil() as usize).max(1)
+    } else {
+        ((end - start) / step) as usize
+    };
     let mut groups = vec![Vec::new(); count];
     let mut scanned = 0;
     for event in &read.events {
@@ -1250,7 +1293,8 @@ pub fn desktop_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, U
     let mut buckets = Vec::with_capacity(count);
     for (index, events) in groups.iter().enumerate() {
         let label = if hourly {
-            format!("{index:02}:00")
+            beijing_hour(Some(start + index as f64 * step))
+                .unwrap_or_else(|| format!("{index:02}:00"))
         } else {
             beijing_day(Some(start + index as f64 * step)).unwrap_or_default()
         };
@@ -1274,6 +1318,7 @@ pub fn desktop_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, U
         mark_trend_bucket(&mut total, &note);
     }
     Ok(json!({
+        "range": range,
         "buckets": buckets,
         "total": total,
         "coverage": { "status": status, "note": note, "scanned": scanned },
@@ -1777,6 +1822,15 @@ pub fn um_requests(
     let read = read_ledger(ledger);
     let (status, note) = ledger_status(&read);
     let (start, end, label) = window_bounds(window, now_ms)?;
+    let scope = if window == "all" {
+        "全部时间的 UM 账本（chat2api）".to_string()
+    } else {
+        format!(
+            "北京时间{label}（{} – {}）的 UM 账本（chat2api）",
+            iso(start).unwrap_or_default(),
+            iso(end).unwrap_or_default()
+        )
+    };
     if status == "missing" || status == "unavailable" {
         let page_coverage = json!({
             "status": status, "note": note, "ledger_present": read.ledger_present,
@@ -1786,10 +1840,11 @@ pub fn um_requests(
         return Ok(json!({
             "page": {
                 "rows": [],
-                "scope": format!("{label}的 UM 账本（chat2api）"),
+                "scope": scope,
                 "earlier": null,
                 "coverage": page_coverage,
             },
+            "range": window,
             "models": [],
             "coverage": coverage(&read),
             "timezone": "Asia/Shanghai",
@@ -1892,13 +1947,11 @@ pub fn um_requests(
     Ok(json!({
         "page": {
             "rows": rows,
-            "scope": format!(
-                "北京时间{label}（{} – {}）的 UM 账本（chat2api），时间倒序；物理重试不单独成行",
-                iso(start).unwrap_or_default(), iso(end).unwrap_or_default()
-            ),
+            "scope": format!("{scope}，时间倒序；物理重试不单独成行"),
             "earlier": earlier,
             "coverage": page_coverage,
         },
+        "range": window,
         "models": models,
         "coverage": page_coverage,
         "timezone": "Asia/Shanghai",

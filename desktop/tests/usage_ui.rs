@@ -188,6 +188,18 @@ fn keyboard_browses_and_pins_chart_data() {
     assert_eq!(chart.get_usage_pinned_index(), 2);
 }
 
+fn click_segment<T: ComponentHandle>(
+    component: &T,
+    x: f32,
+    y: f32,
+    width: f32,
+    index: usize,
+    count: usize,
+) {
+    let item = (width - 4.0) / count as f32;
+    click(component, x + 2.0 + item * (index as f32 + 0.5), y + 20.0);
+}
+
 #[test]
 fn changing_range_through_the_segmented_control_reloads_the_chart() {
     let chart = chart();
@@ -198,11 +210,14 @@ fn changing_range_through_the_segmented_control_reloads_the_chart() {
     });
 
     click_bucket(&chart, 1);
-    let x = chart.get_usage_period_x() + chart.get_usage_period_width() / 2.0;
-    click(&chart, x, chart.get_usage_period_y() + 20.0);
+    let x = chart.get_usage_period_x();
+    let y = chart.get_usage_period_y();
+    let width = chart.get_usage_period_width();
+    assert!(width >= 300.0, "five range options need room for 24 小时");
 
     // The selection block animates for 160 ms; the chart data reload starts
     // only after that, so the block and the plot never disagree.
+    click_segment(&chart, x, y, width, 1, 5);
     assert_eq!(chart.get_usage_period(), 1);
     assert_eq!(selected.get(), None);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(160));
@@ -210,6 +225,41 @@ fn changing_range_through_the_segmented_control_reloads_the_chart() {
     assert_eq!(chart.get_usage_period(), 1);
     assert_eq!(selected.get(), Some(1));
     assert!(!chart.get_usage_can_unpin());
+
+    for index in [2usize, 3, 4, 0] {
+        click_segment(&chart, x, y, width, index, 5);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+        assert_eq!(chart.get_usage_period(), index as i32);
+        assert_eq!(selected.get(), Some(index as i32));
+        assert!(!chart.get_usage_can_unpin());
+    }
+}
+
+#[test]
+fn changing_request_range_through_the_segmented_control_queries_the_new_range() {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(1060.0, 720.0));
+    window.set_page(1);
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+
+    let queries = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_query_requests({
+        let queries = queries.clone();
+        move |_| queries.set(queries.get() + 1)
+    });
+
+    let x = window.get_request_period_x();
+    let y = window.get_request_period_y();
+    let width = window.get_request_period_width();
+    assert!(width >= 280.0, "five range options need room for 24 小时");
+    for index in 0..5 {
+        click_segment(&window, x, y, width, index, 5);
+        assert_eq!(window.get_request_period(), index as i32);
+        assert_eq!(queries.get(), index + 1);
+    }
 }
 
 fn request_row(index: usize) -> main_ui::RequestRow {
