@@ -1983,6 +1983,11 @@ fn drive_login(
 
         let url = page.url();
         if url != last_url {
+            // The SSO broker and the credential form share a stage name.
+            // Give the next page its own rendering and autofill budget.
+            if origin_without_query(&url) != origin_without_query(&last_url) {
+                stage_seen.remove("umpass");
+            }
             last_url = url.clone();
             idle_deadline = Instant::now() + inner.config.idle_timeout;
         }

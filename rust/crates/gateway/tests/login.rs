@@ -1034,6 +1034,55 @@ fn a_background_round_gets_a_fresh_deadline_after_an_expired_explicit_window() {
 }
 
 #[test]
+fn a_umpass_redirect_gives_the_prefilled_form_its_own_settle_budget() {
+    let temp = TempDir::new("um-rust-login-umpass-redirect-");
+    let upstream = "http://127.0.0.1:9";
+    let broker = "https://login.um.edu.mo/kc/realms/prod/broker/websso/login";
+    let page = FakePage::new(upstream, None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().unwrap() = vec![
+        (broker.to_string(), None),
+        (upstream.to_string(), Some("autofilled-token".to_string())),
+    ];
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.stage_settle_timeout = Duration::from_millis(450);
+            config.login_timeout = Duration::from_secs(3);
+        },
+    );
+
+    service.start_explicit(false);
+    let redirect = thread::spawn({
+        let page = page.clone();
+        move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while page.url() != broker {
+                assert!(Instant::now() < deadline, "login never reached the broker");
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(280));
+            page.set_url(trusted_umpass_url());
+            thread::sleep(Duration::from_millis(280));
+            page.account_prefilled.store(true, Ordering::SeqCst);
+            page.password_prefilled.store(true, Ordering::SeqCst);
+        }
+    });
+    let status = wait_for(&service, |status| {
+        status["state"] == json!("valid") || status["state"] == json!("failed")
+    });
+    redirect.join().unwrap();
+
+    assert_eq!(status["state"], json!("valid"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(page.fill_calls(), 0);
+    assert_eq!(page.submit_clicks(), 1);
+}
+
+#[test]
 fn a_slow_umpass_form_is_not_reported_as_prefill_missing() {
     let temp = TempDir::new("um-rust-login-slow-umpass-");
     let page = FakePage::new("http://127.0.0.1:9", None);
