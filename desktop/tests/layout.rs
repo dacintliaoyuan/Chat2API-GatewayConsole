@@ -188,6 +188,356 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
 }
 
 #[test]
+fn settings_cards_share_one_column_and_uniform_spacing() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let cards = [
+        (
+            "外观",
+            window.get_appearance_card_x(),
+            window.get_appearance_card_y(),
+            window.get_appearance_card_width(),
+            window.get_appearance_card_height(),
+        ),
+        (
+            "账号",
+            window.get_account_card_x(),
+            window.get_account_card_y(),
+            window.get_account_card_width(),
+            window.get_account_card_height(),
+        ),
+        (
+            "网关",
+            window.get_gateway_card_x(),
+            window.get_gateway_card_y(),
+            window.get_gateway_card_width(),
+            window.get_gateway_card_height(),
+        ),
+        (
+            "实例管理",
+            window.get_technical_card_x(),
+            window.get_technical_card_y(),
+            window.get_technical_card_width(),
+            window.get_technical_card_height(),
+        ),
+    ];
+    println!("settings cards: {cards:?}");
+    for (label, x, _, width, _) in cards {
+        assert!(
+            (x - cards[0].1).abs() < 0.5,
+            "{label} 卡必须与外观卡左对齐（{x} vs {}）",
+            cards[0].1
+        );
+        assert!(
+            (width - cards[0].3).abs() < 0.5,
+            "{label} 卡必须与外观卡同宽（{width} vs {}）",
+            cards[0].3
+        );
+    }
+    for pair in cards.windows(2) {
+        let (label, _, y, _, height) = pair[0];
+        let (next, _, next_y, _, _) = pair[1];
+        assert!(
+            ((next_y - (y + height)) - 12.0).abs() < 0.5,
+            "{label} 与 {next} 卡间距必须是 12px（实际 {}）",
+            next_y - (y + height)
+        );
+    }
+
+    assert!(
+        (window.get_settings_refresh_x() - cards[0].1).abs() < 0.5,
+        "设置刷新按钮必须与卡片左对齐"
+    );
+    assert!(
+        window.get_settings_refresh_y() + window.get_settings_refresh_height() <= cards[0].2 + 0.5,
+        "设置刷新按钮必须排在首张卡上方"
+    );
+}
+
+#[test]
+fn settings_rows_share_one_height_and_align_controls_right() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let inset = 16.0;
+    println!(
+        "appearance: card={}x{} {}x{} title_y={} title_w={} hint_y={} hint_w={} row={}x{} {}x{} label_x={} label_w={} theme_x={} theme_y={} theme_w={} theme_h={}",
+        window.get_appearance_card_x(),
+        window.get_appearance_card_y(),
+        window.get_appearance_card_width(),
+        window.get_appearance_card_height(),
+        window.get_appearance_title_y(),
+        window.get_appearance_title_width(),
+        window.get_appearance_hint_y(),
+        window.get_appearance_hint_width(),
+        window.get_appearance_row_x(),
+        window.get_appearance_row_y(),
+        window.get_appearance_row_width(),
+        window.get_appearance_row_height(),
+        window.get_appearance_row_label_x(),
+        window.get_appearance_row_label_width(),
+        window.get_theme_mode_x(),
+        window.get_theme_mode_y(),
+        window.get_theme_mode_width(),
+        window.get_theme_mode_height(),
+    );
+    // Card titles, hints and rows share one 12 px rhythm.
+    assert!(
+        (window.get_appearance_hint_y()
+            - (window.get_appearance_title_y() + window.get_appearance_title_height())
+            - 12.0)
+            .abs()
+            < 0.5,
+        "外观标题与说明间距必须是 12px"
+    );
+    assert!(
+        (window.get_appearance_row_y()
+            - (window.get_appearance_hint_y() + window.get_appearance_hint_height())
+            - 12.0)
+            .abs()
+            < 0.5,
+        "外观说明与主题行间距必须是 12px"
+    );
+
+    // The appearance row is the left label plus a right-aligned control.
+    assert!(
+        (window.get_appearance_row_label_x() - (window.get_appearance_card_x() + inset)).abs() < 0.5,
+        "外观行标签必须与卡片内边距对齐"
+    );
+    assert!(
+        window.get_theme_mode_x()
+            >= window.get_appearance_row_label_x() + window.get_appearance_row_label_width() - 0.5,
+        "主题控件必须排在标签右侧"
+    );
+    assert!(
+        (window.get_theme_mode_x() + window.get_theme_mode_width()
+            - (window.get_appearance_card_x() + window.get_appearance_card_width() - inset))
+            .abs()
+            < 1.5,
+        "主题控件必须与卡片内容右对齐"
+    );
+    assert!(
+        window.get_theme_mode_y() >= window.get_appearance_row_y()
+            && window.get_theme_mode_y() + window.get_theme_mode_height()
+                <= window.get_appearance_row_y() + window.get_appearance_row_height() + 0.5,
+        "主题控件必须与标签在同一行"
+    );
+
+    // The port row keeps the same height and puts its controls at the right.
+    assert!(
+        (window.get_port_row_height() - window.get_appearance_row_height()).abs() < 0.5,
+        "端口行必须与外观行同高"
+    );
+    assert!(
+        window.get_port_row_height() >= 34.0,
+        "设置行高必须容纳 34px 控件"
+    );
+    assert!(
+        (window.get_port_row_label_x() - (window.get_gateway_card_x() + inset)).abs() < 0.5,
+        "端口行标签必须与卡片内边距对齐"
+    );
+    assert!(
+        window.get_port_input_x()
+            >= window.get_port_row_label_x() + window.get_port_row_label_width() - 0.5,
+        "端口输入必须排在标签右侧"
+    );
+    assert!(
+        window.get_port_apply_x() >= window.get_port_input_x() + window.get_port_input_width() - 0.5,
+        "应用按钮必须排在端口输入右侧"
+    );
+    assert!(
+        (window.get_port_apply_x() + window.get_port_apply_width()
+            - (window.get_gateway_card_x() + window.get_gateway_card_width() - inset))
+            .abs()
+            < 1.5,
+        "应用按钮必须与卡片内容右对齐"
+    );
+    assert!(
+        window.get_gateway_address_row_y()
+            >= window.get_port_row_y() + window.get_port_row_height() - 0.5,
+        "模型 API 地址必须单独占第二行"
+    );
+    assert!(
+        (window.get_gateway_address_label_x() - (window.get_gateway_card_x() + inset)).abs() < 0.5,
+        "地址行标签必须与卡片内边距对齐"
+    );
+    assert!(
+        window.get_gateway_address_x()
+            >= window.get_gateway_address_label_x() + window.get_gateway_address_label_width() - 0.5,
+        "地址值必须排在标签右侧"
+    );
+    assert!(
+        (window.get_copy_v1_x() + window.get_copy_v1_width()
+            - (window.get_gateway_card_x() + window.get_gateway_card_width() - inset))
+            .abs()
+            < 1.5,
+        "复制 /v1 入口必须与卡片内容右对齐"
+    );
+}
+
+#[test]
+fn the_account_card_orders_title_state_saved_and_actions() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_account_label("尚未登录".into());
+    window.set_account_tone(2);
+    window.set_account_saved("未配置账号".into());
+    window.set_account_saved_detail("凭据缺少密码".into());
+    window.set_account_can_clear(true);
+    window.set_account_can_continue(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    println!(
+        "account: card={}x{} {}x{} title_y={} title_h={} state_x={} state_y={} state_w={} state_h={} saved_y={} saved_h={} actions_y={} actions_h={}",
+        window.get_account_card_x(),
+        window.get_account_card_y(),
+        window.get_account_card_width(),
+        window.get_account_card_height(),
+        window.get_account_title_y(),
+        window.get_account_title_height(),
+        window.get_account_state_x(),
+        window.get_account_state_y(),
+        window.get_account_state_width(),
+        window.get_account_state_height(),
+        window.get_account_saved_y(),
+        window.get_account_saved_height(),
+        window.get_account_actions_y(),
+        window.get_account_actions_height(),
+    );
+
+    let inset = 16.0;
+    // The state tag sits in the title row, right-aligned to the card content.
+    assert!(
+        window.get_account_state_y() >= window.get_account_title_y()
+            && window.get_account_state_y()
+                < window.get_account_title_y() + window.get_account_title_height() + 0.5,
+        "账号状态必须与卡片标题同一行"
+    );
+    assert!(
+        window.get_account_state_x() > window.get_account_card_x() + inset,
+        "账号状态必须排在标题右侧"
+    );
+    assert!(
+        (window.get_account_state_x() + window.get_account_state_width()
+            - (window.get_account_card_x() + window.get_account_card_width() - inset))
+            .abs()
+            < 1.5,
+        "账号状态必须与卡片内容右对齐"
+    );
+
+    // Saved credentials and actions stack below the header in reading order.
+    assert!(
+        window.get_account_saved_y()
+            >= window.get_account_state_y() + window.get_account_state_height() - 0.5,
+        "已保存账号信息必须排在标题行下方"
+    );
+    assert!(
+        window.get_account_actions_y()
+            >= window.get_account_saved_y() + window.get_account_saved_height() - 0.5,
+        "账号操作必须排在已保存信息下方"
+    );
+    assert!(
+        (window.get_account_actions_x() - (window.get_account_card_x() + inset)).abs() < 0.5,
+        "账号操作必须与卡片内边距对齐"
+    );
+    assert!(
+        window.get_account_actions_height() >= 34.0,
+        "账号操作行必须容纳 34px 按钮"
+    );
+}
+
+#[test]
+fn the_instance_card_aligns_its_detail_rows() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_supervision_value("运行中".into());
+    window.set_supervision_detail("本实例网关 PID 4242".into());
+    window.set_supervision_tone(0);
+    window.set_config_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\desktop.json".into());
+    window.set_instance_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\instances\\144".into());
+    window.set_show_technical(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    println!(
+        "instance: card={}x{} {}x{} supervision_y={} supervision_h={} config_y={} config_h={} data_y={} data_h={} label_x={} label_w={} value_x={}x{} {}x{} {}x{}",
+        window.get_technical_card_x(),
+        window.get_technical_card_y(),
+        window.get_technical_card_width(),
+        window.get_technical_card_height(),
+        window.get_instance_supervision_y(),
+        window.get_instance_supervision_height(),
+        window.get_instance_config_y(),
+        window.get_instance_config_height(),
+        window.get_instance_data_y(),
+        window.get_instance_data_height(),
+        window.get_instance_label_x(),
+        window.get_instance_label_width(),
+        window.get_instance_supervision_value_x(),
+        window.get_instance_supervision_value_width(),
+        window.get_instance_config_value_x(),
+        window.get_instance_config_value_width(),
+        window.get_instance_data_value_x(),
+        window.get_instance_data_value_width(),
+    );
+
+    let inset = 16.0;
+    assert!(
+        window.get_instance_supervision_y()
+            < window.get_instance_config_y()
+            && window.get_instance_config_y() < window.get_instance_data_y(),
+        "实例卡详情必须按网关监督、配置文件、实例数据排列"
+    );
+    assert!(
+        (window.get_instance_config_y()
+            - (window.get_instance_supervision_y() + window.get_instance_supervision_height())
+            - 12.0)
+            .abs()
+            < 0.5
+            && (window.get_instance_data_y()
+                - (window.get_instance_config_y() + window.get_instance_config_height())
+                - 12.0)
+                .abs()
+                < 0.5,
+        "实例卡详情行间距必须是 12px"
+    );
+    assert!(
+        (window.get_instance_label_x() - (window.get_technical_card_x() + inset)).abs() < 0.5,
+        "实例卡标签必须与卡片内边距对齐"
+    );
+    for value_x in [
+        window.get_instance_supervision_value_x(),
+        window.get_instance_config_value_x(),
+        window.get_instance_data_value_x(),
+    ] {
+        assert!(
+            value_x >= window.get_instance_label_x() + window.get_instance_label_width() - 0.5,
+            "实例卡值必须排在标签右侧"
+        );
+    }
+    for value_right in [
+        window.get_instance_supervision_value_x() + window.get_instance_supervision_value_width(),
+        window.get_instance_config_value_x() + window.get_instance_config_value_width(),
+        window.get_instance_data_value_x() + window.get_instance_data_value_width(),
+    ] {
+        assert!(
+            (value_right - (window.get_technical_card_x() + window.get_technical_card_width() - inset))
+                .abs()
+                < 1.5,
+            "实例卡值必须与卡片内容右对齐"
+        );
+    }
+    assert!(
+        window.get_instance_data_y() + window.get_instance_data_height()
+            <= window.get_technical_card_y() + window.get_technical_card_height() - inset + 0.5,
+        "实例卡详情必须落在卡片内边距内"
+    );
+}
+
+#[test]
 fn the_port_row_offers_a_numeric_input_and_apply_button() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
