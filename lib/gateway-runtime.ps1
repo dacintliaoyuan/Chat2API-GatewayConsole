@@ -100,7 +100,8 @@ $script:GatewayServiceDescriptors = [ordered]@{
                     '--worker-port-file', '{worker-port-file}',
                     '--desired-state-file', '{desired-state-file}',
                     '--boot-id', '{boot-id}',
-                    '--control-token-file', 'data/admin-control-token')
+                    '--control-token-file', 'data/admin-control-token',
+                    '--service-log', 'chat2api/chat2api.log')
                 HealthUrl = 'http://127.0.0.1:8000/health'
             }
         )
