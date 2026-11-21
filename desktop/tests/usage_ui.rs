@@ -236,6 +236,70 @@ fn changing_range_through_the_segmented_control_reloads_the_chart() {
 }
 
 #[test]
+fn the_metric_switch_sits_in_the_chart_card_and_switches_the_plot() {
+    let chart = chart();
+    let chart_x = chart.get_overview_chart_x();
+    let chart_y = chart.get_overview_chart_y();
+    let chart_width = chart.get_overview_chart_width();
+    let chart_height = chart.get_overview_chart_height();
+    let metric_x = chart.get_usage_metric_x();
+    let metric_y = chart.get_usage_metric_y();
+    let metric_width = chart.get_usage_metric_width();
+    let metric_height = chart.get_usage_metric_height();
+    println!(
+        "chart x={chart_x} y={chart_y} w={chart_width} h={chart_height} metric x={metric_x} y={metric_y} w={metric_width} h={metric_height}"
+    );
+    assert!(
+        metric_width > 0.0 && metric_height > 0.0,
+        "the metric switch must be visible"
+    );
+    assert!(
+        metric_x >= chart_x
+            && metric_y >= chart_y
+            && metric_x + metric_width <= chart_x + chart_width + 1.0
+            && metric_y + metric_height <= chart_y + chart_height + 1.0,
+        "the metric switch must stay inside the usage card"
+    );
+
+    click_segment(&chart, metric_x, metric_y, metric_width, 1, 2);
+    assert!(chart.get_usage_show_requests());
+    click_segment(&chart, metric_x, metric_y, metric_width, 0, 2);
+    assert!(!chart.get_usage_show_requests());
+}
+
+#[test]
+fn the_plot_fills_the_chart_card_without_a_blank_band() {
+    let chart = chart();
+    let chart_y = chart.get_overview_chart_absolute_y();
+    let chart_height = chart.get_overview_chart_height();
+    let plot_y = chart.get_usage_plot_y();
+    let plot_height = chart.get_usage_plot_height();
+    let selection_y = chart.get_usage_selection_y();
+    let selection_height = chart.get_usage_selection_height();
+    println!(
+        "chart y={chart_y} h={chart_height} bottom={} content={} controls y={} h={} plot y={plot_y} h={plot_height} bottom={} selection y={selection_y} h={selection_height} bottom={}",
+        chart_y + chart_height,
+        chart.get_overview_chart_content_height(),
+        chart.get_usage_controls_y(),
+        chart.get_usage_controls_height(),
+        plot_y + plot_height,
+        selection_y + selection_height,
+    );
+    assert!(
+        plot_height > chart_height * 0.45,
+        "the plot must take the chart card's remaining height"
+    );
+    assert!(
+        plot_y + plot_height <= selection_y + 1.0,
+        "the plot must reach the selection row without a blank band"
+    );
+    assert!(
+        (selection_y + selection_height + 16.0 - (chart_y + chart_height)).abs() < 2.0,
+        "the selection row and the card padding must close the card"
+    );
+}
+
+#[test]
 fn changing_request_range_through_the_segmented_control_queries_the_new_range() {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");
