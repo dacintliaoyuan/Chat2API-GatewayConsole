@@ -1355,7 +1355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Tone::Bad,
                 ),
                 PortSwitch::Restored { from, reason, .. } => (
-                    format!("新端口启动失败：{reason}；已恢复 127.0.0.1:{from}"),
+                    format!("未切换：{reason}；已恢复 127.0.0.1:{from}"),
                     Tone::Bad,
                 ),
                 PortSwitch::RestoreFailed {
@@ -1365,7 +1365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } => (
                     format!(
-                        "新端口启动失败：{reason}；恢复 127.0.0.1:{from} 也失败：{restore_error}"
+                        "未切换：{reason}；恢复 127.0.0.1:{from} 也失败：{restore_error}"
                     ),
                     Tone::Bad,
                 ),

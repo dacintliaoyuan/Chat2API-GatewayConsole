@@ -344,12 +344,17 @@ impl ServerHandle {
             if let Some(instance) = &mut self.instance {
                 instance.stop();
             }
-            if let Some(login) = &self.state.login {
-                login.shutdown();
-            }
+            // Close the listener before stopping the login executor and the
+            // auth watch. The desktop supervisor waits for the listener to be
+            // gone before it switches ports; stopping the browser first could
+            // keep the port open for the whole login shutdown and make that
+            // wait time out.
             self.shutdown.store(true, Ordering::SeqCst);
             let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
             let _ = handle.join();
+        }
+        if let Some(login) = &self.state.login {
+            login.shutdown();
         }
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();

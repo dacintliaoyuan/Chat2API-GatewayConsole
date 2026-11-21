@@ -510,3 +510,29 @@ fn production_desktop_binary_reports_an_occupied_port_and_keeps_the_old_listener
     assert_eq!(shutdown(gateway.addr).status, 202);
     assert!(gateway.wait_for_exit(Duration::from_secs(5)).success());
 }
+
+#[test]
+fn desktop_shutdown_closes_the_listener_before_the_auth_watch_stops() {
+    let temp = TempDir::new("um-desktop-shutdown-order-");
+    let stub = ChatStub::start();
+    let mut gateway = DesktopGateway::start(temp, &stub, free_addr());
+    assert_eq!(shutdown(gateway.addr).status, 202);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let refused = std::net::TcpStream::connect_timeout(
+            &gateway.addr,
+            Duration::from_millis(100),
+        )
+        .is_err();
+        if refused {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the listener stayed up after shutdown"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let status = gateway.wait_for_exit(Duration::from_secs(5));
+    assert!(status.success(), "unexpected exit: {status}");
+}

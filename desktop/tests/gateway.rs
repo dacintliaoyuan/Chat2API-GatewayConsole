@@ -441,6 +441,7 @@ struct FakeHttp {
     shutdown_stops_processes: AtomicBool,
     drain_calls: Mutex<Vec<DrainAction>>,
     drain_counts: Mutex<VecDeque<usize>>,
+    drain_error: Mutex<Option<String>>,
     processes: Arc<Mutex<Vec<Arc<Mutex<FakeProcessState>>>>>,
 }
 
@@ -455,8 +456,13 @@ impl FakeHttp {
             shutdown_stops_processes: AtomicBool::new(true),
             drain_calls: Mutex::new(Vec::new()),
             drain_counts: Mutex::new(VecDeque::new()),
+            drain_error: Mutex::new(None),
             processes,
         }
+    }
+
+    fn fail_drain(&self, reason: &str) {
+        *self.drain_error.lock().unwrap() = Some(reason.to_string());
     }
 
     fn fail_port(&self, port: u16) {
@@ -539,7 +545,10 @@ impl GatewayHttp for FakeHttp {
         assert_eq!(lease.len(), 32);
         self.drain_calls.lock().unwrap().push(action);
         match action {
-            DrainAction::Wait => Ok(self.drain_counts.lock().unwrap().pop_front().unwrap_or(0)),
+            DrainAction::Wait => match self.drain_error.lock().unwrap().as_ref() {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(self.drain_counts.lock().unwrap().pop_front().unwrap_or(0)),
+            },
             DrainAction::Commit => self.shutdown(base_url, token).map(|()| 0),
             DrainAction::Cancel => Ok(0),
         }
@@ -1157,6 +1166,47 @@ fn switch_port_restores_the_old_port_when_saving_the_new_port_fails() {
         GatewayState::Running {
             ownership: Ownership::Managed
         }
+    );
+}
+
+#[test]
+fn switch_port_restores_the_old_port_when_the_drain_fails() {
+    let dir = TempDir::new("gateway-switch-drain-failed");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    // The old listener is already gone but the drain/stop wait reported failure.
+    world.http.healthy.lock().unwrap().insert(7997, false);
+    world.http.fail_drain("无法确认当前请求已经结束：网关没有响应");
+    let mut saved = Vec::new();
+    let outcome = supervisor.switch_port(7996, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    match outcome {
+        PortSwitch::Restored { from, to, reason } => {
+            assert_eq!(from, 7997);
+            assert_eq!(to, 7996);
+            assert!(reason.contains("无法确认当前请求已经结束"), "{reason}");
+        }
+        other => panic!("a failed drain must restore the old port, got {other:?}"),
+    }
+    assert_eq!(supervisor.port(), 7997);
+    assert!(saved.is_empty(), "the new port must not be saved");
+    assert_eq!(world.launcher.spawn_count(), 2);
+    assert_eq!(
+        supervisor.status().state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_ok(),
+        "the restored old port must serve again"
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7996").is_err(),
+        "the new port must not be started"
     );
 }
 
