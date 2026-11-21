@@ -671,6 +671,7 @@ foreach ($scriptName in @(
             FilePath = if ($throughObserver) { $plan.executable } else { [string]$FilePath }
             ArgumentList = if ($throughObserver) { $plan.arguments } else { @($ArgumentList) -join ' ' }
             WorkingDirectory = if ($throughObserver) { $plan.working_directory } else { [string]$WorkingDirectory }
+            Component = if ($throughObserver -and $plan.PSObject.Properties['component']) { $plan.component }
         })
     }
     try {
@@ -684,7 +685,9 @@ foreach ($scriptName in @(
         Assert-Equal ($workerLaunch.ArgumentList -match '--upstream-base-url https://chat.genai.um.edu.mo') $true 'the worker keeps the production upstream'
         Assert-Equal ([IO.Path]::GetFullPath($workerLaunch.WorkingDirectory)) $root 'the worker runs from the repository root'
         $ingressLaunch = $script:ticket80Launches[1]
-        Assert-Equal ($ingressLaunch.ObserverCommand -match 'observe-chat2api\.ps1') $false 'the ingress launches directly, not through the worker observer'
+        Assert-Equal ($ingressLaunch.ObserverCommand -match 'observe-chat2api\.ps1') $true 'the ingress launches through its own exit observer'
+        Assert-Equal $workerLaunch.Component 'worker' 'the worker has its own exit record identity'
+        Assert-Equal $ingressLaunch.Component 'ingress' 'the ingress has its own exit record identity'
         Assert-Equal $ingressLaunch.FilePath (Join-Path $root 'rust\target\release\um-gateway-candidate.exe') 'the ingress launches the Rust binary'
         Assert-Equal ($ingressLaunch.ArgumentList -match '^--mode ingress --port 8000 --worker-port-file ') $true 'the ingress argument line matches the fixed CLI'
         Assert-Equal ($ingressLaunch.ArgumentList -match '--desired-state-file ') $true 'the ingress receives the desired-state file'
@@ -991,7 +994,7 @@ foreach ($scriptName in @(
             $definition = $plan | ConvertFrom-Json
             $arguments = [string]$definition.arguments
             [void]$script:componentLaunches.Add([pscustomobject]@{
-                Component = 'worker'; Arguments = $arguments
+                Component = [string]$definition.component; Arguments = $arguments
                 WorkingDirectory = [string]$definition.working_directory
                 BootId = [Environment]::GetEnvironmentVariable('SELFUSEAI_GATEWAY_BOOT_ID', 'Process')
                 DesiredState = [Environment]::GetEnvironmentVariable('SELFUSEAI_GATEWAY_DESIRED_STATE', 'Process')

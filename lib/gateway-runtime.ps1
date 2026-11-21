@@ -1026,6 +1026,9 @@ function Stop-GatewayScopedProcesses {
     $terminated = @()
     $skipped = @()
     foreach ($target in $targets) {
+        if ($Key -eq 'chat2api') {
+            Write-GatewayStopRequest -Target $target -Method 'force_stop'
+        }
         $current = $null
         try {
             $current = @(Get-CimInstance Win32_Process `
@@ -1503,6 +1506,63 @@ function Get-GatewayDesiredStatePath {
         $root = Join-Path $env:LOCALAPPDATA 'SelfUseAI\ai-gateway\watch'
     }
     return Join-Path $root ('{0}-desired.json' -f $Key)
+}
+
+function Get-GatewayExitRecordDirectory {
+    Join-Path (Split-Path -Parent (Get-GatewayDesiredStatePath -Key 'chat2api')) 'chat2api-exits'
+}
+
+function Write-GatewayStopRequest {
+    param(
+        [Parameter(Mandatory = $true)]$Target,
+        [Parameter(Mandatory = $true)][ValidateSet('graceful_http', 'force_stop')][string]$Method,
+        [string]$RecordDirectory = (Get-GatewayExitRecordDirectory)
+    )
+    $process = $null
+    $pending = $null
+    try {
+        $process = Get-Process -Id ([int]$Target.ProcessId) -ErrorAction Stop
+        [void]$process.Handle
+        $ticks = $process.StartTime.ToUniversalTime().Ticks
+        $cimTicks = ([DateTime]$Target.CreationDate).ToUniversalTime().Ticks
+        # CIM creation time has microsecond precision. The filename uses the
+        # exact start time from the process handle, shared with the observer.
+        if (($ticks - ($ticks % 10)) -ne $cimTicks -or $process.HasExited) { return }
+        $path = Join-Path $RecordDirectory ('stop-{0}-{1}.json' -f $ticks, $process.Id)
+        $pending = '{0}.{1}.tmp' -f $path, $PID
+        [void][IO.Directory]::CreateDirectory($RecordDirectory)
+        $record = @{
+            source = Get-GatewayActionSource
+            method = $Method
+            at_utc = [DateTimeOffset]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($pending, ($record | ConvertTo-Json -Compress),
+            (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $pending -Destination $path -Force -ErrorAction Stop
+        Get-ChildItem -LiteralPath $RecordDirectory -File -Filter 'stop-*.json' |
+            Where-Object Name -Match '^stop-[0-9]+-[0-9]+\.json$' |
+            Sort-Object LastWriteTimeUtc, Name -Descending |
+            Select-Object -Skip 32 |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+    } catch {
+        # Missing diagnostic evidence must not block shutdown.
+        Write-Verbose 'Unable to record the local gateway stop request.'
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
+        if ($null -ne $pending) { Remove-Item -LiteralPath $pending -ErrorAction SilentlyContinue }
+    }
+}
+
+function Write-GatewayGracefulStopRequests {
+    param($Descriptor)
+    try {
+        $scope = Select-GatewayStopScope -Descriptor $Descriptor -GatewayRoot (Get-GatewayRoot)
+        foreach ($target in @($scope.Private)) {
+            Write-GatewayStopRequest -Target $target -Method 'graceful_http'
+        }
+    } catch {
+        Write-Verbose 'Unable to identify the local gateway processes for stop diagnostics.'
+    }
 }
 
 function Test-GatewayDesiredStateTracked {
@@ -2050,11 +2110,9 @@ function Invoke-GatewayChildLaunch {
             & $Launcher $Key $StartPath $Descriptor $ComponentName
             return
         }
-        if ($ComponentName -eq 'worker') {
-            # The worker is the process the exit observer holds, so a crash
-            # still writes the exit record the watch reads.
+        if ($Key -eq 'chat2api' -and $ComponentName -in @('worker', 'ingress')) {
             Start-GatewayObservedProcess -Executable $StartPath `
-                -Arguments @($Arguments) -WorkingDirectory $WorkingDirectory
+                -Arguments @($Arguments) -WorkingDirectory $WorkingDirectory -Component $ComponentName
         } else {
             Start-Process -FilePath $StartPath -ArgumentList @($Arguments) `
                 -WorkingDirectory $WorkingDirectory -WindowStyle Hidden
@@ -2209,20 +2267,23 @@ function Start-GatewayComponents {
 }
 
 function Start-GatewayObservedProcess {
-    param([string]$Executable, [string[]]$Arguments, [string]$WorkingDirectory)
+    param(
+        [string]$Executable, [string[]]$Arguments, [string]$WorkingDirectory,
+        [ValidateSet('gateway', 'ingress', 'worker')][string]$Component = 'gateway'
+    )
 
     $observer = Join-Path (Get-GatewayRoot) 'lib\observe-chat2api.ps1'
     if (!(Test-Path -LiteralPath $observer -PathType Leaf)) {
         throw 'local gateway exit observer script is missing'
     }
-    $recordDir = Join-Path (Split-Path -Parent (Get-GatewayDesiredStatePath -Key 'chat2api')) 'chat2api-exits'
     $envName = 'SELFUSEAI_CHAT2API_OBSERVER_LAUNCH'
     $previous = [Environment]::GetEnvironmentVariable($envName, 'Process')
     $definition = @{
         executable = $Executable
         arguments = $Arguments -join ' '
         working_directory = $WorkingDirectory
-        record_directory = $recordDir
+        record_directory = Get-GatewayExitRecordDirectory
+        component = $Component
     } | ConvertTo-Json -Compress
     try {
         [Environment]::SetEnvironmentVariable($envName, $definition, 'Process')
@@ -2475,6 +2536,7 @@ function Stop-GatewayService {
         # forwards the stop to the worker), then the worker's own shutdown
         # endpoint, then the verified scoped stop as the fallback. The ingress
         # is addressed at 8000; the worker port comes from WorkerPortFile.
+        Write-GatewayGracefulStopRequests -Descriptor $desc
         $gracefulRequested = $false
         try {
             $previousProgressPreference = $ProgressPreference
@@ -2520,6 +2582,7 @@ function Stop-GatewayService {
                 # console/share_production.py:1236-1246). The FORCE-KILL below
                 # is the part that used to select the share backend, so it runs
                 # through the verified stop scope.
+                if ($Key -eq 'chat2api') { Write-GatewayGracefulStopRequests -Descriptor $desc }
                 $gracefulRequested = $false
                 try {
                     $previousProgressPreference = $ProgressPreference

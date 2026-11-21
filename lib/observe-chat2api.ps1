@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Attach')][int]$AttachProcessId,
     [Parameter(Mandatory = $true, ParameterSetName = 'Attach')][long]$StartedUtcTicks,
     [Parameter(Mandatory = $true, ParameterSetName = 'Attach')][string]$ExpectedExecutable,
-    [Parameter(Mandatory = $true, ParameterSetName = 'Attach')][string]$RecordDirectory
+    [Parameter(Mandatory = $true, ParameterSetName = 'Attach')][string]$RecordDirectory,
+    [Parameter(ParameterSetName = 'Attach')]
+    [ValidateSet('gateway', 'ingress', 'worker')][string]$Component = 'gateway'
 )
 
 # Observe one local gateway process. Scheduling and restart decisions stay with
@@ -43,6 +45,24 @@ function Add-ErrorCategory {
         default { 'other' }
     }
     if ($Counts[$category] -lt 2147483647) { $Counts[$category] += 1 }
+}
+
+function Read-StopRequest {
+    param([string]$Directory, [string]$Name, [DateTime]$Started, [DateTime]$Exited)
+    $path = Join-Path $Directory ('stop-' + $Name + '.json')
+    try {
+        $request = [IO.File]::ReadAllText($path) | ConvertFrom-Json
+        $at = [DateTimeOffset]$request.at_utc
+        # A request is evidence of an attempt. A rejected request must not be
+        # carried forward to an unrelated exit much later in the process life.
+        if ($at.UtcDateTime -lt $Started -or $at.UtcDateTime -gt $Exited -or
+            ($Exited - $at.UtcDateTime).TotalSeconds -gt 60 -or
+            [string]$request.source -notmatch '^[a-z][a-z0-9_-]{0,31}$' -or
+            $request.method -notin @('graceful_http', 'force_stop')) { return $null }
+        return @{ source = $request.source; method = $request.method; at_utc = $at.ToString('o') }
+    } catch {
+        return $null
+    }
 }
 
 function Read-ErrorSummary {
@@ -103,6 +123,9 @@ try {
         if (!$definition) { throw 'missing local gateway launch definition' }
         $launch = $definition | ConvertFrom-Json
         $RecordDirectory = [string]$launch.record_directory
+        if ($launch.PSObject.Properties['component'] -and $launch.component -in @('gateway', 'ingress', 'worker')) {
+            $Component = [string]$launch.component
+        }
         $info = New-Object Diagnostics.ProcessStartInfo
         $info.FileName = [string]$launch.executable
         $info.Arguments = [string]$launch.arguments
@@ -115,7 +138,7 @@ try {
         } catch {
             $now = [DateTime]::UtcNow
             Save-ExitRecord -Directory $RecordDirectory -Name ('{0}-{1}' -f $now.Ticks, $PID) -Record @{
-                schema = 1; observation = $observation; state = 'launch_failed'
+                schema = 1; component = $Component; observation = $observation; state = 'launch_failed'
                 at_utc = $now.ToString('o'); error_type = $_.Exception.GetType().Name
             }
             exit 1
@@ -136,12 +159,15 @@ try {
     $process.WaitForExit()
     $exited = $process.ExitTime.ToUniversalTime()
     $exitCode = $process.ExitCode
-    Save-ExitRecord -Directory $RecordDirectory -Name ('{0}-{1}' -f $started.Ticks, $gatewayPid) -Record @{
-        schema = 1; observation = $observation; state = 'exited'; pid = $gatewayPid
+    $name = '{0}-{1}' -f $started.Ticks, $gatewayPid
+    Save-ExitRecord -Directory $RecordDirectory -Name $name -Record @{
+        schema = 1; component = $Component; observation = $observation; state = 'exited'; pid = $gatewayPid
         started_utc = $started.ToString('o'); exited_utc = $exited.ToString('o')
         exit_code = $exitCode; exit_code_hex = ('0x{0:X8}' -f $exitCode)
         stderr_state = $stderrState; stderr = $stderr
+        stop_request = Read-StopRequest -Directory $RecordDirectory -Name $name -Started $started -Exited $exited
     }
+    Remove-Item -LiteralPath (Join-Path $RecordDirectory ('stop-' + $name + '.json')) -ErrorAction SilentlyContinue
 } finally {
     if ($null -ne $process) { $process.Dispose() }
 }
