@@ -126,7 +126,8 @@ fn main() -> ExitCode {
                      [--effort-model MODEL]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
                      production must be selected explicitly and binds 7998, 7999, 8000, 8002 or 8003 \
-                     on loopback only; --role defaults to local for 8000 and cloud otherwise"
+                     on loopback only, or any non-reserved loopback port with --desktop-instance; \
+                     --role defaults to local for 8000 and desktop instances, cloud otherwise"
                 );
                 return ExitCode::SUCCESS;
             }
