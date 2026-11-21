@@ -46,6 +46,7 @@ static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
+static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -259,8 +260,11 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     if let Some(reason) = &update.failure {
         window.set_log_status(format!("日志读取失败：{reason}").into());
         window.set_log_tone(status_tone(Tone::Bad));
+        window.set_log_refresh_pending(false);
+        window.set_log_refreshed(false);
         return;
     }
+    let acknowledge_refresh = window.get_log_refresh_pending();
 
     let level = LevelFilter::from_index(window.get_log_filter_level());
     let keyword = window.get_log_filter_keyword().trim().to_lowercase();
@@ -308,6 +312,10 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
     window.set_log_tone(3);
+    window.set_log_refresh_pending(false);
+    if acknowledge_refresh {
+        window.set_log_refreshed(true);
+    }
     window.set_log_version(window.get_log_version().wrapping_add(1));
 }
 
@@ -900,6 +908,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let range = Arc::clone(&usage_range);
         window.on_usage_range_changed(move |period| {
             range.store(period, Ordering::SeqCst);
+            // Bumping the refresh epoch makes the reader re-read even when the
+            // selected range did not change (Ctrl+R).
+            USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
             if let Some(window) = weak.upgrade() {
                 window.set_usage_points(ModelRc::default());
                 window.set_token_total("—".into());
@@ -915,9 +926,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             while !QUIT.load(Ordering::SeqCst) {
                 if !PAUSED.load(Ordering::SeqCst) {
                     let period = usage_range.load(Ordering::SeqCst);
+                    let refresh = USAGE_REFRESH.load(Ordering::SeqCst);
                     let metadata = std::fs::metadata(&ledger).map(|meta| (meta.len(), meta.modified().ok()));
                     let day = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("Beijing offset")).date_naive();
-                    let stamp = (period, metadata.as_ref().copied().map_err(|error| error.kind()), day);
+                    let stamp = (period, refresh, metadata.as_ref().copied().map_err(|error| error.kind()), day);
                     if last.as_ref() != Some(&stamp) {
                         last = Some(stamp);
                         let view = usage::read_usage(&ledger, Range::from_index(period), chrono::Utc::now().timestamp_millis());
@@ -950,8 +962,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    window.on_refresh_logs(|| {
+    let weak_refresh = window.as_weak();
+    window.on_refresh_logs(move || {
+        if let Some(window) = weak_refresh.upgrade() {
+            // Acknowledge the click before the reader's next 160 ms poll lands;
+            // apply_logs restores the real count and flips the button to 已刷新.
+            window.set_log_refreshed(false);
+            window.set_log_refresh_pending(true);
+            window.set_log_status("正在刷新…".into());
+            window.set_log_tone(3);
+        }
         REFRESH_LOGS.store(true, Ordering::SeqCst);
+    });
+
+    // One global refresh shortcut: each page re-reads the data it owns.
+    let weak_refresh_page = window.as_weak();
+    window.on_refresh_page(move || {
+        let Some(window) = weak_refresh_page.upgrade() else {
+            return;
+        };
+        match window.get_page() {
+            0 => window.invoke_usage_range_changed(window.get_usage_period()),
+            1 => window.invoke_query_requests(0),
+            3 => {
+                if window.get_log_period() == 0 {
+                    window.invoke_refresh_logs();
+                } else {
+                    window.invoke_log_history(window.get_log_period(), 0);
+                }
+            }
+            _ => {}
+        }
     });
 
     let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
