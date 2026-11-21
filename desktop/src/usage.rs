@@ -13,15 +13,19 @@ use crate::tail::read_tail;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Range {
     Today,
+    Day,
     Week,
     Month,
+    All,
 }
 
 impl Range {
     pub fn from_index(index: i32) -> Self {
         match index {
-            1 => Self::Week,
-            2 => Self::Month,
+            1 => Self::Day,
+            2 => Self::Week,
+            3 => Self::Month,
+            4 => Self::All,
             _ => Self::Today,
         }
     }
@@ -29,8 +33,10 @@ impl Range {
     fn key(self) -> &'static str {
         match self {
             Self::Today => "today",
+            Self::Day => "24h",
             Self::Week => "7d",
             Self::Month => "30d",
+            Self::All => "all",
         }
     }
 }
