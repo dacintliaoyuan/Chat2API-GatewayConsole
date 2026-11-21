@@ -282,6 +282,13 @@ impl ServerHandle {
 
     pub fn shutdown(&mut self) {
         if let Some(handle) = self.handle.take() {
+            // Close the listener before stopping the login executor and the
+            // auth watch. A supervisor waits for the port to be released before
+            // it switches ports; stopping the browser first could keep the port
+            // open for the whole login shutdown and make that wait time out.
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
+            let _ = handle.join();
             #[cfg(unix)]
             if let Some(instance) = &mut self.instance {
                 instance.stop();
@@ -289,9 +296,6 @@ impl ServerHandle {
             if let Some(login) = &self.state.login {
                 login.shutdown();
             }
-            self.shutdown.store(true, Ordering::SeqCst);
-            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
-            let _ = handle.join();
         }
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();
@@ -542,7 +546,7 @@ fn is_timeout_error(error: &std::io::Error) -> bool {
 ///
 /// The request ID is generated once per request, so an in-band stream error can
 /// repeat the same value inside its event body.
-fn with_error_headers(mut response: Response, request_id: &str) -> Response {
+pub(crate) fn with_error_headers(mut response: Response, request_id: &str) -> Response {
     if response.status < 400 {
         return response;
     }
@@ -746,7 +750,7 @@ fn is_chat_path(path: &str) -> bool {
 
 /// `/v1/messages` and its local alias use the Anthropic error shape; every
 /// other gateway route uses the OpenAI shape.
-fn error_protocol(path: &str) -> ErrorProtocol {
+pub(crate) fn error_protocol(path: &str) -> ErrorProtocol {
     if path == "/v1/messages" || path == "/api/v1/messages" {
         ErrorProtocol::Anthropic
     } else {

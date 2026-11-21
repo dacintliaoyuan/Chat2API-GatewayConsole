@@ -7,7 +7,10 @@
 
 mod support;
 
+use std::net::TcpStream;
 use std::sync::atomic::Ordering;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -49,4 +52,30 @@ fn admin_shutdown_requires_the_control_token_and_requests_the_stop() {
         .state()
         .shutdown_request
         .load(Ordering::SeqCst));
+}
+
+#[test]
+fn shutdown_releases_the_listener_before_the_auth_watch_stops() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let gateway = start_local_gateway(&stub, &temp);
+    let addr = gateway.addr;
+    let state = gateway.server.state();
+    let poller = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_err() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the listener stayed up after shutdown"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    drop(gateway);
+    poller.join().expect("listener poller");
+    assert!(state.login.as_ref().expect("login service").is_shutdown());
+    assert!(!state.watch.is_alive());
 }

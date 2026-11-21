@@ -840,6 +840,15 @@ impl LoginService {
         self.inner.condvar.notify_all();
         persist_auth_state_locked(&self.inner, &state);
     }
+
+    /// Whether shutdown already stopped the executor (test/observability seam).
+    pub fn is_shutdown(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("login state poisoned")
+            .shutdown
+    }
 }
 
 impl ReauthenticationProvider for LoginService {
