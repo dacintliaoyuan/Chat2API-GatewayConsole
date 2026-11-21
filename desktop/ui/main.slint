@@ -304,6 +304,11 @@ export component MainWindow inherits Window {
         if (root.account-saved == "未配置账号") { return "未配置账号"; }
         return "登录后可用";
     }
+    // The page content width inside the rail and the page padding; the request
+    // list and detail split it without touching the other pages.
+    public pure function request-content-width() -> length {
+        return root.width - (root.compact ? 84px : 196px) - (root.compact ? 24px : 40px);
+    }
 
     in-out property <int> page: 0;
     private property <float> page-opacity: 1;
@@ -534,6 +539,23 @@ export component MainWindow inherits Window {
     out property <length> request-period-x: request-period-control.absolute-position.x;
     out property <length> request-period-y: request-period-control.absolute-position.y;
     out property <length> request-period-width: request-period-control.width;
+    out property <length> request-period-height: request-period-control.height;
+    out property <length> request-result-x: request-result-control.absolute-position.x;
+    out property <length> request-result-y: request-result-control.absolute-position.y;
+    out property <length> request-result-width: request-result-control.width;
+    out property <length> request-result-height: request-result-control.height;
+    out property <length> request-search-x: request-search.absolute-position.x;
+    out property <length> request-search-y: request-search.absolute-position.y;
+    out property <length> request-search-width: request-search.width;
+    out property <length> request-search-height: request-search.height;
+    out property <length> request-query-x: request-query.absolute-position.x;
+    out property <length> request-query-y: request-query.absolute-position.y;
+    out property <length> request-query-width: request-query.width;
+    out property <length> request-query-height: request-query.height;
+    out property <length> request-status-y: request-status-row.absolute-position.y;
+    out property <length> request-status-height: request-status-row.height;
+    out property <length> request-analytics-y: request-analytics.absolute-position.y;
+    out property <length> request-analytics-height: request-analytics.height;
     out property <length> technical-card-x: technical-card.absolute-position.x;
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
@@ -632,6 +654,27 @@ export component MainWindow inherits Window {
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
     out property <length> request-list-height: request-list-panel.height;
+    out property <length> request-page-width: request-page.width;
+    out property <length> request-page-host-width: page-host.width;
+    out property <length> request-filter-width: request-filters.width;
+    out property <length> request-filter-row-width: request-filter-row.width;
+    out property <length> request-filter-result-row-width: request-filter-result-row.width;
+    out property <bool> request-list-visible: request-list-pane.visible;
+    out property <length> request-list-header-y: request-list-header.absolute-position.y;
+    out property <length> request-list-header-height: request-list-header.height;
+    out property <length> request-list-header-at-x: request-list-header-at.absolute-position.x;
+    out property <length> request-list-header-at-width: request-list-header-at.width;
+    out property <length> request-list-header-model-x: request-list-header-model.absolute-position.x;
+    out property <length> request-list-header-model-width: request-list-header-model.width;
+    out property <length> request-list-header-first-token-x: request-list-header-first-token.absolute-position.x;
+    out property <length> request-list-header-first-token-width: request-list-header-first-token.width;
+    out property <length> request-list-header-outcome-x: request-list-header-outcome.absolute-position.x;
+    out property <length> request-list-header-outcome-width: request-list-header-outcome.width;
+    out property <length> request-rows-y: request-rows.absolute-position.y;
+    out property <length> request-detail-x: request-details.absolute-position.x;
+    out property <length> request-detail-y: request-details.absolute-position.y;
+    out property <length> request-detail-width: request-details.width;
+    out property <length> request-detail-height: request-details.height;
     out property <int> request-metric-index: request-analytics.metric-index;
     out property <bool> request-split: request-analytics.split;
     out property <string> request-metric-label: request-analytics.metric-label;
@@ -1153,6 +1196,7 @@ export component MainWindow inherits Window {
             }
 
             page-host := Rectangle {
+                preferred-width: 100%;
                 vertical-stretch: 1;
                 clip: true;
                 // The software renderer does not implement transform-scale, so
@@ -1286,12 +1330,91 @@ export component MainWindow inherits Window {
                 }
             }
 
-            VerticalLayout {
+            request-page := VerticalLayout {
                 visible: root.page == 1;
+                width: 100%;
                 vertical-stretch: 1;
                 min-height: 0px;
                 spacing: 8px;
+                // The request page follows Magpie's 用量/请求 order: the two
+                // filter rows first, then the summary hint, the metric cards and
+                // chart, and finally the request list with its detail panel.
+                request-filters := VerticalLayout {
+                    width: 100%;
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    // First filter row: the time range on the left, the manual
+                    // refresh on the right, like Magpie's range/refresh row.
+                    request-filter-row := HorizontalLayout {
+                        width: 100%;
+                        horizontal-stretch: 1;
+                        spacing: 8px;
+                        request-period-control := Segmented {
+                            width: 280px;
+                            options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
+                            current-index <=> root.request-period;
+                            label: "请求日期范围";
+                            selected(_) => { root.query-requests(0); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        request-refresh := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新请求";
+                            icon: "refresh";
+                            icon-rotation: root.refresh-rotation;
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "刷新请求";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh-current-page(); }
+                        }
+                    }
+                    // Second filter row: the result filter, the search field and
+                    // the query action. The search keeps the model-or-request-ID
+                    // scope; no agent/provider/account filters are added.
+                    request-filter-result-row := HorizontalLayout {
+                        width: 100%;
+                        horizontal-stretch: 1;
+                        spacing: 8px;
+                        request-result-control := Segmented {
+                            width: root.compact ? 208px : 268px;
+                            options: [{ text: "全部结果" }, { text: "成功" }, { text: "失败" }];
+                            current-index <=> root.request-result;
+                            label: "请求结果";
+                            selected(_) => { root.query-requests(0); }
+                        }
+                        request-search := MaterialField {
+                            horizontal-stretch: 1;
+                            icon: "search";
+                            placeholder: "模型或请求 ID";
+                            clearable: true;
+                            text <=> root.request-keyword;
+                            accepted => { root.query-requests(0); }
+                            cleared => { root.query-requests(0); }
+                        }
+                        request-query := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "查询";
+                            icon: "arrow-right";
+                            icon-only: true;
+                            primary: true;
+                            tooltip: "查询请求";
+                            clicked => { root.query-requests(0); }
+                        }
+                    }
+                }
+                request-status-row := HorizontalLayout {
+                    width: 100%;
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); horizontal-stretch: 1; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                    DataText { text: root.request-updated-at-label; vertical-alignment: center; }
+                }
                 request-analytics := RequestAnalytics {
+                    width: 100%;
+                    horizontal-stretch: 1;
                     metrics: root.request-metrics;
                     points: root.request-chart-points;
                     labels: root.request-chart-labels;
@@ -1307,72 +1430,43 @@ export component MainWindow inherits Window {
                     allow-motion: root.allow-motion;
                 }
                 HorizontalLayout {
-                    vertical-stretch: 1;
-                    spacing: 12px;
-                    request-list-pane := VerticalLayout {
+                    width: 100%;
                     horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    spacing: root.compact && !root.selected-request.is-empty ? 0px : 12px;
+                    request-list-pane := VerticalLayout {
+                    horizontal-stretch: 0;
+                    // Follow the detail panel's animated width so closing it
+                    // gives the space back to the list without a jump.
+                    width: root.compact
+                        ? (root.selected-request.is-empty ? root.request-content-width() : 0px)
+                        : root.request-content-width()
+                            - (request-details.width > 1px ? request-details.width + 12px : 0px);
                     visible: !root.compact || root.selected-request.is-empty;
                     spacing: 8px;
-                    FlexboxLayout {
-                        flex-wrap: wrap;
-                        spacing: 8px;
-                        request-period-control := Segmented {
-                            width: 280px;
-                            options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
-                            current-index <=> root.request-period;
-                            label: "请求日期范围";
-                            selected(_) => { root.query-requests(0); }
-                        }
-                        Segmented {
-                            width: 268px;
-                            options: [{ text: "全部结果" }, { text: "成功" }, { text: "失败" }];
-                            current-index <=> root.request-result;
-                            label: "请求结果";
-                            selected(_) => { root.query-requests(0); }
-                        }
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 0px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: center;
-                                request-search := MaterialField {
-                                    horizontal-stretch: 1;
-                                    icon: "search";
-                                    placeholder: "模型或请求 ID";
-                                    clearable: true;
-                                    text <=> root.request-keyword;
-                                    accepted => { root.query-requests(0); }
-                                    cleared => { root.query-requests(0); }
-                                }
-                                ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "查询"; icon: "arrow-right"; icon-only: true; primary: true; tooltip: "查询请求"; clicked => { root.query-requests(0); } }
-                                request-refresh := ActionButton {
-                                    width: Theme.icon-button;
-                                    height: Theme.icon-button;
-                                    label: "刷新请求";
-                                    icon: "refresh";
-                                    icon-rotation: root.refresh-rotation;
-                                    icon-only: true;
-                                    quiet: true;
-                                    tooltip: "刷新请求";
-                                    enabled: !root.refreshing;
-                                    clicked => { root.refresh-current-page(); }
-                                }
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); horizontal-stretch: 1; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
-                        DataText { text: root.request-updated-at-label; vertical-alignment: center; }
-                    }
                     request-list-panel := Panel {
                         vertical-stretch: 1;
                         VerticalLayout {
                             padding-left: 6px;
-                            padding-right: 14px;
+                            // Leave the 14 px scrollbar its own gutter so it
+                            // never covers the result tag.
+                            padding-right: 18px;
                             padding-top: 6px;
                             padding-bottom: 6px;
+                            spacing: 4px;
+                            // The column header uses the same widths as the
+                            // rows, so the list reads as one table: time,
+                            // model, first-token and result.
+                            request-list-header := HorizontalLayout {
+                                height: 20px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                request-list-header-at := Hint { text: "时间"; width: 96px; vertical-alignment: center; }
+                                request-list-header-model := Hint { text: "模型"; horizontal-stretch: 1; vertical-alignment: center; }
+                                request-list-header-first-token := Hint { text: "首字"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
+                                request-list-header-outcome := Hint { text: "结果"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
+                            }
                             if root.requests.length == 0 : VerticalLayout {
                                 vertical-stretch: 1;
                                 alignment: center;
@@ -1380,13 +1474,13 @@ export component MainWindow inherits Window {
                                 Hint { text: "暂无请求记录"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
                                 Hint { text: "本实例收到请求后会列在这里"; horizontal-alignment: center; }
                             }
-                            ListView {
+                            request-rows := ListView {
                                 visible: root.requests.length > 0;
                                 vertical-stretch: 1;
                                 content-y <=> root.request-scroll-y;
                                 for item in root.requests : Selectable {
                                     label: item.at + " " + item.model + " " + item.outcome;
-                                    height: 46px;
+                                    height: 50px;
                                     selected: root.selected-request == item.id;
                                     activate => { root.open-request(item.id); }
                                     VerticalLayout {
@@ -1394,10 +1488,12 @@ export component MainWindow inherits Window {
                                         spacing: 2px;
                                         HorizontalLayout {
                                             spacing: 8px;
-                                            Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
-                                            Tag { label: item.outcome; tone: item.tone; }
+                                            DataText { text: item.at; width: 96px; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                            Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; vertical-alignment: center; }
+                                            DataText { text: item.first-token; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
+                                            Tag { label: item.outcome; tone: item.tone; width: 76px; }
                                         }
-                                        Hint { text: item.at + "  " + item.summary + "  ·  首字 " + item.first-token; overflow: elide; wrap: no-wrap; }
+                                        Hint { text: item.summary; overflow: elide; wrap: no-wrap; }
                                     }
                                 }
                             }

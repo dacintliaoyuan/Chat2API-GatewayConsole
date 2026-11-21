@@ -114,7 +114,8 @@ fn press<T: ComponentHandle>(component: &T, key: Key) {
 
 fn click_request_row(window: &main_ui::MainWindow, row: usize) {
     let x = window.get_request_list_x() + 20.0;
-    let y = window.get_request_list_y() + 25.0 + row as f32 * 50.0;
+    // The list header takes the first row; the 50 px rows start below it.
+    let y = window.get_request_rows_y() + 25.0 + row as f32 * 50.0;
     click(window, x, y);
 }
 

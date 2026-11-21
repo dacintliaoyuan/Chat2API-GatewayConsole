@@ -1473,6 +1473,298 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     );
 }
 
+fn request_row(index: usize) -> RequestRow {
+    RequestRow {
+        id: format!("key-{index}").into(),
+        at: format!("11-20 00:{index:02}:00").into(),
+        model: "fixture-model".into(),
+        outcome: "成功".into(),
+        tone: 0,
+        summary: "1200 ms  f314e7d8c7526367baec95ac155b6406".into(),
+        first_token: "120 ms".into(),
+        detail: "".into(),
+    }
+}
+
+#[test]
+fn the_request_page_orders_filters_status_analytics_and_list_like_magpie() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let period_y = window.get_request_period_y();
+    let period_height = window.get_request_period_height();
+    let result_y = window.get_request_result_y();
+    let result_height = window.get_request_result_height();
+    let status_y = window.get_request_status_y();
+    let status_height = window.get_request_status_height();
+    let analytics_y = window.get_request_analytics_y();
+    let analytics_height = window.get_request_analytics_height();
+    let list_y = window.get_request_list_y();
+    println!(
+        "period y={period_y} h={period_height} result y={result_y} h={result_height} status y={status_y} h={status_height} analytics y={analytics_y} h={analytics_height} list y={list_y}"
+    );
+    assert!(
+        result_y >= period_y + period_height,
+        "the result row sits below the range row"
+    );
+    assert!(
+        status_y >= result_y + result_height,
+        "the summary hint sits below both filter rows"
+    );
+    assert!(
+        analytics_y >= status_y + status_height,
+        "the metric cards and chart sit below the summary hint"
+    );
+    assert!(
+        list_y >= analytics_y + analytics_height,
+        "the request list sits below the analytics card"
+    );
+}
+
+#[test]
+fn the_request_filter_rows_align_the_range_result_search_and_refresh() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let page_left = 196.0 + 20.0;
+    let page_right = window.get_window_width() - 20.0;
+    println!(
+        "page {}..{} host={} page={} filters={} row={} result-row={} period x={} y={} h={} refresh x={} y={} w={} h={} result x={} y={} w={} h={} search x={} y={} w={} h={} query x={} y={} w={} h={}",
+        page_left,
+        page_right,
+        window.get_request_page_host_width(),
+        window.get_request_page_width(),
+        window.get_request_filter_width(),
+        window.get_request_filter_row_width(),
+        window.get_request_filter_result_row_width(),
+        window.get_request_period_x(),
+        window.get_request_period_y(),
+        window.get_request_period_height(),
+        window.get_request_refresh_x(),
+        window.get_request_refresh_y(),
+        window.get_request_refresh_width(),
+        window.get_request_refresh_height(),
+        window.get_request_result_x(),
+        window.get_request_result_y(),
+        window.get_request_result_width(),
+        window.get_request_result_height(),
+        window.get_request_search_x(),
+        window.get_request_search_y(),
+        window.get_request_search_width(),
+        window.get_request_search_height(),
+        window.get_request_query_x(),
+        window.get_request_query_y(),
+        window.get_request_query_width(),
+        window.get_request_query_height(),
+    );
+
+    assert!(
+        (window.get_request_page_width() - (page_right - page_left)).abs() < 1.0,
+        "the request page fills the page content"
+    );
+    assert!(
+        (window.get_request_filter_width() - (page_right - page_left)).abs() < 1.0,
+        "the filter block fills the page content"
+    );
+    assert!(
+        (window.get_request_filter_row_width() - window.get_request_filter_width()).abs() < 1.0
+            && (window.get_request_filter_result_row_width() - window.get_request_filter_width())
+                .abs()
+                < 1.0,
+        "both filter rows share the filter block width"
+    );
+    assert!(
+        (window.get_request_period_x() - page_left).abs() < 1.0,
+        "the range row starts at the page edge"
+    );
+    assert!(
+        (window.get_request_refresh_y() - window.get_request_period_y()).abs() < 1.0,
+        "refresh shares the range row"
+    );
+    assert!(
+        window.get_request_refresh_x() + window.get_request_refresh_width() > page_right - 1.0,
+        "refresh closes the first filter row at the right edge"
+    );
+
+    assert!(
+        (window.get_request_result_x() - page_left).abs() < 1.0,
+        "the result row starts at the page edge"
+    );
+    assert!(
+        (window.get_request_result_y() - window.get_request_search_y()).abs() < 1.0
+            && (window.get_request_search_y() - window.get_request_query_y()).abs() < 1.0,
+        "result, search and query share the second filter row"
+    );
+    assert!(
+        window.get_request_result_y() > window.get_request_period_y() + window.get_request_period_height(),
+        "the second filter row sits below the range row"
+    );
+    assert!(
+        window.get_request_search_x() > window.get_request_result_x() + window.get_request_result_width(),
+        "search follows the result filter"
+    );
+    assert!(
+        window.get_request_search_width() > 300.0,
+        "search takes the free width between the result filter and the query action"
+    );
+    assert!(
+        window.get_request_query_x() + window.get_request_query_width() > page_right - 1.0,
+        "query closes the second filter row at the right edge"
+    );
+}
+
+#[test]
+fn the_request_list_header_aligns_with_the_row_columns() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let header_y = window.get_request_list_header_y();
+    let header_height = window.get_request_list_header_height();
+    let rows_y = window.get_request_rows_y();
+    let at_x = window.get_request_list_header_at_x();
+    let at_width = window.get_request_list_header_at_width();
+    let model_x = window.get_request_list_header_model_x();
+    let model_width = window.get_request_list_header_model_width();
+    let first_token_x = window.get_request_list_header_first_token_x();
+    let first_token_width = window.get_request_list_header_first_token_width();
+    let outcome_x = window.get_request_list_header_outcome_x();
+    let outcome_width = window.get_request_list_header_outcome_width();
+    println!(
+        "header y={header_y} h={header_height} rows y={rows_y} at={at_x}+{at_width} model={model_x}+{model_width} first={first_token_x}+{first_token_width} outcome={outcome_x}+{outcome_width}"
+    );
+
+    assert!(header_height > 0.0, "the list header must be visible");
+    assert!(
+        rows_y >= header_y + header_height,
+        "the request rows start below the column header"
+    );
+    assert!(
+        at_x < model_x && model_x < first_token_x && first_token_x < outcome_x,
+        "the header columns follow the time, model, first-token and result order"
+    );
+    assert!(
+        (model_x - (at_x + at_width + 8.0)).abs() < 1.0
+            && (first_token_x - (model_x + model_width + 8.0)).abs() < 1.0
+            && (outcome_x - (first_token_x + first_token_width + 8.0)).abs() < 1.0,
+        "the header columns share one gap"
+    );
+    assert!(
+        (outcome_x + outcome_width + 28.0
+            - (window.get_request_list_x() + window.get_request_list_width()))
+        .abs()
+            < 2.0,
+        "the result column closes the header at the list padding"
+    );
+}
+
+#[test]
+fn the_request_list_and_detail_share_one_row_with_one_gap() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let closed_width = window.get_request_list_width();
+
+    window.set_selected_request("key-0".into());
+    window.set_request_detail("请求详情".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let list_right = window.get_request_list_x() + window.get_request_list_width();
+    let detail_x = window.get_request_detail_x();
+    let detail_right = detail_x + window.get_request_detail_width();
+    let page_right = window.get_window_width() - 20.0;
+    println!(
+        "closed list w={closed_width} list x={} y={} w={} h={} detail x={detail_x} y={} w={} h={}",
+        window.get_request_list_x(),
+        window.get_request_list_y(),
+        window.get_request_list_width(),
+        window.get_request_list_height(),
+        window.get_request_detail_y(),
+        window.get_request_detail_width(),
+        window.get_request_detail_height(),
+    );
+
+    assert!(
+        window.get_request_list_width() < closed_width - 100.0,
+        "the detail panel must take width from the list"
+    );
+    assert!(
+        (detail_x - list_right - 12.0).abs() < 1.0,
+        "the detail panel starts one gap after the list"
+    );
+    assert!(
+        (detail_right - page_right).abs() < 2.0,
+        "the detail panel reaches the page edge"
+    );
+    assert!(
+        (window.get_request_detail_y() - window.get_request_list_y()).abs() < 1.0,
+        "the list and detail share the top edge"
+    );
+    assert!(
+        window.get_request_detail_height() >= window.get_request_list_height(),
+        "the detail panel spans the list row"
+    );
+}
+
+#[test]
+fn the_request_detail_uses_the_page_width_at_compact_size() {
+    let window = window_at(540.0, 900.0);
+    window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    window.set_selected_request("key-0".into());
+    window.set_request_detail("请求详情".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let detail_width = window.get_request_detail_width();
+    println!(
+        "compact detail x={} w={} page={} host={} page={} list visible={}",
+        window.get_request_detail_x(),
+        detail_width,
+        window.get_window_width(),
+        window.get_request_page_host_width(),
+        window.get_request_page_width(),
+        window.get_request_list_visible(),
+    );
+    let page_left = 84.0 + 12.0;
+    let page_right = window.get_window_width() - 12.0;
+    assert!(
+        (window.get_request_filter_width() - (page_right - page_left)).abs() < 1.0,
+        "the filter rows fill the compact page content"
+    );
+    assert!(
+        (window.get_request_period_x() - page_left).abs() < 1.0
+            && (window.get_request_refresh_x() + window.get_request_refresh_width() - page_right)
+                .abs()
+                < 1.0,
+        "the compact range and refresh rows stay inside the page"
+    );
+    assert!(
+        window.get_request_search_width() > 140.0
+            && (window.get_request_query_x() + window.get_request_query_width() - page_right)
+                .abs()
+                < 1.0,
+        "the compact search and query stay inside the page"
+    );
+    assert!(
+        !window.get_request_list_visible(),
+        "the compact detail replaces the list"
+    );
+    assert!(
+        detail_width > 300.0,
+        "the compact detail keeps a readable width"
+    );
+    assert!(
+        window.get_request_detail_x() >= 96.0 - 1.0
+            && window.get_request_detail_x() + detail_width <= window.get_window_width() - 12.0 + 1.0,
+        "the compact detail stays inside the page content"
+    );
+}
+
 #[test]
 fn escape_clears_only_the_current_pages_detail() {
     let window = window_at(1060.0, 720.0);

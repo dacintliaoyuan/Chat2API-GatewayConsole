@@ -154,13 +154,15 @@ export component RequestAnalytics inherits Panel {
                 width: 336px;
                 spacing: 3px;
                 SectionLabel { text: "模型速度"; }
+                // Column order follows Magpie's model speed table: model,
+                // speed, first-token, requests, then output tokens.
                 HorizontalLayout {
                     spacing: 6px;
                     Hint { text: "模型"; horizontal-stretch: 1; }
+                    Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
+                    Hint { text: "首字耗时"; width: 72px; horizontal-alignment: right; }
                     Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
                     Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
-                    Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
-                    Hint { text: "首字"; width: 62px; horizontal-alignment: right; }
                 }
                 ListView {
                     height: 112px;
@@ -175,10 +177,10 @@ export component RequestAnalytics inherits Panel {
                             overflow: elide;
                             wrap: no-wrap;
                         }
+                        DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
+                        DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
                         DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
                         DataText { text: row.output; width: 58px; horizontal-alignment: right; }
-                        DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
-                        DataText { text: row.first-token; width: 62px; horizontal-alignment: right; }
                     }
                 }
                 if root.model-speeds.length == 0 : Hint {
