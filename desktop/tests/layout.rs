@@ -461,6 +461,216 @@ fn the_page_title_fades_with_the_page_host() {
 }
 
 #[test]
+fn the_overview_address_chip_copies_the_base_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    let x = window.get_overview_address_x() + window.get_overview_address_width() / 2.0;
+    let y = window.get_overview_address_y() + window.get_overview_address_height() / 2.0;
+    click(&window, x, y);
+
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999".to_string()),
+        "the overview chip must copy the base URL"
+    );
+}
+
+#[test]
+fn the_overview_v1_chip_copies_the_v1_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    let x = window.get_overview_v1_x() + window.get_overview_v1_width() / 2.0;
+    let y = window.get_overview_v1_y() + window.get_overview_v1_height() / 2.0;
+    click(&window, x, y);
+
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999/v1".to_string()),
+        "the /v1 chip must copy the base URL with the /v1 suffix"
+    );
+}
+
+#[test]
+fn the_settings_address_row_copies_the_base_and_v1_urls() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| copied.borrow_mut().push(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
+        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().last().map(String::as_str),
+        Some("http://127.0.0.1:8001"),
+        "the settings base copy entry must copy the base URL"
+    );
+
+    click(
+        &window,
+        window.get_settings_v1_copy_x() + window.get_settings_v1_copy_width() / 2.0,
+        window.get_settings_v1_copy_y() + window.get_settings_v1_copy_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().last().map(String::as_str),
+        Some("http://127.0.0.1:8001/v1"),
+        "the settings /v1 copy entry must copy the base URL with the /v1 suffix"
+    );
+}
+
+#[test]
+fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.on_copy_text(|_| {});
+
+    click(
+        &window,
+        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
+        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+    );
+    window.set_copy_ok(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_settings_base_icon(), "check");
+    assert_eq!(window.get_settings_v1_icon(), "copy");
+    assert_eq!(window.get_copy_status(), "已复制到剪贴板");
+    assert_eq!(window.get_copy_tone(), 0);
+    assert!(window.get_copy_status_visible());
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1900));
+    assert!(window.get_copy_status_visible());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert!(!window.get_copy_status_visible(), "the copy status clears after two seconds");
+    assert_eq!(window.get_settings_base_icon(), "copy");
+
+    click(
+        &window,
+        window.get_settings_v1_copy_x() + window.get_settings_v1_copy_width() / 2.0,
+        window.get_settings_v1_copy_y() + window.get_settings_v1_copy_height() / 2.0,
+    );
+    window.set_copy_ok(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_settings_base_icon(), "copy");
+    assert_eq!(window.get_settings_v1_icon(), "check");
+    assert_eq!(window.get_copy_status(), "已复制到剪贴板");
+}
+
+#[test]
+fn a_failed_copy_reports_the_busy_clipboard() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.on_copy_text(|_| {});
+
+    click(
+        &window,
+        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
+        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+    );
+    window.set_copy_error("剪贴板被占用".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert_eq!(window.get_copy_status(), "复制失败：剪贴板被占用");
+    assert_eq!(window.get_copy_tone(), 2);
+    assert!(window.get_copy_status_visible());
+    assert_eq!(window.get_settings_base_icon(), "copy");
+    assert_eq!(window.get_settings_v1_icon(), "copy");
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
+    assert!(!window.get_copy_status_visible());
+}
+
+#[test]
+fn copy_urls_follow_the_active_port() {
+    let window = window_at(1060.0, 720.0);
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    window.set_active_address("127.0.0.1:8000".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_overview_address_x() + window.get_overview_address_width() / 2.0,
+        window.get_overview_address_y() + window.get_overview_address_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:8000".to_string()),
+        "the base copy entry follows the port before a switch"
+    );
+
+    window.set_active_address("127.0.0.1:8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_overview_v1_x() + window.get_overview_v1_width() / 2.0,
+        window.get_overview_v1_y() + window.get_overview_v1_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:8100/v1".to_string()),
+        "the /v1 copy entry follows the port after a switch"
+    );
+}
+
+#[test]
+fn addresses_stay_copyable_when_the_gateway_is_not_running() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_gateway_value("未运行".into());
+    window.set_gateway_tone(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
+        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999".to_string()),
+        "copying a saved address must not depend on the gateway state"
+    );
+}
+
+#[test]
 fn the_page_swap_never_shows_a_blank_frame() {
     let window = window_at(1060.0, 720.0);
     window.on_navigate({
