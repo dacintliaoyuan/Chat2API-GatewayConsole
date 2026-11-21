@@ -75,8 +75,8 @@ component TextDetails inherits Panel {
         HorizontalLayout {
             spacing: 8px;
             Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
-            ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
-            ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "关闭"; icon: "close"; icon-only: true; quiet: true; clicked => { root.closed(); } }
+            ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; tooltip: "复制全文"; clicked => { full-text.select-all(); full-text.copy(); } }
+            ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "关闭"; icon: "close"; icon-only: true; quiet: true; tooltip: "关闭详情"; clicked => { root.closed(); } }
         }
         // The platform text editor draws an accent underline when focused; the
         // wrapper clips those last two pixels so the detail panel keeps the
@@ -165,9 +165,10 @@ export component MainWindow inherits Window {
     default-font-family: "Segoe UI";
     default-font-size: 12px;
     private property <bool> compact: root.width < 800px;
-    private property <bool> login-visible: (root.show-intro && root.account-label != "已登录") || !root.login-status.is-empty
-        || root.account-can-continue || (!root.account-can-clear && root.account-label != "已登录")
-        || !root.account-saved-detail.is-empty;
+    // The card stays after "稍后登录": skipping the first-run prompt must not
+    // remove the explanation or the way back to the account form.
+    private property <bool> login-visible: root.account-label != "已登录"
+        || !root.login-status.is-empty || root.account-can-continue;
     // The rail and the page title read from the same table, so a page has one
     // name and one number everywhere.
     private property <[NavEntry]> nav-entries: [
@@ -177,10 +178,15 @@ export component MainWindow inherits Window {
         { label: "设置", page: 2 },
     ];
     private property <[string]> page-titles: ["总览", "请求诊断", "设置", "运行日志"];
+    // The account cell always carries a detail line so the three state columns
+    // keep the same rhythm, even when the gateway only reports "已登录".
+    public pure function account-state-detail() -> string {
+        return root.account-detail.is-empty && root.account-label == "已登录"
+            ? "登录状态正常" : root.account-detail;
+    }
 
     in-out property <int> page: 0;
     private property <float> page-opacity: 1;
-    private property <float> page-scale: 1;
     private property <int> pending-page: 0;
     init => { Theme.motion = root.allow-motion; root.apply-chart-theme(); }
     changed allow-motion => {
@@ -411,26 +417,27 @@ export component MainWindow inherits Window {
         if (root.page == page) { return; }
         if (!root.allow-motion) { root.navigate(page); return; }
         root.pending-page = page;
-        root.page-opacity = 0;
-        root.page-scale = 0.99;
+        // Fade to 35% instead of zero: the timer that swaps the page starts
+        // on the next event-loop pass, so a full fade would leave one blank
+        // frame between the old page disappearing and the new one appearing.
+        root.page-opacity = 0.35;
         page-out-timer.start();
     }
-    // Fade the old page out, swap while it is invisible, then fade the new page
-    // in. The out timer stops just before the fade reaches zero so the swap never
-    // shows a hard cut.
+    // Fade the old page down, swap while it is dimmed, then fade the new page
+    // back in. The title and the page host share page-opacity, so they move
+    // together and the swap never shows a hard cut.
     page-out-timer := Timer {
-        interval: 160ms;
+        interval: 120ms;
         running: false;
         triggered => {
             root.navigate(root.pending-page);
             root.page-opacity = 1;
-            root.page-scale = 1;
         }
     }
     // One root timer drives the shared breathing phase, so the dots keep pulsing
     // even when a nested component is not active.
     pulse-timer := Timer {
-        interval: 700ms;
+        interval: Theme.pulse;
         running: root.allow-motion;
         triggered => { Theme.pulse-on = !Theme.pulse-on; }
     }
@@ -559,20 +566,20 @@ export component MainWindow inherits Window {
             page-host := Rectangle {
                 vertical-stretch: 1;
                 clip: true;
+                // The software renderer does not implement transform-scale, so
+                // the page transition is opacity-only; a scale here is a no-op.
                 opacity: root.page-opacity;
-                transform-origin: { x: self.width / 2, y: self.height / 2 };
-                transform-scale-x: root.page-scale;
-                transform-scale-y: root.page-scale;
                 animate opacity { duration: Theme.glide; easing: ease-out; }
-                animate transform-scale-x { duration: Theme.glide; easing: ease-out; }
-                animate transform-scale-y { duration: Theme.glide; easing: ease-out; }
             overview-scroll := ScrollView {
                 visible: root.page == 0;
                 vertical-stretch: 1;
                 content-width: self.visible-width;
                 overview-content := VerticalLayout {
-                    alignment: start;
-                    min-height: self.preferred-height;
+                    // Stretch the chart into the viewport when the cards leave
+                    // room, but never shrink the page below its preferred
+                    // height; the ScrollView takes over when content overflows.
+                    alignment: stretch;
+                    min-height: max(self.preferred-height, overview-scroll.visible-height);
                     spacing: 12px;
                     // Leave a gutter on the right so the scrollbar thumb lands on
                     // the page, never inside a card.
@@ -587,7 +594,7 @@ export component MainWindow inherits Window {
                             }
                             StateCell {
                                 horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
-                                detail: root.account-detail; tone: root.account-tone;
+                                detail: root.account-state-detail(); tone: root.account-tone;
                                 pulse: root.account-pulse;
                             }
                             StateCell {
@@ -610,7 +617,7 @@ export component MainWindow inherits Window {
                             StateCell {
                                 width: (root.width - 304px) / 3;
                                 label: "UM 登录"; value: root.account-label;
-                                detail: root.account-detail; tone: root.account-tone;
+                                detail: root.account-state-detail(); tone: root.account-tone;
                                 pulse: root.account-pulse;
                             }
                             StateCell {
@@ -628,7 +635,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: start;
                             spacing: 10px;
-                            SectionLabel { text: "UM 登录"; }
+                            SectionLabel { text: "账号登录"; }
                             if root.account-label != "已登录" : Hint {
                                 text: "登录 UM 后可以调用模型。也可以先查看网关和日志。";
                             }
@@ -636,8 +643,9 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
                                 configure-account-button := ActionButton {
-                                    visible: !root.account-can-clear || root.account-can-continue || !root.account-saved-detail.is-empty;
+                                    visible: root.account-label != "已登录" || root.account-can-continue;
                                     label: root.account-can-continue ? "继续登录" : "配置账号";
+                                    icon: "edit";
                                     enabled: !root.account-busy;
                                     primary: true;
                                     clicked => {
@@ -653,6 +661,10 @@ export component MainWindow inherits Window {
                         }
                     }
                     usage-chart := UsageChart {
+                        // The overview is a fixed set of cards; the chart takes
+                        // the leftover height instead of leaving a blank band
+                        // above the status row.
+                        vertical-stretch: 1;
                         period <=> root.usage-period;
                         points: root.usage-points;
                         labels: root.usage-labels;
@@ -709,7 +721,7 @@ export component MainWindow inherits Window {
                                     text <=> root.request-keyword;
                                     accepted => { root.query-requests(0); }
                                 }
-                                ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "查询"; icon: "search"; icon-only: true; primary: true; clicked => { root.query-requests(0); } }
+                                ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "查询"; icon: "arrow-right"; icon-only: true; primary: true; tooltip: "查询请求"; clicked => { root.query-requests(0); } }
                             }
                         }
                     }
@@ -753,8 +765,8 @@ export component MainWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 8px; alignment: end;
-                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
-                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.older-requests; clicked => { root.query-requests(1); } }
+                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
+                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
                     }
                 }
                 request-details := TextDetails {
@@ -798,6 +810,7 @@ export component MainWindow inherits Window {
                         icon: "refresh";
                         icon-only: true;
                         quiet: true;
+                        tooltip: "刷新日志";
                         clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
                     }
                     MaterialField {
@@ -811,7 +824,8 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     horizontal-stretch: 1;
                     spacing: 8px;
-                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); horizontal-stretch: 1; vertical-alignment: center; }
+                    alignment: start;
+                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; }
                     ActionButton {
                         visible: root.log-period == 0;
                         width: Theme.icon-button;
@@ -820,6 +834,7 @@ export component MainWindow inherits Window {
                         label: root.log-follow ? "暂停跟随" : "恢复跟随";
                         icon: root.log-follow ? "pause" : "play";
                         icon-only: true;
+                        tooltip: root.log-follow ? "暂停跟随" : "恢复跟随";
                         badge: root.new-log-count > 0 && !root.log-follow ? root.new-log-count : "";
                         clicked => {
                             root.log-follow = !root.log-follow;
@@ -829,8 +844,9 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; clicked => { root.log-history(root.log-period, -1); } }
-                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.older-logs; label: "较早"; icon: "chevron-right"; icon-only: true; clicked => { root.log-history(root.log-period, 1); } }
+                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; tooltip: "较新的日志"; clicked => { root.log-history(root.log-period, -1); } }
+                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.older-logs; label: "较早"; icon: "chevron-right"; icon-only: true; tooltip: "较早的日志"; clicked => { root.log-history(root.log-period, 1); } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
                 Panel {
                     vertical-stretch: 1;
@@ -1050,14 +1066,33 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 8px;
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
-                                AppIcon {
-                                    size: 16px;
-                                    kind: "chevron-right";
-                                    tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
-                                    transform-origin: { x: self.width / 2, y: self.height / 2 };
-                                    transform-rotation: root.show-technical ? 90deg : 0deg;
-                                    animate transform-rotation { duration: Theme.settle; easing: ease-out; }
-                                    animate tint { duration: Theme.quick; easing: ease-in-out; }
+                                // The software renderer does not implement
+                                // transform-rotation, so the chevron changes
+                                // direction by cross-fading two Lucide glyphs.
+                                Rectangle {
+                                    width: 16px;
+                                    height: 16px;
+                                    cross-axis-self-alignment: center;
+                                    AppIcon {
+                                        x: 0px;
+                                        y: 0px;
+                                        size: 16px;
+                                        kind: "chevron-right";
+                                        tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
+                                        opacity: root.show-technical ? 0 : 1;
+                                        animate opacity { duration: Theme.settle; easing: ease-out; }
+                                        animate tint { duration: Theme.quick; easing: ease-in-out; }
+                                    }
+                                    AppIcon {
+                                        x: 0px;
+                                        y: 0px;
+                                        size: 16px;
+                                        kind: "chevron-down";
+                                        tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
+                                        opacity: root.show-technical ? 1 : 0;
+                                        animate opacity { duration: Theme.settle; easing: ease-out; }
+                                        animate tint { duration: Theme.quick; easing: ease-in-out; }
+                                    }
                                 }
                             }
                             details := Rectangle {

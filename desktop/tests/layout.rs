@@ -218,6 +218,25 @@ fn first_open_offers_skip_and_keeps_the_configure_entry_after_skipping() {
         window.get_configure_account_visible(),
         "跳过后总览仍保留「配置账号」入口"
     );
+
+    // Skipping with saved credentials must keep the card too: the explanation
+    // and the way back to the account form cannot vanish with the intro flag.
+    window.set_account_can_clear(true);
+    window.set_show_intro(true);
+    window.set_account_label("尚未登录".into());
+    window.set_account_saved_detail("".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_login_card_visible());
+    window.invoke_skip_login();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_login_card_visible(),
+        "已有凭据时跳过登录也不能整卡隐藏"
+    );
+    assert!(
+        window.get_configure_account_visible(),
+        "已有凭据时跳过后仍保留「配置账号」入口"
+    );
 }
 
 #[test]
@@ -439,4 +458,30 @@ fn the_page_title_fades_with_the_page_host() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     assert_eq!(window.get_page(), 1);
     assert!((window.get_page_title_opacity() - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn the_page_swap_never_shows_a_blank_frame() {
+    let window = window_at(1060.0, 720.0);
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    window.invoke_navigate_to(2);
+    // Let the change handlers register the page-out timer, then advance past it.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(160));
+    assert_eq!(window.get_page(), 2, "the swap must have happened");
+    assert!(
+        window.get_page_title_opacity() > 0.05,
+        "the new page must already be fading in at 160 ms, not blank"
+    );
+    assert!(
+        (window.get_page_title_opacity() - window.get_page_host_opacity()).abs() < 0.01,
+        "the title and the page share one opacity"
+    );
 }

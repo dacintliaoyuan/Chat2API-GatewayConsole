@@ -116,6 +116,33 @@ fn display(reading: &Value) -> String {
     format!("{prefix}{value}")
 }
 
+// The chart axis writes thousands with separators; the token and request totals
+// use the same formatter so "3,240,000,000" always pairs with
+// "500,000,000" instead of a compact "3.24B". Durations stay ungrouped.
+fn amount_display(reading: &Value) -> String {
+    let Some(value) = amount(reading) else {
+        return "—".to_string();
+    };
+    let prefix = match reading["kind"].as_str() {
+        Some("estimate") => "约 ",
+        Some("atLeast") => "≥ ",
+        _ => "",
+    };
+    format!("{prefix}{}", grouped(value))
+}
+
+fn grouped(value: i64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, String) {
     match value["status"].as_str() {
         Some("ok") if empty => (Coverage::Empty, empty_message.to_string()),
@@ -161,16 +188,16 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
         .iter()
         .map(|row| Bucket {
             label: text(&row["label"], "—"),
-            tokens: display(&row["tokens"]),
-            requests: display(&row["requests"]),
+            tokens: amount_display(&row["tokens"]),
+            requests: amount_display(&row["requests"]),
             token_count: amount(&row["tokens"]),
             request_count: amount(&row["requests"]),
         })
         .collect();
     UsageView {
         buckets,
-        token_total: display(&value["total"]["tokens"]),
-        request_total: display(&value["total"]["requests"]),
+        token_total: amount_display(&value["total"]["tokens"]),
+        request_total: amount_display(&value["total"]["requests"]),
         coverage,
         message,
     }

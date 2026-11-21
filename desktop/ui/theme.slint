@@ -21,13 +21,18 @@ export global Theme {
     out property <color> field-strong: dark ? #35353a : #e6e6ea;
     out property <color> edge: dark ? #38383a : #d2d2d7;
     out property <color> edge-strong: dark ? #56565a : #b0b0b8;
+    // Fields and segmented controls carry a stronger boundary than cards and
+    // dividers: #8e8e93 on white and #6a6a6e on the dark surface both clear
+    // the 3:1 non-text contrast floor. The focus step stays visible above it.
+    out property <color> edge-control: dark ? #6a6a6e : #8e8e93;
+    out property <color> edge-control-strong: dark ? #a0a0a8 : #6e6e73;
     out property <color> ink: dark ? #f5f5f7 : #1d1d1f;
     // Secondary text follows the product palette (#6e6e73 / #b0b0b8); both clear
     // AA against the page and card surfaces.
     out property <color> muted: dark ? #b0b0b8 : #6e6e73;
     out property <color> accent: dark ? #0a84ff : #0071e3;
     out property <color> accent-strong: dark ? #409cff : #0062c4;
-    out property <color> on-accent: #ffffff;
+    out property <color> on-accent: dark ? #06121f : #ffffff;
     out property <color> accent-soft: dark ? #0b2946 : #e8f2ff;
     out property <color> series-b: dark ? #34c759 : #1f8a3a;
     out property <color> series-b-soft: dark ? #12301c : #e8f8ec;
@@ -37,12 +42,14 @@ export global Theme {
     out property <color> good-text: dark ? #4ade80 : #13743a;
     out property <color> warn-text: dark ? #fbbf24 : #9a5b0b;
     out property <color> bad-text: dark ? #fca5a5 : #a9271c;
-    // The rail is the second neutral layer: one step off the page, with a hairline.
+    // The rail is the second neutral layer. Light: the rail is one step darker
+    // than the page. Dark: it is one step lighter. Both rail-muted values keep
+    // their secondary text above 4.5:1 against their own rail.
     out property <color> rail: dark ? #1f1f21 : #ededf0;
     out property <color> rail-edge: dark ? #2e2e30 : #e0e0e4;
     out property <color> rail-ink: dark ? #f5f5f7 : #1d1d1f;
-    // The rail sits one step darker than the page, so its secondary text keeps
-    // the darker #63636a / #a0a0a8 pair to stay above 4.5:1.
+    // Secondary text on the rail uses the darker #63636a / #a0a0a8 pair so it
+    // stays above 4.5:1 on both rail variants.
     out property <color> rail-muted: dark ? #a0a0a8 : #63636a;
     out property <color> rail-selected: dark ? #2c2c2e : #e8f2ff;
     out property <color> rail-hover: dark ? #262628 : #e4e4e9;
@@ -56,10 +63,12 @@ export global Theme {
     out property <string> font-data: "Consolas";
 
     // 120 ms for controls, 160 ms for selection and disclosure, 200 ms for
-    // page changes. Collapse to zero when the OS asks for reduced motion.
+    // page changes, 700 ms for each half of the 1.4 s status pulse. Collapse
+    // to zero when the OS asks for reduced motion.
     out property <duration> quick: motion ? 120ms : 0ms;
     out property <duration> settle: motion ? 160ms : 0ms;
     out property <duration> glide: motion ? 200ms : 0ms;
+    out property <duration> pulse: motion ? 700ms : 0ms;
 
     // Two control heights: labeled actions and fields use the 34 px control row,
     // icon-only actions use the 30 px square so the toolbar reads as one rhythm.
@@ -123,15 +132,13 @@ export component StatusDot inherits Rectangle {
     height: 8px;
     border-radius: 4px;
     background: Theme.status(root.tone);
+    // The software renderer used by the desktop shell does not implement
+    // transform-scale, so the pulse is opacity-only; a scale here would be a
+    // silent no-op. One 1.4 s breathing cycle: 700 ms out, 700 ms back.
+    // Reduced motion freezes the phase and collapses the animation to zero.
     opacity: root.pulsing && Theme.pulse-on ? 0.45 : 1;
-    transform-scale-x: root.pulsing && Theme.pulse-on ? 0.78 : 1;
-    transform-scale-y: root.pulsing && Theme.pulse-on ? 0.78 : 1;
     animate background { duration: Theme.quick; easing: ease-in-out; }
-    // One 1.4 s breathing cycle: 700 ms out, 700 ms back. Reduced motion
-    // freezes the phase and collapses the animation to zero.
-    animate opacity { duration: Theme.motion ? 700ms : 0ms; easing: ease-in-out; }
-    animate transform-scale-x { duration: Theme.motion ? 700ms : 0ms; easing: ease-in-out; }
-    animate transform-scale-y { duration: Theme.motion ? 700ms : 0ms; easing: ease-in-out; }
+    animate opacity { duration: Theme.pulse; easing: ease-in-out; }
 }
 
 export component Tag inherits Rectangle {
@@ -204,6 +211,9 @@ export component FocusAction inherits Rectangle {
     in property <string> icon: "";
     in property <bool> icon-only: false;
     in property <string> badge: "";
+    // Icon-only actions carry their meaning here; the tooltip appears on hover
+    // and the same text is exposed to assistive technology.
+    in property <string> tooltip: "";
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
     public function take-focus() { focus.focus(); }
@@ -271,8 +281,10 @@ export component FocusAction inherits Rectangle {
         mouse-cursor: MouseCursor.pointer;
         clicked => { focus.focus(); root.clicked(); }
     }
+    if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
     accessible-role: button;
     accessible-label: root.label;
+    accessible-description: root.tooltip;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 }
 
@@ -292,7 +304,7 @@ export component Segmented inherits Rectangle {
     background: focus.has-focus ? Theme.field-strong : Theme.field;
     border-radius: 6px;
     border-width: 1px;
-    border-color: focus.has-focus ? Theme.edge-strong : Theme.edge;
+    border-color: focus.has-focus ? Theme.edge-control-strong : Theme.edge-control;
     animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     private property <int> count: root.options.length > 0 ? root.options.length : 1;
     selection := Rectangle {
@@ -384,7 +396,7 @@ export component Field inherits VerticalLayout {
         background: root.invalid ? Theme.soft(2) : input.has-focus ? Theme.field-strong : Theme.field;
         border-radius: 6px;
         border-width: 1px;
-        border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.edge-strong : Theme.edge;
+        border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.edge-control-strong : Theme.edge-control;
         animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
         if !root.icon.is-empty : AppIcon {
             x: 9px;
@@ -502,7 +514,6 @@ export component Toggle inherits Rectangle {
 export component NavItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
-    in property <bool> show-label: true;
     callback activate();
     height: Theme.control-height;
     border-radius: 6px;
@@ -520,9 +531,9 @@ export component NavItem inherits Rectangle {
         }
     }
     HorizontalLayout {
-        padding-left: root.show-label ? 10px : 0px;
-        padding-right: root.show-label ? 10px : 0px;
-        alignment: root.show-label ? start : center;
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: start;
         spacing: 8px;
         Text {
             text: root.label;
