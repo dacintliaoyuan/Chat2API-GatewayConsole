@@ -526,12 +526,30 @@ export component MainWindow inherits Window {
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
     out property <length> request-list-height: request-list-panel.height;
+    out property <length> log-list-y: log-list.absolute-position.y;
     out property <length> log-list-height: log-list.height;
     out property <length> log-details-height: log-details.height;
+    out property <length> log-period-x: log-period-control.absolute-position.x;
+    out property <length> log-period-y: log-period-control.absolute-position.y;
+    out property <length> log-period-width: log-period-control.width;
+    out property <length> log-period-height: log-period-control.height;
     out property <length> log-level-x: log-level-control.absolute-position.x;
     out property <length> log-level-y: log-level-control.absolute-position.y;
     out property <length> log-level-width: log-level-control.width;
     out property <length> log-level-height: log-level-control.height;
+    out property <length> log-search-x: log-search.absolute-position.x;
+    out property <length> log-search-y: log-search.absolute-position.y;
+    out property <length> log-search-width: log-search.width;
+    out property <length> log-search-height: log-search.height;
+    out property <length> log-follow-x: log-follow.absolute-position.x;
+    out property <length> log-follow-y: log-follow.absolute-position.y;
+    out property <length> log-follow-width: log-follow.width;
+    out property <length> log-follow-height: log-follow.height;
+    out property <length> log-settings-x: log-settings-button.absolute-position.x;
+    out property <length> log-settings-y: log-settings-button.absolute-position.y;
+    out property <length> log-settings-width: log-settings-button.width;
+    out property <length> log-settings-height: log-settings-button.height;
+    out property <string> log-settings-icon: log-settings-button.icon;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -1268,8 +1286,8 @@ export component MainWindow inherits Window {
                 FlexboxLayout {
                     flex-wrap: wrap;
                     spacing: 8px;
-                    Segmented {
-                        width: root.compact ? 190px : 240px;
+                    log-period-control := Segmented {
+                        width: root.compact ? 190px : 228px;
                         options: [{ text: "实时" }, { text: "今天" }, { text: "7 天" }, { text: "30 天" }];
                         current-index <=> root.log-period;
                         label: "日志日期范围";
@@ -1278,14 +1296,24 @@ export component MainWindow inherits Window {
                     // One 5-item segmented control at every width, so the level
                     // filter keeps the console's field/edge/radius language.
                     log-level-control := Segmented {
-                        width: root.compact ? 170px : 260px;
+                        width: root.compact ? 170px : 248px;
                         options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始" }];
                         current-index <=> root.log-filter-level;
                         label: "日志级别";
                         selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
-                    // Refresh sits next to the level row so it never wraps alone;
-                    // the keyword field follows and may take the next row.
+                    // The whole toolbar reads like the Magpie session list:
+                    // filters first, then search, the page actions and the one
+                    // jump to settings. It wraps at the minimum width.
+                    log-search := MaterialField {
+                        width: root.compact ? 140px : 160px;
+                        icon: "search";
+                        placeholder: "关键词";
+                        clearable: true;
+                        text <=> root.log-filter-keyword;
+                        edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                        cleared => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                    }
                     log-refresh := ActionButton {
                         width: root.log-refreshed ? 74px : Theme.icon-button;
                         height: Theme.icon-button;
@@ -1298,23 +1326,9 @@ export component MainWindow inherits Window {
                         enabled: !root.refreshing;
                         clicked => { root.refresh-current-page(); }
                     }
-                    log-search := MaterialField {
-                        width: root.compact ? 140px : 180px;
-                        icon: "search";
-                        placeholder: "关键词";
-                        clearable: true;
-                        text <=> root.log-filter-keyword;
-                        edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
-                        cleared => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
-                    }
-                }
-                HorizontalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 8px;
-                    alignment: start;
-                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
-                    DataText { text: root.log-updated-at-label; vertical-alignment: center; }
-                    ActionButton {
+                    // Live follow stays next to the filters it belongs to; pausing
+                    // only stops the list from jumping, never the log read.
+                    log-follow := ActionButton {
                         visible: root.log-period == 0;
                         width: Theme.icon-button;
                         height: Theme.icon-button;
@@ -1332,9 +1346,27 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    // The log page is read-only diagnostics, so it has no recycle
+                    // bin; the settings entry is the one jump out of this page.
+                    log-settings-button := ActionButton {
+                        width: Theme.icon-button;
+                        height: Theme.icon-button;
+                        label: "设置";
+                        icon: "settings";
+                        icon-only: true;
+                        quiet: true;
+                        tooltip: "打开设置";
+                        clicked => { root.navigate-to(2); }
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    alignment: start;
+                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
+                    DataText { text: root.log-updated-at-label; vertical-alignment: center; }
                     ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; tooltip: "较新的日志"; clicked => { root.log-history(root.log-period, -1); } }
                     ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.older-logs; label: "较早"; icon: "chevron-right"; icon-only: true; tooltip: "较早的日志"; clicked => { root.log-history(root.log-period, 1); } }
-                    Rectangle { horizontal-stretch: 1; }
                 }
                 Panel {
                     vertical-stretch: 1;
