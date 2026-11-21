@@ -1135,6 +1135,46 @@ foreach ($scriptName in @(
         Assert-Equal ($null -ne $ingressLaunch.BootId) $true 'the ingress receives SELFUSEAI_GATEWAY_BOOT_ID'
         Assert-Equal ($ingressLaunch.DesiredState -eq (Get-GatewayDesiredStatePath -Key 'chat2api')) $true 'the ingress receives SELFUSEAI_GATEWAY_DESIRED_STATE'
 
+        # #133 A2/P2: a live worker with a dead ingress is an incomplete pair.
+        # The start must fill the ingress only and leave the worker alone.
+        Set-ComponentFixture -Processes @($script:componentWorker) `
+            -Listeners @{ 9911 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990206 }) } `
+            -WorkerHealthy $true
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Degraded' 'a live worker with a dead ingress is Degraded'
+        $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $result.Status 'StartPending' 'a live worker with a dead ingress reports StartPending'
+        Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'ingress' 'a live worker starts only the missing ingress'
+        Assert-Equal ($script:componentTerminated -contains 990206) $false 'a live worker is not restarted'
+        Assert-Equal $script:componentTerminated.Count 0 'a live worker with a dead ingress terminates nothing'
+
+        # #133 A2/J3: the worker wait consumes the single StartTimeoutSeconds
+        # budget; the outer poll must not add a second full timeout.
+        Set-ComponentFixture -WorkerPort $null
+        $script:componentSleeperCalls = New-Object System.Collections.ArrayList
+        $result = Start-GatewayService -Key 'chat2api' `
+            -Sleeper { param($seconds) [void]$script:componentSleeperCalls.Add([int]$seconds) }
+        Assert-Equal $result.Status 'StartPending' 'an exhausted worker wait reports StartPending'
+        Assert-Equal $script:componentSleeperCalls.Count 20 'the worker wait consumes exactly StartTimeoutSeconds'
+        Assert-Equal (@($script:componentSleeperCalls | Where-Object { $_ -eq 1 }).Count) 20 'the single start budget is not extended by the outer poll'
+
+        # #133 A2/P3: a worker process that has not published its port yet is
+        # Starting, not Residual. The start waits for it within the budget and
+        # never force-stops a starting worker.
+        Set-ComponentFixture -Processes @($script:componentWorker) `
+            -Listeners @{ 9911 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990206 }) } `
+            -WorkerPort $null
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Degraded' 'a worker without a published port is Degraded'
+        Assert-Equal ($inspection.ProcessIds -join ',') '990206' 'the starting worker is named in the Degraded pair'
+        $script:componentSleeperCalls.Clear()
+        $result = Start-GatewayService -Key 'chat2api' `
+            -Sleeper { param($seconds) [void]$script:componentSleeperCalls.Add([int]$seconds) }
+        Assert-Equal $result.Status 'StartPending' 'a starting worker reports StartPending'
+        Assert-Equal ($script:componentTerminated -contains 990206) $false 'a starting worker is never force-stopped'
+        Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'ingress' 'a starting worker still starts the missing ingress'
+        Assert-Equal (@($script:componentSleeperCalls | Where-Object { $_ -eq 1 }).Count) 20 'the starting worker consumes the single start budget'
+
         # Both components present but unhealthy: Degraded, and the start keeps
         # both instead of reporting Stopped or restarting them.
         Set-ComponentFixture -Processes @($script:componentWorker, $script:componentIngress) `
@@ -1165,6 +1205,46 @@ foreach ($scriptName in @(
         $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
         Assert-Equal $result.Status 'Conflict' 'a worker conflict blocks the split start'
         Assert-Equal $script:componentLaunches.Count 0 'a worker conflict launches nothing'
+
+        # #133 A2/J2: an ingress conflict is collected BEFORE any launch.
+        # worker Absent + 8000 owned by a foreign process must not leave an
+        # orphan worker behind.
+        $foreignIngressProcess = [pscustomobject]@{
+            ProcessId = 990231; Name = 'nginx.exe'
+            CommandLine = 'nginx.exe'
+            CreationDate = [datetime]'2026-11-21T09:00:00'
+        }
+        $foreignIngressListener = [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990231 }
+        Set-ComponentFixture -Processes @($foreignIngressProcess) `
+            -Listeners @{ 8000 = @($foreignIngressListener) } -WorkerPort $null
+        $componentResult = Start-GatewayComponents -Key 'chat2api' -Descriptor $desc `
+            -StartPath (Resolve-GatewayStartPath -Key 'chat2api') `
+            -Components @(Get-GatewayStartComponents -Descriptor $desc) `
+            -Sleeper { param($seconds) }
+        Assert-Equal $componentResult.Blocked $true 'an ingress conflict blocks the component start'
+        Assert-Equal $componentResult.Reason 'Conflict' 'an ingress conflict is reported as a conflict'
+        Assert-Equal $script:componentLaunches.Count 0 'an ingress conflict launches no component'
+        $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $result.Status 'Conflict' 'an ingress conflict blocks the service start'
+        Assert-Equal $script:componentLaunches.Count 0 'an ingress conflict launches no component through the service start'
+
+        # #133 A2: a legacy single-process production instance on 8000 is
+        # recognized by the legacy inspection branch, not as a split pair.
+        $legacyProcess = [pscustomobject]@{
+            ProcessId = 990201; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode production --port 8000 --role local'
+            CreationDate = [datetime]'2026-11-21T09:00:00'
+        }
+        Set-ComponentFixture -Processes @($legacyProcess) `
+            -Listeners @{ 8000 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990201 }) } `
+            -WorkerPort $null -IngressHealthy $true
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Running' 'a legacy production instance on 8000 is Running'
+        Assert-Equal ($inspection.ProcessIds -join ',') '990201' 'the legacy production instance is named as the owner'
+        $script:componentIngressHealthy = $false
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Degraded' 'a legacy production instance with a failing health probe is Degraded'
+        $script:componentIngressHealthy = $true
 
         # Stale WorkerPortFile: the worker crashed, its recorded port is now
         # owned by an unrelated process. The record is stale (both components
@@ -1232,10 +1312,13 @@ foreach ($scriptName in @(
                 9911 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990206 })
                 8000 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990207 })
             } -WorkerHealthy $true -IngressHealthy $true
-        $stopped = Stop-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        $script:componentStopSleeperCalls = New-Object System.Collections.ArrayList
+        $stopped = Stop-GatewayService -Key 'chat2api' `
+            -Sleeper { param($seconds) [void]$script:componentStopSleeperCalls.Add([int]$seconds) }
         Assert-Equal $stopped.Status 'Stopped' 'the split stop reports Stopped'
         Assert-Equal ($script:componentRequests -join ',') 'http://127.0.0.1:8000/admin/shutdown,http://127.0.0.1:9911/admin/shutdown' 'the ingress shutdown is posted before the worker shutdown'
         Assert-Equal ($script:componentTerminated -join ',') '990206,990207' 'the scoped fallback terminates both components'
+        Assert-Equal (@($script:componentStopSleeperCalls | Where-Object { $_ -eq 1 }).Count) 5 'the worker stop waits StopTimeoutSeconds before the force fallback'
         Assert-Equal (Test-Path -LiteralPath $script:componentWorkerPortFile) $false 'the split stop removes the worker port record'
 
         # Duplicate stop: nothing is alive any more, so no shutdown is posted
@@ -1324,6 +1407,56 @@ foreach ($scriptName in @(
         Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $spacedRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+# ---------------------------------------------------------------------------
+# #133 A2/P1: a quoted executable path with spaces is still the managed
+# entrypoint. CIM quotes such a path; the identity check must tokenize the
+# command line instead of matching a \S* regex that cannot cross the space.
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['chat2api']
+    $spacedRoot = Join-Path ([IO.Path]::GetTempPath()) ('gateway root ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $workerIdentity = Get-GatewayComponentIdentity -Descriptor $desc -Name 'worker'
+    $expectedWorker = Join-Path $spacedRoot 'rust\target\release\um-gateway-candidate.exe'
+    $workerProcess = [pscustomobject]@{
+        ProcessId = 990301; Name = 'um-gateway-candidate.exe'
+        CommandLine = ('"' + $expectedWorker +
+            '" --mode worker --port 0 --role local --worker-port-file "' +
+            (Join-Path $spacedRoot 'worker port.port') +
+            '" --service-log "' + (Join-Path $spacedRoot 'service log.txt') + '"')
+        CreationDate = [datetime]'2026-11-21T10:00:00'
+    }
+    Assert-Equal (Get-GatewayStopScopeClass -Descriptor $desc -Identity $workerIdentity `
+        -Process $workerProcess -GatewayRoot $spacedRoot) 'Private' `
+        'a quoted executable path with spaces is recognized as private'
+
+    $foreignRoot = Join-Path ([IO.Path]::GetTempPath()) ('other root ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $foreignWorker = [pscustomobject]@{
+        ProcessId = 990302; Name = 'um-gateway-candidate.exe'
+        CommandLine = ('"' + (Join-Path $foreignRoot 'rust\target\release\um-gateway-candidate.exe') +
+            '" --mode worker --port 0 --role local --worker-port-file "' +
+            (Join-Path $spacedRoot 'worker port.port') + '"')
+        CreationDate = [datetime]'2026-11-21T10:00:00'
+    }
+    Assert-Equal (Get-GatewayStopScopeClass -Descriptor $desc -Identity $workerIdentity `
+        -Process $foreignWorker -GatewayRoot $spacedRoot) 'Foreign' `
+        'a quoted executable path from another checkout stays foreign'
+
+    $pythonIdentity = @(Get-GatewayStopIdentities -Descriptor $desc) |
+        Where-Object { [string]$_.ProcessName -eq 'python.exe' } |
+        Select-Object -First 1
+    $pythonRoot = Join-Path ([IO.Path]::GetTempPath()) ('python root ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $pythonProcess = [pscustomobject]@{
+        ProcessId = 990303; Name = 'python.exe'
+        CommandLine = ('python "' + (Join-Path $pythonRoot 'chat2api\chat2api.py') +
+            '" --base-url https://chat.example.invalid')
+        CreationDate = [datetime]'2026-11-21T10:00:00'
+    }
+    Assert-Equal (Get-GatewayStopScopeClass -Descriptor $desc -Identity $pythonIdentity `
+        -Process $pythonProcess -GatewayRoot $pythonRoot) 'Private' `
+        'a quoted Python entrypoint with spaces is recognized as private'
 }
 
 # ---------------------------------------------------------------------------

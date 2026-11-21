@@ -234,10 +234,12 @@ systemd
 - 同一个 `um-gateway-candidate` 二进制增加 `--mode worker` 与 `--mode ingress`；
   `--mode candidate|production` 仍是单进程形态，云端 8002/8003 不使用拆分形态。
 - worker：本机模型处理进程，只绑定 `127.0.0.1` 的 `--port`（生产 `0`）。监听成功后
-  用临时文件 + rename 原子写 `--worker-port-file`（十进制端口 + 换行）；固定测试端口
-  必须在 1024 以上且不在治理端口表内。优雅退出时删除该文件。
+  用临时文件 + rename 原子写 `--worker-port-file`（十进制端口 + 换行 + worker PID +
+  换行）；固定测试端口必须在 1024 以上且不在治理端口表内。优雅退出时删除该文件。
 - ingress：本机模型 API 入口，绑定 `127.0.0.1:8000`（测试可 `0`）；每次连接前重新
   读 `--worker-port-file`，不缓存、不猜端口。worker 端口文件出现且能连上就转发。
+  Windows 上读取到 PID 行时校验该 PID 的进程可执行文件名仍是网关二进制，不是则视为
+  陈旧记录；非 Windows 跳过该身份校验。
 - 入口参数：`--worker-port-file` 默认 `data/chat2api-worker.port`；
   `--desired-state-file` 可省略，省略时读环境变量
   `SELFUSEAI_GATEWAY_DESIRED_STATE`（文件路径）；`--recovery-wait-seconds`
@@ -296,17 +298,23 @@ systemd
     健康组件。worker 端口文件同时接受相对仓库根的描述符值和测试注入的绝对路径。
   - 停止先写 `stopped` 意图，再依次 POST ingress `/admin/shutdown`、worker
     `/admin/shutdown`（worker 端口读 `WorkerPortFile`），最后按身份兜底清理。
-  - inspection 在 worker 或 ingress 处于 Present/Residual 时走拆分分支，worker
-    `Conflict` 也留在拆分分支（它正面证明拆分形态，不能回落到单进程形状被误认成
+  - inspection 在 worker 或 ingress 处于 Present/Residual/Starting 时走拆分分支，
+    worker `Conflict` 也留在拆分分支（它正面证明拆分形态，不能回落到单进程形状被误认成
     `Residual`）；两者都缺失、或只有 ingress `Conflict`（8000 被未确认进程占用）时
     回落到单进程形状，使 Python 回滚与过渡实例仍可识别。8000 的归属只判断
     loopback 监听，tailnet IPv4/IPv6 监听单独保留；chat2api 的 `/health` 要求 200
     （ingress 在 worker 缺失时返回 503）。
   - worker 与 ingress 的健康分别判断：两者都健康才是 `Running`；任一组件
-    `Present/Residual` 但未全健康是 `Degraded`；拆分分支里只有两者都 `Absent`
+    `Present/Residual/Starting` 但未全健康是 `Degraded`；拆分分支里只有两者都 `Absent`
     才回落到单进程形状（最终可能是 `Stopped`）。worker 缺失而 ingress 仍在
     8000 监听（`/health` 503）时是 `Degraded`，控制台入口只启动缺失的 worker，
     不再走整对停止。
+  - worker 进程存活但尚未写 `WorkerPortFile` 时是 `Starting`，不是残留：启动在剩余
+    `StartTimeoutSeconds` 内等待端口/监听，不强制停止正在启动的 worker；超时后保留
+    它并报告 `StartPending`，由下一轮再判定。
+  - `Start-GatewayComponents` 因组件 `Conflict` 返回 `Blocked` 时带 `Reason=Conflict`，
+    服务启动据此返回 `Conflict` 并使用冲突详情；只有残留清理被拒绝才返回
+    `StartBlocked` 和“受管残留进程清理失败”。
   - 陈旧 `WorkerPortFile`（#133 A2 返修，2026-11-21）：worker 非优雅退出后
     记录可能残留，端口还可能被无关进程复用。没有 worker 身份进程时该记录一律视为
     陈旧：健康探测、watch 进程查询和 inspection 都不把它当作 worker 监听；端口占用
@@ -325,28 +333,37 @@ systemd
     `exit begin ... reason=admin_shutdown` 行。Rust worker/ingress 不写 listening
     行，因此拆分形态下退出证据恒为“无证据”，watch 只按进程/端口状态判定；
     这是已知未覆盖范围，不是“Rust 进程没有退出”。
-  - watch 的进程查询只认 worker（`--mode worker`），listener 检查与退出证据使用
-    `WorkerPortFile`；self-test 固定 worker 端口并覆盖绝对路径端口文件、陈旧端口
-    记录和 tailnet 监听。
+  - watch 的进程查询在组件模式下同时确认 worker 与 ingress 身份：任一缺失即返回
+    `absent`，由组件启动只补缺失组件；退出证据使用 `WorkerPortFile`。self-test
+    固定 worker 端口并覆盖陈旧端口记录和 tailnet 监听；绝对路径端口文件由
+    `tests/gateway-runtime.Tests.ps1` 覆盖。
   - 本节的 Rust 接口不改变 8001 控制台和云端 8002/8003 的单进程形态。
 - 验证（#133 A，2026-11-21）：`cargo test -p um-gateway --test ingress`
-  18 passed；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
+  18 passed（返修后为 19，见下）；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
   其余用假 worker 覆盖恢复、超时、取消、队列上限、已转发断开、SSE、keep-alive、
   `/health`/`/ready`、`/admin/*` 不排队与 `/admin/shutdown`（含错误令牌）。
 - 验证（#133 A2 返修，2026-11-21）：
   - 工作目录：`D:/git/github/Chat2API-GatewayConsole/.worktrees/133-ps`。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/gateway-runtime.Tests.ps1`：
-    582 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
-    在监听、双组件在监听但未健康、worker `Conflict` + ingress `Absent`，控制台入口
-    `Degraded` 分支，`Select-GatewayStopScope -Identities` 收窄、重复停止、worker
-    端口上的 tailnet 监听、陈旧 `WorkerPortFile` 与含空格路径的观察器启动）。
+    608 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
+    在监听、双组件在监听但未健康、worker `Conflict` + ingress `Absent`、ingress
+    `Conflict` 预检、legacy 单进程 inspection，控制台入口 `Degraded` 分支，
+    `Select-GatewayStopScope -Identities` 收窄、重复停止、worker 端口上的 tailnet
+    监听、陈旧 `WorkerPortFile`、启动中 worker、启动预算与有界停止等待、含空格
+    可执行路径的身份识别，以及含空格路径的观察器启动）。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File lib/watch-chat2api.ps1 -SelfTest`：
-    PASS（含陈旧 worker 端口记录与 tailnet 监听在 worker 端口）。
+    PASS（含 worker/ingress 双身份判定、陈旧 worker 端口记录与 tailnet 监听在
+    worker 端口、`Invoke-GatewayStart` 不再向运行时转发仅测试用的 `-Stopper`）。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/console-runtime.Tests.ps1`：
     101 passed，0 failed（既有控制台入口回归；本轮 `ALL PASS`）。
+  - `cargo test -p um-gateway --test ingress`（工作目录 `rust/`）：19 passed，
+    0 failed；新增空闲 keep-alive 超时直接关闭、不写 400 的用例。
+  - `cargo test -p um-gateway --lib`（工作目录 `rust/`）：41 passed，0 failed，
+    1 ignored；新增 worker 端口文件 PID 校验用例。
   - 未验证范围：真实 Rust worker/ingress 的崩溃与端口复用、真实 Edge 登录、
-    云端 8002/8003、桌面 App 壳；测试用替换的进程表、监听快照、HTTP 与
-    `Start-Process` 边界，不启动真实服务。
+    云端 8002/8003、桌面 App 壳；PowerShell 测试用替换的进程表、监听快照、
+    HTTP 与 `Start-Process` 边界，不启动真实服务。非 Windows 上 ingress 跳过
+    worker PID 的可执行文件名校验。
 
 ## 3. 云端 idle RSS 基线
 

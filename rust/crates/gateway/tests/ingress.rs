@@ -315,7 +315,10 @@ fn worker_mode_writes_the_port_file_and_forwards_through_the_real_gateway() {
     let port_file = temp.path().join("worker.port");
     let worker = start_worker(config, &port_file).expect("start worker");
     let written = std::fs::read_to_string(&port_file).expect("worker port file");
-    assert_eq!(written, format!("{}\n", worker.addr().port()));
+    assert_eq!(
+        written,
+        format!("{}\n{}\n", worker.addr().port(), std::process::id())
+    );
     let leftovers: Vec<String> = std::fs::read_dir(temp.path())
         .expect("worker temp dir")
         .filter_map(|entry| entry.ok())
@@ -658,6 +661,46 @@ fn keep_alive_serves_two_requests_on_one_client_connection() {
     let second = read_client_response(&mut stream).expect("second response");
     assert_eq!(second.status, 200);
     assert_eq!(worker.seen().len(), 2);
+}
+
+#[test]
+fn idle_keep_alive_timeout_closes_without_a_synthetic_400() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let port = reserve_port();
+    let ingress = start_ingress_with_state(&temp, port, &running_state_json(), |config| {
+        config.recovery_wait = Duration::from_secs(5);
+        config.head_read_timeout = Duration::from_millis(200);
+    });
+    let worker = FakeWorker::start(
+        port,
+        FakeBehaviour::Json {
+            status: 200,
+            body: br#"{"ok":true}"#.to_vec(),
+        },
+    );
+    let addr = ingress.addr;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("connect");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    write_request(&mut stream, addr, "/v1/chat/completions", "{}");
+    let first = read_client_response(&mut stream).expect("first response");
+    assert_eq!(first.status, 200);
+
+    // Stay idle past the head read timeout. The ingress must close the
+    // keep-alive connection without inventing a 400 for a request that was
+    // never sent.
+    thread::sleep(Duration::from_millis(400));
+    let mut buffer = Vec::new();
+    let read = stream.read_to_end(&mut buffer);
+    assert!(
+        read.is_ok(),
+        "an idle keep-alive connection was not closed cleanly: {read:?}"
+    );
+    assert!(
+        buffer.is_empty(),
+        "an idle keep-alive timeout received a response: {}",
+        String::from_utf8_lossy(&buffer)
+    );
+    assert_eq!(worker.seen().len(), 1);
 }
 
 #[test]

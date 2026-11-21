@@ -194,7 +194,21 @@ pub fn read_request_head(
                 "request header block is too large",
             ));
         }
-        let read = stream.read(&mut buffer)?;
+        let read = match stream.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                // An idle keep-alive connection timed out waiting for the
+                // next request head. That is a clean end of the connection,
+                // not a malformed request: close without a synthetic 400.
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
         if read == 0 {
             if raw.is_empty() {
                 return Ok(None);

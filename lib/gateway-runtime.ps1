@@ -758,6 +758,48 @@ function Get-GatewayDeclaredPort {
     return [int]$match.Groups['port'].Value
 }
 
+function Get-GatewayCommandLineTokens {
+    # #133 A2/P1: split a Windows command line into argument tokens. CIM
+    # quotes a path that contains spaces ("C:\Program Files\...\app.exe"), and
+    # the old \S* reference regex could not cross that space, so the executable
+    # was misread as Foreign. Double quotes group a token; a backslash-escaped
+    # quote stays literal. Single quotes are not a Windows quoting form and are
+    # kept as ordinary characters (the caller trims a whole-token pair).
+    param([AllowNull()][string]$CommandLine)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return @() }
+    $tokens = @()
+    $current = New-Object System.Text.StringBuilder
+    $inQuotes = $false
+    $hasToken = $false
+    for ($index = 0; $index -lt $CommandLine.Length; $index++) {
+        $ch = $CommandLine[$index]
+        if ($ch -eq '\' -and $index + 1 -lt $CommandLine.Length -and
+                $CommandLine[$index + 1] -eq '"') {
+            [void]$current.Append('"')
+            $hasToken = $true
+            $index += 1
+            continue
+        }
+        if ($ch -eq '"') {
+            $inQuotes = -not $inQuotes
+            $hasToken = $true
+            continue
+        }
+        if (-not $inQuotes -and [char]::IsWhiteSpace($ch)) {
+            if ($hasToken) {
+                $tokens += $current.ToString()
+                [void]$current.Clear()
+                $hasToken = $false
+            }
+            continue
+        }
+        [void]$current.Append($ch)
+        $hasToken = $true
+    }
+    if ($hasToken) { $tokens += $current.ToString() }
+    return $tokens
+}
+
 function Get-GatewayStopScopeClass {
     <#
     Classify one candidate process against a descriptor's PRIVATE stop scope.
@@ -802,17 +844,28 @@ function Get-GatewayStopScopeClass {
     } catch {
         return 'Unconfirmed'
     }
-    $leaf = [regex]::Escape([IO.Path]::GetFileName($expected))
 
     # The entrypoint may be given bare (the private launcher's shape) or
-    # path-qualified; either way it must reference THIS entrypoint.
+    # path-qualified; either way it must reference THIS entrypoint. Tokenizing
+    # first is what makes a quoted path with spaces ("C:\Program Files\...
+    # um-gateway-candidate.exe") comparable to the expected full path.
     $commandLinePattern = [string]$Identity.CommandLinePattern
     if (-not $commandLinePattern) { return 'Unconfirmed' }
     $bareToken = $commandLine -match $commandLinePattern
+    $expectedLeaf = [IO.Path]::GetFileName($expected)
     $references = @()
-    $referencePattern = "(?<ref>\S*[\\/]$leaf)(?=[`"']?(?:\s|$))"
-    foreach ($match in [regex]::Matches($commandLine, $referencePattern)) {
-        $references += $match.Groups['ref'].Value.Trim('"', "'")
+    foreach ($token in @(Get-GatewayCommandLineTokens -CommandLine $commandLine)) {
+        $candidate = $token.Trim('"', "'")
+        if (-not $candidate) { continue }
+        # A bare script name is the $bareToken case; only a path-qualified
+        # token is a resolvable reference.
+        if ($candidate -notmatch '[\\/]') { continue }
+        $candidateLeaf = ''
+        try { $candidateLeaf = [IO.Path]::GetFileName($candidate) } catch { }
+        if ($candidateLeaf -and
+                $candidateLeaf.Equals($expectedLeaf, [StringComparison]::OrdinalIgnoreCase)) {
+            $references += $candidate
+        }
     }
     if (-not $bareToken -and $references.Count -eq 0) { return 'Foreign' }
 
@@ -1111,8 +1164,9 @@ function Get-GatewayWorkerPortFilePath {
 }
 
 function Get-GatewayWorkerPort {
-    # The worker writes "decimal port + newline" atomically after the listener
-    # is bound. Anything unreadable means "unknown", never a guessed port.
+    # The worker writes "decimal port + newline" (and, since #133 A2, a second
+    # line with its PID) atomically after the listener is bound. The port is the
+    # first line; anything unreadable means "unknown", never a guessed port.
     param([Parameter(Mandatory = $true)]$Descriptor)
     $path = Get-GatewayWorkerPortFilePath -Descriptor $Descriptor
     if (-not $path) { return $null }
@@ -1122,8 +1176,10 @@ function Get-GatewayWorkerPort {
     } catch {
         return $null
     }
+    $firstLine = @($text -split "`r?`n") | Select-Object -First 1
+    if ($null -eq $firstLine) { return $null }
     $port = 0
-    if (-not [int]::TryParse($text.Trim(), [ref]$port)) { return $null }
+    if (-not [int]::TryParse($firstLine.Trim(), [ref]$port)) { return $null }
     if ($port -le 0 -or $port -gt 65535) { return $null }
     return $port
 }
@@ -1289,9 +1345,12 @@ function Get-GatewayWorkerInspection {
     }
     $port = Get-GatewayWorkerPort -Descriptor $Descriptor
     if ($null -eq $port) {
+        # The worker process is alive but has not published its port yet. This
+        # is the startup window, not a residual instance: the caller must wait
+        # for it within the start budget instead of force-stopping it.
         return [pscustomobject]@{
-            Name = 'worker'; State = 'Residual'; ProcessIds = @($workerPids)
-            Detail = '发现组件残留进程：worker'
+            Name = 'worker'; State = 'Starting'; ProcessIds = @($workerPids)
+            Detail = 'worker 正在启动（尚未写入 WorkerPortFile）'
         }
     }
     try {
@@ -1455,7 +1514,7 @@ function Get-GatewayServiceInspection {
     # single-process instance.
     $splitPresent = $false
     if ($null -ne $worker -and $null -ne $ingress) {
-        $splitPresent = ($worker.State -in @('Present', 'Residual', 'Conflict')) -or
+        $splitPresent = ($worker.State -in @('Present', 'Residual', 'Starting', 'Conflict')) -or
             ($ingress.State -in @('Present', 'Residual'))
     }
     if ($splitPresent) {
@@ -1481,7 +1540,7 @@ function Get-GatewayServiceInspection {
         # handled by the legacy branch below (where a single-process instance
         # may still own 8000).
         $workerHealthy = $false
-        if ($worker.State -in @('Present', 'Residual')) {
+        if ($worker.State -in @('Present', 'Residual', 'Starting')) {
             $workerComponent = @(Get-GatewayStartComponents -Descriptor $desc) |
                 Where-Object { [string]$_.Name -eq 'worker' } | Select-Object -First 1
             if ($null -ne $workerComponent) {
@@ -2266,6 +2325,34 @@ function Invoke-GatewayChildLaunch {
     }
 }
 
+function Wait-GatewayComponentHealth {
+    # Wait up to TimeoutSeconds for one component's /health. Returns the seconds
+    # actually consumed and whether it became healthy. #133 A2/J3: both the
+    # startup-window wait and the post-launch wait use this helper so they share
+    # one budget and one sleeper seam.
+    param(
+        [Parameter(Mandatory = $true)]$Descriptor,
+        [Parameter(Mandatory = $true)]$Component,
+        [scriptblock]$HttpChecker,
+        [scriptblock]$Sleeper,
+        [int]$TimeoutSeconds = 0
+    )
+    $consumed = 0
+    $healthy = $false
+    $timeout = [Math]::Max(0, $TimeoutSeconds)
+    for ($elapsed = 0; $elapsed -lt $timeout; $elapsed++) {
+        if (Test-GatewayComponentHealth -Descriptor $Descriptor `
+                -Component $Component -HttpChecker $HttpChecker) {
+            $consumed = $elapsed
+            $healthy = $true
+            break
+        }
+        if ($null -ne $Sleeper) { & $Sleeper 1 } else { Start-Sleep -Seconds 1 }
+        $consumed = $elapsed + 1
+    }
+    return [pscustomobject]@{ Healthy = $healthy; Seconds = $consumed }
+}
+
 function Start-GatewayComponents {
     # Start only the missing components, worker first. A healthy component is
     # never restarted; a residual component is cleaned through its own identity
@@ -2312,6 +2399,7 @@ function Start-GatewayComponents {
                 return [pscustomobject]@{
                     Started = @($started); Skipped = @($skipped)
                     Blocked = $true; Detail = [string]$preflightInspection.Detail
+                    Reason = 'Conflict'
                     WorkerWaitSeconds = 0
                 }
             }
@@ -2325,7 +2413,7 @@ function Start-GatewayComponents {
         $presentNames = @()
         foreach ($component in $Components) {
             $name = [string]$component.Name
-            if ($preflight[$name].State -in @('Present', 'Residual')) {
+            if ($preflight[$name].State -in @('Present', 'Residual', 'Starting')) {
                 $presentNames += $name
             }
         }
@@ -2347,6 +2435,7 @@ function Start-GatewayComponents {
                     Blocked = $true
                     Detail = '受管残留进程清理失败：' + [string]$residualCleanup.Detail
                     WorkerWaitSeconds = 0
+                    Reason = 'CleanupRefused'
                 }
             }
         }
@@ -2370,11 +2459,26 @@ function Start-GatewayComponents {
                     Started = @($started); Skipped = @($skipped)
                     Blocked = $true; Detail = [string]$componentInspection.Detail
                     WorkerWaitSeconds = $workerWaitSeconds
+                    Reason = 'Conflict'
                 }
             }
             if ($componentInspection.State -eq 'Present') {
                 # Listening but /health is not ready (e.g. the ingress is
                 # waiting for its worker): keep it, never restart it.
+                $skipped += $name
+                continue
+            }
+            if ($componentInspection.State -eq 'Starting') {
+                # #133 A2/P3: the worker process is alive but has not
+                # published its port yet. Wait for it within the remaining
+                # start budget instead of force-stopping a starting worker; if
+                # it never binds, keep it for the next run.
+                $remaining = [Math]::Max(0,
+                    [int]$Descriptor.StartTimeoutSeconds - $workerWaitSeconds)
+                $wait = Wait-GatewayComponentHealth -Descriptor $Descriptor `
+                    -Component $component -HttpChecker $HttpChecker `
+                    -Sleeper $Sleeper -TimeoutSeconds $remaining
+                $workerWaitSeconds += [int]$wait.Seconds
                 $skipped += $name
                 continue
             }
@@ -2389,6 +2493,7 @@ function Start-GatewayComponents {
                         Blocked = $true
                         Detail = '受管残留进程清理失败：' + [string]$cleanup.Detail
                         WorkerWaitSeconds = $workerWaitSeconds
+                        Reason = 'CleanupRefused'
                     }
                 }
             }
@@ -2417,16 +2522,11 @@ function Start-GatewayComponents {
             # #133 A2/J3: the wait is reported so the caller can subtract it
             # from the same StartTimeoutSeconds budget instead of granting a
             # second full timeout.
-            $timeoutSeconds = [Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds)
-            for ($elapsed = 0; $elapsed -lt $timeoutSeconds; $elapsed++) {
-                if (Test-GatewayComponentHealth -Descriptor $Descriptor `
-                        -Component $component -HttpChecker $HttpChecker) {
-                    $workerWaitSeconds = $elapsed
-                    break
-                }
-                if ($null -ne $Sleeper) { & $Sleeper 1 } else { Start-Sleep -Seconds 1 }
-                $workerWaitSeconds = $elapsed + 1
-            }
+            $wait = Wait-GatewayComponentHealth -Descriptor $Descriptor `
+                -Component $component -HttpChecker $HttpChecker `
+                -Sleeper $Sleeper `
+                -TimeoutSeconds ([Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds))
+            $workerWaitSeconds += [int]$wait.Seconds
         }
     }
     return [pscustomobject]@{
@@ -2593,9 +2693,24 @@ function Start-GatewayService {
             -StartPath $startPath -Components $components `
             -HttpChecker $HttpChecker -Launcher $Launcher -Sleeper $Sleeper
         if ($componentStart.Blocked) {
-            $detail = '受管残留进程清理失败'
-            if ($componentStart.Detail) { $detail += '：' + [string]$componentStart.Detail }
+            $reason = ''
+            if ($componentStart.PSObject.Properties['Reason']) {
+                $reason = [string]$componentStart.Reason
+            }
+            $blockedDetail = ''
+            if ($componentStart.Detail) { $blockedDetail = [string]$componentStart.Detail }
             $watch = Add-GatewayStartFailureRelease -Key $Key -Watch $watch
+            if ($reason -eq 'Conflict') {
+                # A component port/ownership conflict is not a residual
+                # cleanup failure; report the conflict reason unchanged.
+                if (-not $blockedDetail) { $blockedDetail = '组件端口或进程归属冲突' }
+                return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
+                    Key = $Key; Status = 'Conflict'; Action = 'None'
+                    Detail = $blockedDetail
+                }) -Watch $watch)
+            }
+            $detail = '受管残留进程清理失败'
+            if ($blockedDetail) { $detail += '：' + $blockedDetail }
             return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
                 Key = $Key; Status = 'StartBlocked'; Action = 'None'
                 Detail = $detail
