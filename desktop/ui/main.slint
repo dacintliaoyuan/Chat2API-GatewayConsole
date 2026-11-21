@@ -65,8 +65,8 @@ component TextDetails inherits Panel {
         HorizontalLayout {
             spacing: 8px;
             Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
-            ActionButton { label: "复制全文"; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
-            ActionButton { label: "关闭"; quiet: true; clicked => { root.closed(); } }
+            ActionButton { width: 30px; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
+            ActionButton { width: 30px; label: "关闭"; icon: "close"; icon-only: true; quiet: true; clicked => { root.closed(); } }
         }
         full-text := TextEdit {
             text: root.body;
@@ -115,6 +115,8 @@ export component MainWindow inherits Window {
         || !root.account-saved-detail.is-empty;
 
     in-out property <int> page: 0;
+    private property <[string]> nav-icons: ["overview", "requests", "logs", "settings"];
+    private property <float> page-opacity: 1;
     in property <string> gateway-value: "检测中";
     in property <string> gateway-detail;
     in property <int> gateway-tone: 3;
@@ -286,9 +288,16 @@ export component MainWindow inherits Window {
         }
     }
     changed page => {
+        root.page-opacity = 0.85;
+        page-fade-timer.start();
         if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
+    }
+    page-fade-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { root.page-opacity = 1; }
     }
 
     FocusScope {
@@ -327,6 +336,7 @@ export component MainWindow inherits Window {
                 }
                 for label[index] in ["总览", "请求诊断", "运行日志", "设置"] : NavItem {
                     label: label;
+                    icon: root.nav-icons[index];
                     selected: root.page == (index == 2 ? 3 : index == 3 ? 2 : index);
                     activate => { root.navigate(index == 2 ? 3 : index == 3 ? 2 : index); }
                 }
@@ -334,6 +344,7 @@ export component MainWindow inherits Window {
                 Hint { text: root.compact ? "托盘运行" : "关窗后继续运行"; color: Theme.rail-muted; visible: root.tray-available; }
                 FocusAction {
                     label: root.compact ? "退出" : "退出并停止网关";
+                    icon: "power";
                     quiet: true;
                     danger: true;
                     visible: !root.tray-available;
@@ -360,6 +371,8 @@ export component MainWindow inherits Window {
             page-host := Rectangle {
                 vertical-stretch: 1;
                 clip: true;
+                opacity: root.page-opacity;
+                animate opacity { duration: 150ms; easing: ease-in-out; }
             overview-scroll := ScrollView {
                 visible: root.page == 0;
                 vertical-stretch: 1;
@@ -469,11 +482,12 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 MaterialField {
                                     horizontal-stretch: 1;
+                                    icon: "search";
                                     placeholder: "模型或请求 ID";
                                     text <=> root.request-keyword;
                                     accepted => { root.query-requests(0); }
                                 }
-                                ActionButton { height: 34px; label: "查询"; primary: true; clicked => { root.query-requests(0); } }
+                                ActionButton { width: 34px; height: 34px; label: "查询"; icon: "search"; icon-only: true; primary: true; clicked => { root.query-requests(0); } }
                             }
                         }
                     }
@@ -502,8 +516,8 @@ export component MainWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 8px; alignment: end;
-                        ActionButton { label: "较新"; quiet: true; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
-                        ActionButton { label: "较早"; quiet: true; enabled: root.older-requests; clicked => { root.query-requests(1); } }
+                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: 28px; height: 28px; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
+                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: 28px; height: 28px; enabled: root.older-requests; clicked => { root.query-requests(1); } }
                     }
                 }
                 if !root.selected-request.is-empty : TextDetails {
@@ -544,24 +558,33 @@ export component MainWindow inherits Window {
                     }
                     MaterialField {
                         width: root.compact ? 140px : 180px;
-                        placeholder: "搜索日志";
+                        icon: "search";
+                        placeholder: "关键词";
                         text <=> root.log-filter-keyword;
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
                     ActionButton {
+                        width: 32px;
                         height: 34px;
                         label: "刷新";
+                        icon: "refresh";
+                        icon-only: true;
                         quiet: true;
                         clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
                     }
                 }
                 HorizontalLayout {
+                    horizontal-stretch: 1;
                     spacing: 8px;
                     Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); horizontal-stretch: 1; vertical-alignment: center; }
                     ActionButton {
                         visible: root.log-period == 0;
+                        width: 32px;
                         quiet: true;
-                        label: root.log-follow ? "暂停跟随" : root.new-log-count > 0 ? "跳到最新（" + root.new-log-count + "）" : "恢复跟随";
+                        label: root.log-follow ? "暂停跟随" : "恢复跟随";
+                        icon: root.log-follow ? "pause" : "play";
+                        icon-only: true;
+                        badge: root.new-log-count > 0 && !root.log-follow ? root.new-log-count : "";
                         clicked => {
                             root.log-follow = !root.log-follow;
                             if (root.log-follow) {
@@ -570,8 +593,8 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    ActionButton { visible: root.log-period != 0; quiet: true; enabled: root.newer-logs; label: "较新"; clicked => { root.log-history(root.log-period, -1); } }
-                    ActionButton { visible: root.log-period != 0; quiet: true; enabled: root.older-logs; label: "较早"; clicked => { root.log-history(root.log-period, 1); } }
+                    ActionButton { visible: root.log-period != 0; width: 28px; height: 28px; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; clicked => { root.log-history(root.log-period, -1); } }
+                    ActionButton { visible: root.log-period != 0; width: 28px; height: 28px; quiet: true; enabled: root.older-logs; label: "较早"; icon: "chevron-right"; icon-only: true; clicked => { root.log-history(root.log-period, 1); } }
                 }
                 Panel {
                     vertical-stretch: 1;
@@ -640,6 +663,7 @@ export component MainWindow inherits Window {
                                 edit-account := FocusAction {
                                     visible: !root.account-form-visible; enabled: !root.account-busy;
                                     label: root.account-can-clear ? "更新账号密码" : "配置账号";
+                                    icon: "edit";
                                     clicked => { root.open-account-form(); }
                                 }
                                 ActionButton {
@@ -657,6 +681,7 @@ export component MainWindow inherits Window {
                                     quiet: true;
                                     danger: true;
                                     label: "清除已保存的账号密码";
+                                    icon: "trash";
                                     clicked => { root.clear-credentials(); }
                                 }
                             }
@@ -689,9 +714,9 @@ export component MainWindow inherits Window {
                                 }
                                 HorizontalLayout {
                                     alignment: end; spacing: 8px;
-                                    cancel-account := FocusAction { label: "取消"; quiet: true; clicked => { root.close-account-form(); } }
+                                    cancel-account := FocusAction { label: "取消"; icon: "close"; quiet: true; clicked => { root.close-account-form(); } }
                                     save-account := FocusAction {
-                                        label: "保存账号"; primary: true; enabled: !root.account-busy;
+                                        label: "保存账号"; icon: "check"; primary: true; enabled: !root.account-busy;
                                         clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
                                 }
@@ -713,7 +738,7 @@ export component MainWindow inherits Window {
                                     enabled: !root.port-busy;
                                     accepted => { if (!root.port-busy) { root.save-port(root.port-input); } }
                                 }
-                                ActionButton { height: 34px; label: "切换端口"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
+                                ActionButton { height: 34px; label: "切换端口"; icon: "swap"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
                             Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
                         }
@@ -726,6 +751,10 @@ export component MainWindow inherits Window {
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
                                 ActionButton {
                                     label: root.show-technical ? "收起详情" : "查看详情";
+                                    icon: root.show-technical ? "chevron-left" : "chevron-right";
+                                    icon-only: true;
+                                    link: true;
+                                    width: 32px;
                                     quiet: true;
                                     clicked => { root.show-technical = !root.show-technical; }
                                 }

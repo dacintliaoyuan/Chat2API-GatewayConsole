@@ -203,6 +203,9 @@ export component UsageChart inherits Panel {
                         visible: root.can-unpin;
                         quiet: true;
                         label: "取消固定";
+                        icon: "close";
+                        icon-only: true;
+                        width: 30px;
                         clicked => { root.pinned = -1; }
                     }
                 }

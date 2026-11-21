@@ -1,4 +1,5 @@
 import { Palette } from "std-widgets.slint";
+import { AppIcon } from "icons.slint";
 
 // Magpie's product palette: near-neutral surfaces, one blue accent, green for
 // live/healthy states. The tokens and the 120/150 ms motion follow the Magpie
@@ -168,6 +169,9 @@ export component FocusAction inherits Rectangle {
     in property <bool> danger: false;
     in property <bool> link: false;
     in property <bool> enabled: true;
+    in property <string> icon: "";
+    in property <bool> icon-only: false;
+    in property <string> badge: "";
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
     public function take-focus() { focus.focus(); }
@@ -185,16 +189,39 @@ export component FocusAction inherits Rectangle {
     animate border-width { duration: 120ms; easing: ease-in-out; }
     animate opacity { duration: 120ms; easing: ease-in-out; }
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
+        padding-left: root.icon-only ? 0px : 10px;
+        padding-right: root.icon-only ? 0px : 10px;
         alignment: center;
-        Text {
+        spacing: 6px;
+        if !root.icon.is-empty : AppIcon {
+            width: root.icon-only ? 17px : 15px;
+            height: root.icon-only ? 17px : 15px;
+            kind: root.icon;
+            tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+        }
+        if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
             color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
             animate color { duration: 120ms; easing: ease-in-out; }
+        }
+        if !root.badge.is-empty : Rectangle {
+            height: 17px;
+            border-radius: 4px;
+            background: root.primary ? Theme.on-accent.with-alpha(0.22) : Theme.accent-soft;
+            HorizontalLayout {
+                padding-left: 5px;
+                padding-right: 5px;
+                Text {
+                    text: root.badge;
+                    color: root.primary ? Theme.on-accent : Theme.accent;
+                    font-size: 10px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
     focus := FocusScope {
@@ -285,6 +312,7 @@ export component Segmented inherits Rectangle {
 export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
+    in property <string> icon: "";
     in-out property <string> text;
     in property <bool> password: false;
     in property <bool> enabled: true;
@@ -307,10 +335,18 @@ export component Field inherits VerticalLayout {
         border-width: 1px;
         border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.accent : Theme.edge;
         animate border-color { duration: 120ms; easing: ease-in-out; }
+        if !root.icon.is-empty : AppIcon {
+            x: 9px;
+            y: (parent.height - self.height) / 2;
+            width: 15px;
+            height: 15px;
+            kind: root.icon;
+            tint: Theme.muted;
+        }
         input := TextInput {
-            x: 10px;
+            x: root.icon.is-empty ? 10px : 31px;
             y: 0px;
-            width: parent.width - 20px;
+            width: parent.width - (root.icon.is-empty ? 20px : 41px);
             height: parent.height;
             text <=> root.text;
             font-family: Theme.font-body;
@@ -322,9 +358,9 @@ export component Field inherits VerticalLayout {
             edited => { root.edited(self.text); }
         }
         Text {
-            x: 10px;
+            x: root.icon.is-empty ? 10px : 31px;
             y: 0px;
-            width: parent.width - 20px;
+            width: parent.width - (root.icon.is-empty ? 20px : 41px);
             height: parent.height;
             text: root.placeholder;
             color: Theme.muted;
@@ -411,6 +447,7 @@ export component Toggle inherits Rectangle {
 
 export component NavItem inherits Rectangle {
     in property <string> label;
+    in property <string> icon: "";
     in property <bool> selected;
     in property <bool> show-label: true;
     callback activate();
@@ -434,10 +471,16 @@ export component NavItem inherits Rectangle {
         padding-right: root.show-label ? 10px : 0px;
         alignment: root.show-label ? start : center;
         spacing: 8px;
-        Text {
+        if !root.icon.is-empty : AppIcon {
+            width: root.show-label ? 16px : 18px;
+            height: root.show-label ? 16px : 18px;
+            kind: root.icon;
+            tint: root.selected ? Theme.accent : Theme.rail-muted;
+        }
+        if root.show-label && !root.label.is-empty : Text {
             text: root.label;
             color: root.selected ? Theme.accent : Theme.rail-muted;
-            font-size: root.show-label ? 12px : 11px;
+            font-size: 12px;
             font-weight: root.selected ? 650 : 500;
             vertical-alignment: center;
             animate color { duration: 120ms; easing: ease-in-out; }
