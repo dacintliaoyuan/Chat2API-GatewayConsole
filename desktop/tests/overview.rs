@@ -180,6 +180,18 @@ fn reads_only_the_instance_gateway_health_route() {
 }
 
 #[test]
+fn gateway_um_login_and_upstream_are_reported_independently() {
+    let overview = read(Ok(gateway_health(
+        json!({"state": "missing", "label": "未配置"}),
+        json!({"state": "ok", "upstream_status": 200}),
+    )));
+    assert_eq!(overview.gateway.value, "运行中");
+    assert_eq!(overview.account_label, "尚未登录");
+    assert_eq!(overview.upstream.value, "可达");
+    assert_eq!(overview.upstream.tone, Tone::Good);
+}
+
+#[test]
 fn status_line_lists_failures_instead_of_claiming_normal() {
     let overview = read(Err("本实例网关: timeout".to_string()));
     let line = status_line(&overview);

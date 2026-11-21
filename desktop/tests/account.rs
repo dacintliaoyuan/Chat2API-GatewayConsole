@@ -1,7 +1,8 @@
 use um_desktop::account::{
-    account_view, clear, credentials_path, first_login, first_login_needed, load_from,
-    manual_reason_label, save_to, tray_tooltip, AccountForm, AuthAdmin, AuthRead, AuthState,
-    AuthStatus, Credentials, HttpAuthAdmin, LoadOutcome, PasswordInput,
+    account_view, apply_account, clear, credentials_path, first_login, first_login_needed,
+    intro_visible, load_from, manual_reason_label, save_to, tray_tooltip, AccountForm,
+    AccountSurface, AuthAdmin, AuthRead, AuthState, AuthStatus, Credentials, HttpAuthAdmin,
+    LoadOutcome, PasswordInput,
 };
 use um_desktop::gateway::ControlToken;
 use um_desktop::overview::Tone;
@@ -402,6 +403,76 @@ fn status(state: AuthState) -> AuthStatus {
     }
 }
 
+fn loaded() -> LoadOutcome {
+    LoadOutcome::Loaded(Credentials {
+        account: "someone@um.edu.mo".to_string(),
+        password: "super-secret".to_string(),
+    })
+}
+
+#[derive(Default)]
+struct RecordingSurface {
+    saved_account: std::cell::RefCell<String>,
+    saved_detail: std::cell::RefCell<String>,
+    can_clear: std::cell::Cell<bool>,
+    can_continue: std::cell::Cell<bool>,
+    overview_label: std::cell::RefCell<String>,
+    overview_detail: std::cell::RefCell<String>,
+    overview_tone: std::cell::Cell<Option<Tone>>,
+    login_status: std::cell::RefCell<String>,
+    credential_status: std::cell::RefCell<String>,
+}
+
+impl RecordingSurface {
+    fn with_old_failure() -> Self {
+        Self {
+            login_status: std::cell::RefCell::new("登录未完成：等待本人确认 Duo 推送".to_string()),
+            credential_status: std::cell::RefCell::new(
+                "登录未完成：等待本人确认 Duo 推送".to_string(),
+            ),
+            ..Self::default()
+        }
+    }
+}
+
+impl AccountSurface for RecordingSurface {
+    fn set_saved_account(&self, value: &str) {
+        *self.saved_account.borrow_mut() = value.to_string();
+    }
+
+    fn set_saved_detail(&self, value: &str) {
+        *self.saved_detail.borrow_mut() = value.to_string();
+    }
+
+    fn set_can_clear(&self, value: bool) {
+        self.can_clear.set(value);
+    }
+
+    fn set_can_continue_login(&self, value: bool) {
+        self.can_continue.set(value);
+    }
+
+    fn set_overview_label(&self, value: &str) {
+        *self.overview_label.borrow_mut() = value.to_string();
+    }
+
+    fn set_overview_detail(&self, value: &str) {
+        *self.overview_detail.borrow_mut() = value.to_string();
+    }
+
+    fn set_overview_tone(&self, tone: Tone) {
+        self.overview_tone.set(Some(tone));
+    }
+
+    fn set_login_status(&self, value: &str) {
+        *self.login_status.borrow_mut() = value.to_string();
+    }
+
+    fn set_credential_status(&self, value: &str) {
+        *self.credential_status.borrow_mut() = value.to_string();
+    }
+}
+
 #[test]
 fn the_account_card_shows_the_saved_account_and_the_gateway_state() {
     let saved = LoadOutcome::Loaded(Credentials {
@@ -470,6 +541,145 @@ fn unusable_credentials_are_reported_with_a_reentry_path() {
     assert!(view.can_clear);
     assert!(!view.can_continue_login, "re-entry must come first");
     assert_eq!(view.overview_label, "尚未登录");
+}
+
+#[test]
+fn corrupt_credentials_show_the_reason_and_reentry_without_offering_continue() {
+    let saved = LoadOutcome::Unusable("凭据缺少密码".to_string());
+    let view = account_view(
+        &saved,
+        Some(&AuthRead::Status(status(AuthState::NeedsLogin))),
+    );
+    assert!(
+        view.saved_detail.contains("凭据缺少密码"),
+        "{}",
+        view.saved_detail
+    );
+    assert!(
+        view.overview_detail.contains("无法读取"),
+        "{}",
+        view.overview_detail
+    );
+    assert!(view.can_clear, "the unusable file must be removable");
+    assert!(
+        !view.can_continue_login,
+        "corrupt credentials must never be submitted"
+    );
+    assert!(!view.clears_old_failure);
+
+    let surface = RecordingSurface::with_old_failure();
+    apply_account(&surface, &view);
+    assert_eq!(
+        *surface.login_status.borrow(),
+        "登录未完成：等待本人确认 Duo 推送"
+    );
+    assert_eq!(
+        *surface.credential_status.borrow(),
+        "登录未完成：等待本人确认 Duo 推送"
+    );
+}
+
+#[test]
+fn a_duo_wait_is_progress_in_the_same_round_not_a_manual_takeover() {
+    let saved = loaded();
+
+    let mut awaiting = status(AuthState::LoggingIn);
+    awaiting.phase = Some("awaiting_duo".to_string());
+    let view = account_view(&saved, Some(&AuthRead::Status(awaiting)));
+    assert_eq!(view.state_value, "正在完成 Duo 验证");
+    assert_eq!(view.state_tone, Tone::Warn);
+    assert!(
+        !view.can_continue_login,
+        "Duo 等待是同一轮进度，不应提供重复开轮"
+    );
+    assert!(view.clears_old_failure);
+
+    let surface = RecordingSurface::with_old_failure();
+    apply_account(&surface, &view);
+    assert_eq!(*surface.login_status.borrow(), "");
+    assert_eq!(*surface.credential_status.borrow(), "");
+
+    let mut prompted = status(AuthState::LoggingIn);
+    prompted.manual_reason = Some("duo_prompt_waiting".to_string());
+    let view = account_view(&saved, Some(&AuthRead::Status(prompted)));
+    assert_eq!(view.state_value, "正在完成 Duo 验证");
+    assert!(view.state_detail.contains("Duo"), "{}", view.state_detail);
+    assert!(!view.can_continue_login);
+    assert!(view.clears_old_failure);
+}
+
+#[test]
+fn a_valid_round_after_duo_shows_logged_in_and_clears_both_old_failure_messages() {
+    let saved = loaded();
+    let mut valid = status(AuthState::Valid);
+    valid.phase = Some("awaiting_duo".to_string());
+    let view = account_view(&saved, Some(&AuthRead::Status(valid)));
+    assert_eq!(view.state_value, "已登录");
+    assert_eq!(view.state_detail, "");
+    assert_eq!(view.overview_label, "已登录");
+    assert_eq!(view.overview_detail, "");
+    assert!(view.clears_old_failure);
+
+    let surface = RecordingSurface::with_old_failure();
+    apply_account(&surface, &view);
+    assert_eq!(*surface.login_status.borrow(), "");
+    assert_eq!(*surface.credential_status.borrow(), "");
+    assert_eq!(*surface.overview_label.borrow(), "已登录");
+    assert_eq!(*surface.overview_detail.borrow(), "");
+}
+
+#[test]
+fn an_account_mismatch_shows_the_reason_and_continue_without_auto_submitting() {
+    let saved = loaded();
+    let mut mismatch = status(AuthState::Failed);
+    mismatch.manual_reason = Some("umpass_account_mismatch".to_string());
+    let view = account_view(&saved, Some(&AuthRead::Status(mismatch)));
+    assert_eq!(view.state_value, "登录失败");
+    assert!(
+        view.state_detail.contains("账号") && view.state_detail.contains("不一致"),
+        "{}",
+        view.state_detail
+    );
+    assert!(view.can_continue_login);
+    assert!(!view.clears_old_failure);
+}
+
+#[test]
+fn a_manual_takeover_keeps_its_reason_and_offers_continue_login() {
+    let saved = loaded();
+    let mut takeover = status(AuthState::Failed);
+    takeover.manual_reason = Some("umpass_prefill_missing".to_string());
+    let view = account_view(&saved, Some(&AuthRead::Status(takeover)));
+    assert_eq!(view.state_value, "登录失败");
+    assert!(
+        view.state_detail.contains("UMPASS"),
+        "{}",
+        view.state_detail
+    );
+    assert!(view.can_continue_login);
+    assert!(!view.clears_old_failure);
+
+    let surface = RecordingSurface::with_old_failure();
+    apply_account(&surface, &view);
+    assert_eq!(
+        *surface.login_status.borrow(),
+        "登录未完成：等待本人确认 Duo 推送"
+    );
+    assert_eq!(
+        *surface.credential_status.borrow(),
+        "登录未完成：等待本人确认 Duo 推送"
+    );
+}
+
+#[test]
+fn the_first_open_intro_is_only_for_missing_credentials_until_dismissed() {
+    assert!(intro_visible(false, &LoadOutcome::Missing));
+    assert!(!intro_visible(true, &LoadOutcome::Missing));
+    assert!(!intro_visible(false, &loaded()));
+    assert!(!intro_visible(
+        false,
+        &LoadOutcome::Unusable("凭据缺少密码".to_string())
+    ));
 }
 
 #[test]

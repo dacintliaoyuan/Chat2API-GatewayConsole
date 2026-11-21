@@ -518,44 +518,102 @@ pub struct AccountView {
     pub state_tone: Tone,
     pub can_clear: bool,
     pub can_continue_login: bool,
+    /// True when the gateway is logged in or already in a login round, so stale
+    /// failure text from an earlier round must be cleared from both the overview
+    /// `login-status` and the settings `credential-status`.
+    pub clears_old_failure: bool,
     pub overview_label: String,
     pub overview_detail: String,
     pub overview_tone: Tone,
+}
+
+/// The window fields the account card and the overview row own.
+///
+/// The Slint shell implements this for its `MainWindow`; tests implement it with a
+/// recording double so [`apply_account`] is asserted field by field without a live
+/// window.
+pub trait AccountSurface {
+    fn set_saved_account(&self, value: &str);
+    fn set_saved_detail(&self, value: &str);
+    fn set_can_clear(&self, value: bool);
+    fn set_can_continue_login(&self, value: bool);
+    fn set_overview_label(&self, value: &str);
+    fn set_overview_detail(&self, value: &str);
+    fn set_overview_tone(&self, tone: Tone);
+    fn set_login_status(&self, value: &str);
+    fn set_credential_status(&self, value: &str);
+}
+
+/// Applies one account view to the overview row and the settings card.
+///
+/// A valid login or an in-flight login round clears the stale failure text from
+/// both the overview `login-status` and the settings `credential-status`; a manual
+/// takeover keeps its reason until the user acts.
+pub fn apply_account(surface: &dyn AccountSurface, view: &AccountView) {
+    surface.set_saved_account(&view.saved_account);
+    surface.set_saved_detail(&view.saved_detail);
+    surface.set_can_clear(view.can_clear);
+    surface.set_can_continue_login(view.can_continue_login);
+    surface.set_overview_label(&view.overview_label);
+    surface.set_overview_detail(&view.overview_detail);
+    surface.set_overview_tone(view.overview_tone);
+    if view.clears_old_failure {
+        surface.set_login_status("");
+        surface.set_credential_status("");
+    }
 }
 
 pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView {
     let (saved_account, saved_detail, can_clear) = match saved {
         LoadOutcome::Missing => ("未配置账号".to_string(), String::new(), false),
         LoadOutcome::Loaded(credentials) => (credentials.account.clone(), String::new(), true),
-        LoadOutcome::Unusable(reason) => ("已保存的账号信息无法读取".to_string(), reason.clone(), true),
+        LoadOutcome::Unusable(reason) => {
+            ("已保存的账号信息无法读取".to_string(), reason.clone(), true)
+        }
     };
-    let (state_value, state_detail, state_tone, can_continue) = match auth {
+    let (state_value, state_detail, state_tone, can_continue, clears_old_failure) = match auth {
         None => (
             "认证状态读取中".to_string(),
             String::new(),
             Tone::Warn,
             false,
+            false,
         ),
-        Some(AuthRead::Unavailable(reason)) => {
-            ("认证未知".to_string(), reason.clone(), Tone::Warn, false)
-        }
+        Some(AuthRead::Unavailable(reason)) => (
+            "认证未知".to_string(),
+            reason.clone(),
+            Tone::Warn,
+            false,
+            false,
+        ),
         Some(AuthRead::Status(status)) => {
             let detail = status
                 .manual_reason_label()
                 .or_else(|| status.detail.clone())
                 .unwrap_or_default();
-            let (label, tone, next) = match (status.state, status.phase.as_deref()) {
-                (AuthState::Valid, _) => ("已登录", Tone::Good, false),
-                (AuthState::LoggingIn, Some("awaiting_duo")) => ("正在完成 Duo 验证", Tone::Warn, status.manual_reason.is_some()),
-                (AuthState::LoggingIn, _) if status.manual_reason.as_deref() == Some("duo_prompt_waiting") => {
-                    ("正在完成 Duo 验证", Tone::Warn, true)
+            let awaiting_duo = status.phase.as_deref() == Some("awaiting_duo")
+                || status.manual_reason.as_deref() == Some("duo_prompt_waiting");
+            let (label, tone, next) = if status.state == AuthState::Valid {
+                ("已登录", Tone::Good, false)
+            } else if awaiting_duo {
+                // Duo is progress in the same round. The gateway keeps the
+                // visible window open and finishes this round after approval, so
+                // this is not a manual takeover and must not open another round.
+                ("正在完成 Duo 验证", Tone::Warn, false)
+            } else {
+                match status.state {
+                    AuthState::Valid => unreachable!("valid is handled above"),
+                    AuthState::LoggingIn if status.phase.as_deref() == Some("verifying_login") => {
+                        ("正在核验登录结果", Tone::Warn, false)
+                    }
+                    AuthState::LoggingIn => ("登录中", Tone::Warn, status.manual_reason.is_some()),
+                    AuthState::NeedsLogin => ("尚未登录", Tone::Warn, true),
+                    AuthState::Failed => ("登录失败", Tone::Bad, true),
+                    AuthState::Cancelled => ("已取消登录", Tone::Warn, true),
+                    AuthState::Unknown => {
+                        ("暂时无法核验", Tone::Warn, status.manual_reason.is_some())
+                    }
                 }
-                (AuthState::LoggingIn, Some("verifying_login")) => ("正在核验登录结果", Tone::Warn, false),
-                (AuthState::LoggingIn, _) => ("登录中", Tone::Warn, status.manual_reason.is_some()),
-                (AuthState::NeedsLogin, _) => ("尚未登录", Tone::Warn, true),
-                (AuthState::Failed, _) => ("登录失败", Tone::Bad, true),
-                (AuthState::Cancelled, _) => ("已取消登录", Tone::Warn, true),
-                (AuthState::Unknown, _) => ("暂时无法核验", Tone::Warn, status.manual_reason.is_some()),
             };
             let detail = if status.state == AuthState::Valid {
                 String::new()
@@ -566,19 +624,18 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
             } else {
                 detail
             };
-            (label.to_string(), detail, tone, next)
+            let clears_old_failure =
+                matches!(status.state, AuthState::Valid | AuthState::LoggingIn);
+            (label.to_string(), detail, tone, next, clears_old_failure)
         }
     };
     let can_continue_login = can_continue && matches!(saved, LoadOutcome::Loaded(_));
     let (overview_label, overview_detail) = match saved {
-        LoadOutcome::Unusable(_) if state_tone != Tone::Good => (
+        LoadOutcome::Unusable(_) => (
             state_value.clone(),
             "已保存的账号信息无法读取，请重新录入。".to_string(),
         ),
-        LoadOutcome::Missing if auth.is_none() => (
-            "尚未登录".to_string(),
-            String::new(),
-        ),
+        LoadOutcome::Missing if auth.is_none() => ("尚未登录".to_string(), String::new()),
         _ => (state_value.clone(), state_detail.clone()),
     };
     AccountView {
@@ -589,10 +646,20 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         state_tone,
         can_clear,
         can_continue_login,
+        clears_old_failure,
         overview_label,
         overview_detail,
         overview_tone: state_tone,
     }
+}
+
+/// Whether the first-open intro is shown.
+///
+/// Only a legal first open without saved credentials shows it, and only until the
+/// user skips or saves the account. A corrupt file is a re-entry case, not a first
+/// open.
+pub fn intro_visible(intro_dismissed: bool, saved: &LoadOutcome) -> bool {
+    !intro_dismissed && matches!(saved, LoadOutcome::Missing)
 }
 
 /// The tray tooltip: the login state only, never an account or password.
