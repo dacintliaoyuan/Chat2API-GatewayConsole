@@ -187,6 +187,78 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
 }
 
 #[test]
+fn theme_mode_switches_dark_and_follows_the_system_theme() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+
+    window.set_theme_mode(2);
+    assert!(window.get_theme_dark(), "深色档必须启用深色配色");
+
+    window.set_theme_mode(1);
+    assert!(!window.get_theme_dark(), "浅色档必须使用浅色配色");
+
+    window.set_system_dark(true);
+    window.set_theme_mode(0);
+    assert!(window.get_theme_dark(), "跟随系统时使用系统深色");
+
+    window.set_system_dark(false);
+    assert!(!window.get_theme_dark(), "跟随系统时使用系统浅色");
+
+    window.set_theme_mode(2);
+    assert!(window.get_theme_dark(), "手动深色不受系统浅色影响");
+}
+
+#[test]
+fn system_theme_changes_notify_the_shell() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    window.on_theme_dark_changed({
+        let seen = Rc::clone(&seen);
+        move |dark| seen.borrow_mut().push(dark)
+    });
+
+    window.set_theme_mode(0);
+    // The shell reads the derived value once after show; that read is what keeps
+    // the binding live for later system changes.
+    assert!(!window.get_theme_dark());
+    window.set_system_dark(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.set_system_dark(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        *seen.borrow(),
+        vec![true, false],
+        "跟随系统时，系统主题变化必须通知外壳（DWM 标题栏依赖该回调）"
+    );
+}
+
+#[test]
+fn appearance_segments_report_the_selected_theme_mode() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    window.on_theme_mode_changed({
+        let selected = Rc::clone(&selected);
+        move |index| selected.borrow_mut().push(index)
+    });
+
+    // Three equal segments: the third one is 深色.
+    let y = window.get_theme_mode_y() + window.get_theme_mode_height() / 2.0;
+    let x = window.get_theme_mode_x() + window.get_theme_mode_width() * 5.0 / 6.0;
+    click(&window, x, y);
+    assert_eq!(*selected.borrow(), vec![2]);
+    assert_eq!(window.get_theme_mode(), 2);
+    assert!(window.get_theme_dark());
+
+    // The first segment returns to 跟随系统.
+    let x = window.get_theme_mode_x() + window.get_theme_mode_width() / 6.0;
+    click(&window, x, y);
+    assert_eq!(*selected.borrow(), vec![2, 0]);
+    assert_eq!(window.get_theme_mode(), 0);
+}
+
+#[test]
 fn first_open_offers_skip_and_keeps_the_configure_entry_after_skipping() {
     let window = window_at(1060.0, 720.0);
     window.set_show_intro(true);
@@ -585,6 +657,53 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
 }
 
 #[test]
+fn escape_clears_only_the_current_pages_detail() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("key-1".into());
+    window.set_open_log_id("row-1".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    press(&window, Key::Escape);
+    assert_eq!(window.get_selected_request().as_str(), "");
+    assert_eq!(
+        window.get_open_log_id().as_str(),
+        "row-1",
+        "Escape on the request page must not clear a hidden log detail"
+    );
+
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    press(&window, Key::Escape);
+    assert_eq!(window.get_open_log_id().as_str(), "");
+}
+
+#[test]
+fn copy_detail_acknowledges_for_1_2_seconds() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("key-1".into());
+    window.set_request_detail("request body".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_request_detail_copied());
+
+    click(
+        &window,
+        window.get_request_detail_copy_x() + window.get_request_detail_copy_width() / 2.0,
+        window.get_request_detail_copy_y() + window.get_request_detail_copy_height() / 2.0,
+    );
+    assert!(
+        window.get_request_detail_copied(),
+        "the copy action must acknowledge itself"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
+    assert!(
+        !window.get_request_detail_copied(),
+        "the copy acknowledgement must return to its normal state"
+    );
+}
+
+#[test]
 fn auto_refresh_refreshes_only_the_overview_on_the_selected_interval() {
     let window = window_at(1060.0, 720.0);
     assert_eq!(window.get_auto_refresh(), 5);
@@ -656,6 +775,79 @@ fn hiding_the_window_pauses_auto_refresh_and_showing_refreshes_immediately() {
 }
 
 #[test]
+fn clearing_the_search_empties_it_and_reruns_the_query() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_request_keyword("fixture".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_request_search_clear_visible());
+
+    let queries = Rc::new(std::cell::Cell::new(0));
+    window.on_query_requests({
+        let queries = Rc::clone(&queries);
+        move |_| queries.set(queries.get() + 1)
+    });
+    click(
+        &window,
+        window.get_request_search_clear_x() + window.get_request_search_clear_width() / 2.0,
+        window.get_request_search_clear_y() + window.get_request_search_clear_height() / 2.0,
+    );
+    assert_eq!(window.get_request_keyword().as_str(), "");
+    assert_eq!(queries.get(), 1, "clearing the search must rerun the query");
+}
+
+#[test]
+fn tray_less_quit_requires_a_second_click() {
+    let window = window_at(1060.0, 720.0);
+    window.set_tray_available(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let quits = Rc::new(std::cell::Cell::new(0));
+    window.on_quit_requested({
+        let quits = Rc::clone(&quits);
+        move || quits.set(quits.get() + 1)
+    });
+    assert!(!window.get_quit_confirm_visible());
+
+    click(
+        &window,
+        window.get_quit_button_x() + window.get_quit_button_width() / 2.0,
+        window.get_quit_button_y() + window.get_quit_button_height() / 2.0,
+    );
+    assert!(window.get_quit_confirm_visible());
+    assert_eq!(quits.get(), 0, "the first click only arms the confirmation");
+
+    click(
+        &window,
+        window.get_quit_confirm_x() + window.get_quit_confirm_width() / 2.0,
+        window.get_quit_confirm_y() + window.get_quit_confirm_height() / 2.0,
+    );
+    assert_eq!(quits.get(), 1, "the second click stops the gateway and quits");
+}
+
+#[test]
+fn help_page_lists_shortcuts_and_login_guidance() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_help_visible(), "the help page must be reachable");
+}
+
+#[test]
+fn log_refresh_acknowledgement_expires() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_refreshed(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_log_refreshed());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
+    assert!(
+        !window.get_log_refreshed(),
+        "the refresh acknowledgement must return to its normal state"
+    );
+}
+
+#[test]
 fn manual_refresh_spins_for_six_hundred_ms_and_disables_the_button() {
     let window = window_at(1060.0, 720.0);
     let overviews = Rc::new(Cell::new(0));
@@ -664,7 +856,7 @@ fn manual_refresh_spins_for_six_hundred_ms_and_disables_the_button() {
         move || overviews.set(overviews.get() + 1)
     });
     assert!(!window.get_refreshing());
-    assert_eq!(window.get_refresh_icon_kind(), "refresh");
+    assert_eq!(window.get_refresh_rotation(), 0.0);
     assert!(window.get_overview_refresh_enabled());
 
     click_refresh(
@@ -692,14 +884,19 @@ fn manual_refresh_spins_for_six_hundred_ms_and_disables_the_button() {
     );
 
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
-    assert_eq!(window.get_refresh_icon_kind(), "refresh-90");
+    assert!(
+        (window.get_refresh_rotation() - 90.0).abs() < 0.1,
+        "the first 150 ms turns the icon 90 degrees"
+    );
     assert!(window.get_refreshing());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!((window.get_refresh_rotation() - 180.0).abs() < 0.1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!((window.get_refresh_rotation() - 270.0).abs() < 0.1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
     assert!(!window.get_refreshing());
     assert!(window.get_overview_refresh_enabled());
-    assert_eq!(window.get_refresh_icon_kind(), "refresh");
+    assert_eq!(window.get_refresh_rotation(), 0.0);
 
     click_refresh(
         &window,
@@ -709,4 +906,18 @@ fn manual_refresh_spins_for_six_hundred_ms_and_disables_the_button() {
         window.get_overview_refresh_height(),
     );
     assert_eq!(overviews.get(), 2);
+}
+
+#[test]
+fn the_um_cell_always_has_a_detail_line() {
+    let window = window_at(1060.0, 720.0);
+    window.set_account_label("尚未登录".into());
+    window.set_account_detail("".into());
+    window.set_account_saved("未配置账号".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_account_state_detail_text(), "未配置账号");
+
+    window.set_account_saved("someone@um.edu.mo".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_account_state_detail_text(), "登录后可用");
 }

@@ -12,7 +12,12 @@ export global Theme {
     in-out property <bool> motion: true;
     // One shared 1.4 s breathing phase for every live status dot.
     in-out property <bool> pulse-on: false;
-    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    // 0 follows the Windows app theme, 1 forces light, 2 forces dark.
+    in-out property <int> theme-mode: 0;
+    // Mirrors the system choice from Palette. It stays in-out so the headless
+    // tests can drive the same derivation without a native window.
+    in-out property <bool> system-dark: Palette.color-scheme == ColorScheme.dark;
+    out property <bool> dark: theme-mode == 2 || (theme-mode == 0 && system-dark);
 
     out property <color> background: dark ? #1a1a1c : #f5f5f7;
     out property <color> surface: dark ? #1c1c1e : #ffffff;
@@ -34,8 +39,10 @@ export global Theme {
     out property <color> accent-strong: dark ? #409cff : #0062c4;
     out property <color> on-accent: dark ? #06121f : #ffffff;
     out property <color> accent-soft: dark ? #0b2946 : #e8f2ff;
-    out property <color> series-b: dark ? #34c759 : #1f8a3a;
-    out property <color> series-b-soft: dark ? #12301c : #e8f8ec;
+    // Request counts are a second data series, not a health state. Purple keeps
+    // them distinct from the green "good" status color and the blue accent.
+    out property <color> series-b: dark ? #b8a6ff : #6e56cf;
+    out property <color> series-b-soft: dark ? #2b2347 : #f0ebff;
     out property <color> good: #34c759;
     out property <color> warn: #ff9f0a;
     out property <color> bad: #ff3b30;
@@ -198,6 +205,7 @@ export component Selectable inherits Rectangle {
     }
     accessible-role: button;
     accessible-label: root.label;
+    accessible-checked: root.selected;
     accessible-action-default => { root.activate(); }
 }
 
@@ -209,6 +217,9 @@ export component FocusAction inherits Rectangle {
     in property <bool> link: false;
     in property <bool> enabled: true;
     in property <string> icon: "";
+    // Manual refresh buttons rotate their glyph for 600 ms; the reset to zero
+    // is static so the completed turn never animates backwards.
+    in property <angle> icon-rotation: 0deg;
     in property <bool> icon-only: false;
     in property <string> badge: "";
     // Icon-only actions carry their meaning here; the tooltip appears on hover
@@ -241,6 +252,11 @@ export component FocusAction inherits Rectangle {
             kind: root.icon;
             tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
             cross-axis-self-alignment: center;
+            transform-rotation: root.icon-rotation;
+            animate transform-rotation {
+                duration: root.icon-rotation == 0deg ? 0ms : 150ms;
+                easing: linear;
+            }
         }
         if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
@@ -378,11 +394,20 @@ export component Field inherits VerticalLayout {
     in property <string> icon: "";
     in-out property <string> text;
     in property <bool> password: false;
+    in property <bool> numeric: false;
+    in property <bool> clearable: false;
     in property <bool> enabled: true;
     in property <bool> invalid: false;
     out property <bool> has-focus: input.has-focus;
+    // Test seam: the clear control is only visible while the field has text.
+    out property <bool> clear-visible: clear-button.visible;
+    out property <length> clear-x: clear-button.absolute-position.x;
+    out property <length> clear-y: clear-button.absolute-position.y;
+    out property <length> clear-width: clear-button.width;
+    out property <length> clear-height: clear-button.height;
     callback accepted();
     callback edited(string);
+    callback cleared();
     public function take-focus() { input.focus(); }
     spacing: root.label.is-empty ? 0px : 5px;
     if !root.label.is-empty : Text {
@@ -410,7 +435,8 @@ export component Field inherits VerticalLayout {
         input := TextInput {
             x: root.icon.is-empty ? 10px : 30px;
             y: 1px;
-            width: parent.width - (root.icon.is-empty ? 20px : 40px);
+            width: parent.width - (root.icon.is-empty ? 20px : 40px)
+                - (clear-button.visible ? 26px : 0px);
             height: parent.height - 2px;
             vertical-alignment: center;
             text <=> root.text;
@@ -419,7 +445,7 @@ export component Field inherits VerticalLayout {
             color: Theme.ink;
             selection-background-color: Theme.accent-soft;
             selection-foreground-color: Theme.ink;
-            input-type: root.password ? InputType.password : InputType.text;
+            input-type: root.password ? InputType.password : root.numeric ? InputType.number : InputType.text;
             accessible-label: root.placeholder;
             enabled: root.enabled;
             accepted => { root.accepted(); }
@@ -428,7 +454,8 @@ export component Field inherits VerticalLayout {
         Text {
             x: root.icon.is-empty ? 10px : 30px;
             y: 1px;
-            width: parent.width - (root.icon.is-empty ? 20px : 40px);
+            width: parent.width - (root.icon.is-empty ? 20px : 40px)
+                - (clear-button.visible ? 26px : 0px);
             height: parent.height - 2px;
             text: root.placeholder;
             color: Theme.muted;
@@ -439,6 +466,24 @@ export component Field inherits VerticalLayout {
         pointer := TouchArea {
             mouse-cursor: MouseCursor.text;
             clicked => { input.focus(); }
+        }
+        // A clear control inside the field: it empties the bound text and asks
+        // the owner to re-run the same query or filter a keystroke would.
+        clear-button := ActionButton {
+            visible: root.clearable && !root.text.is-empty && root.enabled;
+            x: parent.width - 28px;
+            y: (parent.height - self.height) / 2;
+            width: 22px;
+            height: 22px;
+            label: "清除";
+            icon: "close";
+            icon-only: true;
+            quiet: true;
+            tooltip: "清除";
+            clicked => {
+                root.text = "";
+                root.cleared();
+            }
         }
     }
 }
@@ -548,7 +593,8 @@ export component NavItem inherits Rectangle {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }
     }
-    accessible-role: button;
+    accessible-role: tab;
     accessible-label: root.label;
+    accessible-checked: root.selected;
     accessible-action-default => { root.activate(); }
 }

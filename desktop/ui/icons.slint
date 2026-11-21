@@ -16,9 +16,6 @@ export component AppIcon inherits Image {
     colorize: root.tint;
     source: root.kind == "search" ? @image-url("icons/search.svg")
         : root.kind == "refresh" ? @image-url("icons/refresh-cw.svg")
-        : root.kind == "refresh-90" ? @image-url("icons/refresh-cw-90.svg")
-        : root.kind == "refresh-180" ? @image-url("icons/refresh-cw-180.svg")
-        : root.kind == "refresh-270" ? @image-url("icons/refresh-cw-270.svg")
         : root.kind == "chevron-left" ? @image-url("icons/chevron-left.svg")
         : root.kind == "chevron-right" ? @image-url("icons/chevron-right.svg")
         : root.kind == "chevron-down" ? @image-url("icons/chevron-down.svg")

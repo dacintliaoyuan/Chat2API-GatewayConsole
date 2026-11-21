@@ -11,6 +11,7 @@
 //! gateway performs the automatic re-login while the app only reads
 //! `/admin/auth/status`.
 
+mod dwm;
 mod tray;
 
 use std::cell::RefCell;
@@ -28,7 +29,7 @@ use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
     AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
 };
-use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
+use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
     HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
@@ -84,6 +85,30 @@ fn status_tone(tone: Tone) -> i32 {
         Tone::Warn => 1,
         Tone::Bad => 2,
         Tone::Neutral => 3,
+    }
+}
+
+fn theme_mode_index(theme: ThemeMode) -> i32 {
+    match theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    }
+}
+
+fn theme_mode_from_index(index: i32) -> ThemeMode {
+    match index {
+        1 => ThemeMode::Light,
+        2 => ThemeMode::Dark,
+        _ => ThemeMode::System,
+    }
+}
+
+fn theme_label(theme: ThemeMode) -> &'static str {
+    match theme {
+        ThemeMode::System => "跟随系统",
+        ThemeMode::Light => "浅色",
+        ThemeMode::Dark => "深色",
     }
 }
 
@@ -291,8 +316,11 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     if let Some(reason) = &update.failure {
         window.set_log_status(format!("刷新失败：{reason}").into());
         window.set_log_tone(status_tone(Tone::Bad));
+        window.set_log_refresh_pending(false);
+        window.set_log_refreshed(false);
         return;
     }
+    let acknowledge_refresh = window.get_log_refresh_pending();
 
     let level = LevelFilter::from_index(window.get_log_filter_level());
     let keyword = window.get_log_filter_keyword().trim().to_lowercase();
@@ -340,6 +368,10 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
     window.set_log_tone(3);
+    window.set_log_refresh_pending(false);
+    if acknowledge_refresh {
+        window.set_log_refreshed(true);
+    }
     window.set_log_version(window.get_log_version().wrapping_add(1));
     window.set_log_updated_at(clock_now().into());
 }
@@ -436,13 +468,13 @@ fn load_historical_logs(
                     };
                     window.set_log_status(text.into());
                     window.set_log_tone(3);
+                    window.set_log_updated_at(clock_now().into());
                 }
                 Err(error) => {
                     nav.older = None;
                     window.set_older_logs(false);
                     window.set_newer_logs(nav.pages.len() > 1);
-                    model.set_vec(Vec::new());
-                    window.set_log_status(format!("历史日志读取失败：{error}").into());
+                    window.set_log_status(format!("刷新失败：历史日志读取失败：{error}").into());
                     window.set_log_tone(status_tone(Tone::Bad));
                 }
             }
@@ -531,25 +563,25 @@ fn load_requests(
             nav.generation = nav.generation.wrapping_add(1);
             (Some(cursor), nav.now, nav.generation)
         } else {
-        match direction {
-            1 => match nav.earlier.take() {
-                Some(cursor) => nav.pages.push(Some(cursor)),
-                None => return,
-            },
-            -1 if nav.pages.len() > 1 => {
-                nav.pages.pop();
-                nav.earlier = None;
+            match direction {
+                1 => match nav.earlier.take() {
+                    Some(cursor) => nav.pages.push(Some(cursor)),
+                    None => return,
+                },
+                -1 if nav.pages.len() > 1 => {
+                    nav.pages.pop();
+                    nav.earlier = None;
+                }
+                -1 => return,
+                _ => {
+                    nav.pages.clear();
+                    nav.pages.push(None);
+                    nav.earlier = None;
+                    nav.now = chrono::Utc::now().timestamp_millis();
+                }
             }
-            -1 => return,
-            _ => {
-                nav.pages.clear();
-                nav.pages.push(None);
-                nav.earlier = None;
-                nav.now = chrono::Utc::now().timestamp_millis();
-            }
-        }
-        nav.generation = nav.generation.wrapping_add(1);
-        (nav.pages.last().cloned().flatten(), nav.now, nav.generation)
+            nav.generation = nav.generation.wrapping_add(1);
+            (nav.pages.last().cloned().flatten(), nav.now, nav.generation)
         }
     };
     let range = Range::from_index(window.get_request_period());
@@ -560,23 +592,19 @@ fn load_requests(
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
     if !refresh {
-    window.set_selected_request("".into());
-    window.set_request_scroll_y(0.0);
-    window.set_request_status("正在读取请求记录…".into());
-    window.set_request_tone(3);
-    window.set_older_requests(false);
-    window.set_newer_requests(false);
+        window.set_selected_request("".into());
+        window.set_request_scroll_y(0.0);
+        window.set_request_status("正在读取请求记录…".into());
+        window.set_request_tone(3);
+        window.set_older_requests(false);
+        window.set_newer_requests(false);
     }
     std::thread::spawn(move || {
         let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else {
-                return;
-            };
+            let Some(window) = weak.upgrade() else { return; };
             let mut nav = nav.lock().expect("request navigation poisoned");
-            if nav.generation != generation {
-                return;
-            }
+            if nav.generation != generation { return; }
             let page = if refresh {
                 let previous = usage::RequestPage {
                     rows: nav.rows.clone(),
@@ -588,10 +616,7 @@ fn load_requests(
             } else {
                 page
             };
-            let rows = page
-                .rows
-                .iter()
-                .map(|row| RequestRow {
+            let rows = page.rows.iter().map(|row| RequestRow {
                 id: row.key.clone().into(),
                 at: row.at.clone().into(),
                 model: row.model.clone().into(),
@@ -601,15 +626,9 @@ fn load_requests(
                     "失败" => status_tone(Tone::Bad),
                     _ => status_tone(Tone::Warn),
                 },
-                    summary: format!(
-                        "{}  {}",
-                        row.duration,
-                        row.request_id.as_deref().unwrap_or("")
-                    )
-                    .into(),
+                summary: format!("{}  {}", row.duration, row.request_id.as_deref().unwrap_or("")).into(),
                 detail: "".into(),
-                })
-                .collect::<Vec<_>>();
+            }).collect::<Vec<_>>();
             let count = rows.len();
             window.set_requests(ModelRc::from(rows.as_slice()));
             if count == 0 || !page.message.is_empty() {
@@ -802,6 +821,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_instance_path(paths.instance_dir.display().to_string().into());
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(status_tone(settings_tone));
+    window.set_theme_mode(theme_mode_index(loaded_config.theme));
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -875,7 +895,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_state = Arc::clone(&auth_state);
         let auth_admin = Arc::clone(&auth_admin);
         std::thread::spawn(move || {
-            let mut last = None;
+            let mut last_success: Option<(u64, Overview, AccountView)> = None;
+            let mut last_failure: Option<String> = None;
             while !QUIT.load(Ordering::SeqCst) {
                 let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
                 let supervision = gateway_status
@@ -898,21 +919,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *auth_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
-                if last
-                    .as_ref()
-                    .is_none_or(|(last_refresh, last_overview, last_account)| {
-                        *last_refresh != refresh
-                            || *last_overview != overview
-                            || *last_account != account
-                    })
-                {
-                    last = Some((refresh, overview.clone(), account.clone()));
-                    let weak = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(window) = weak.upgrade() {
-                            apply_overview(&window, &overview, &account);
+                if overview.failures.is_empty() {
+                    let recovered = last_failure.take().is_some();
+                    if recovered
+                        || last_success
+                            .as_ref()
+                            .is_none_or(|(last_refresh, last_overview, last_account)| {
+                                *last_refresh != refresh
+                                    || *last_overview != overview
+                                    || *last_account != account
+                            })
+                    {
+                        last_success = Some((refresh, overview.clone(), account.clone()));
+                        let weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(window) = weak.upgrade() {
+                                apply_overview(&window, &overview, &account);
+                            }
+                        });
+                    }
+                } else {
+                    // Keep the last good cards; the status line carries the
+                    // refresh failure and the chart keeps its previous points.
+                    let line = overview::status_line(&overview);
+                    if last_failure.as_deref() != Some(line.as_str()) {
+                        last_failure = Some(line.clone());
+                        let weak = weak.clone();
+                        if last_success.is_some() {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(window) = weak.upgrade() {
+                                    window.set_status_line(line.into());
+                                    window.set_status_tone(2);
+                                }
+                            });
+                        } else {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(window) = weak.upgrade() {
+                                    apply_overview(&window, &overview, &account);
+                                }
+                            });
                         }
-                    });
+                    }
                 }
                 std::thread::sleep(Duration::from_secs(if PAUSED.load(Ordering::SeqCst) {
                     3
@@ -1073,8 +1120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let range = Arc::clone(&usage_range);
         window.on_usage_range_changed(move |period| {
             range.store(period, Ordering::SeqCst);
-            // Bump the refresh epoch so choosing the same range again still
-            // re-reads the ledger.
+            // Bumping the refresh epoch makes the reader re-read even when the
+            // selected range did not change (Ctrl+R).
             USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
             if let Some(window) = weak.upgrade() {
                 window.set_usage_points(ModelRc::default());
@@ -1154,7 +1201,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    window.on_refresh_logs(|| {
+    let weak_refresh = window.as_weak();
+    window.on_refresh_logs(move || {
+        if let Some(window) = weak_refresh.upgrade() {
+            // Acknowledge the click before the reader's next 160 ms poll lands;
+            // apply_logs restores the real count and flips the button to 已刷新.
+            window.set_log_refreshed(false);
+            window.set_log_refresh_pending(true);
+            window.set_log_status("正在刷新…".into());
+            window.set_log_tone(3);
+        }
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
@@ -1595,6 +1651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let theme_path = config_path.as_ref().ok().cloned();
     let save_path = config_path.ok();
     let save_config = Arc::clone(&current_config);
     let save_supervisor = Arc::clone(&gateway_supervisor);
@@ -1705,6 +1762,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let theme_config = Arc::clone(&current_config);
+    let weak_theme = window.as_weak();
+    window.on_theme_mode_changed(move |index| {
+        let Some(window) = weak_theme.upgrade() else {
+            return;
+        };
+        let theme = theme_mode_from_index(index);
+        window.set_theme_mode(theme_mode_index(theme));
+        let mut config = theme_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_theme(theme_path.as_deref(), &mut config, theme) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", theme_label(theme)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
     let timer = Timer::default();
     let weak_timer = window.as_weak();
     let shell_timer = shell.clone();
@@ -1766,6 +1846,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.show()?;
+    // The caption belongs to DWM, not Slint; follow the one derived value after
+    // the native window exists and keep following it when the system theme flips.
+    window.on_theme_dark_changed(|dark| {
+        if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, dark) {
+            eprintln!("um-desktop: {error}");
+        }
+    });
+    if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, window.get_theme_dark()) {
+        eprintln!("um-desktop: {error}");
+    }
     slint::run_event_loop_until_quit()?;
     Ok(())
 }
