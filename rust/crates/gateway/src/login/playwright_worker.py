@@ -118,7 +118,7 @@ class BrowserPage:
                 if field.input_value(timeout=5000).strip():
                     return "filled"
                 return field.evaluate("""el => el.matches(':-webkit-autofill')
-                    ? 'protected' : 'missing'""")
+                    ? 'protected' : 'empty'""")
             raise ValueError("unknown operation")
         finally:
             field.dispose()

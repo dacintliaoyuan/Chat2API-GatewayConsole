@@ -41,9 +41,9 @@ param(
 #      guard over a this-boot "running" instance instead of silently losing it
 #      to a newer watch build;
 #   3. /ready failed on FailureThreshold consecutive runs;
-#   4. no private chat2api process exists (the round 18 stop-scope identity -
-#      any other chat2api.py never
-#      count as "alive") and nothing else listens on port 8000;
+#   4. both the private chat2api worker and the ingress identities exist (the
+#      round 18 stop-scope identity - any other chat2api.py never counts as
+#      "alive") and the loopback endpoint is owned by the ingress;
 #   5. the last private instance did not end in a graceful /admin/shutdown
 #      that is newer than the desired state (a deliberate stop that bypassed
 #      the runtime, e.g. a direct control call);
@@ -227,8 +227,77 @@ function Invoke-DefaultProcessQuery {
     # other chat2api.py instances must never
     # make the private instance look alive. A port 8000 listener that is not a
     # private instance is a conflict the watch must not start into.
+    #
+    # #133 A2: in component mode the watch confirms BOTH the worker and the
+    # ingress identities; either missing means the pair is absent. The component
+    # start fills only the missing one. A recorded worker port is only a hint:
+    # with no worker identity process it is stale (the worker crashed and the
+    # port may have been reused by an unrelated process), so it is ignored
+    # instead of becoming a permanent "unconfirmed" that blocks every recovery.
+    # The component start deletes the file before launching a fresh worker.
     try {
         $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $script:ServiceKey } catch { }
+        if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+            # #133 A2: the watch must keep the whole entry alive, not only the
+            # worker. A live worker with a dead ingress would leave 8000
+            # unserved forever, so both identities are required before the pair
+            # counts as verified. The component start fills only the missing one.
+            $workerIdentity = $desc.RecoveryIdentity
+            $ingressIdentity = Get-GatewayComponentIdentity -Descriptor $desc -Name 'ingress'
+            if ($null -eq $ingressIdentity) {
+                return [pscustomobject]@{
+                    State = 'unconfirmed'
+                    Pids = @()
+                    Error = 'ingress_identity_missing'
+                }
+            }
+            $workerScope = Select-GatewayStopScope -Descriptor $desc `
+                -GatewayRoot (Get-GatewayRoot) -Identities @($workerIdentity)
+            if (@($workerScope.Unconfirmed).Count -gt 0) {
+                return [pscustomobject]@{
+                    State = 'unconfirmed'
+                    Pids = @($workerScope.Unconfirmed |
+                        ForEach-Object { [int]$_.ProcessId })
+                    Error = 'identity_unconfirmed'
+                }
+            }
+            $ingressScope = Select-GatewayStopScope -Descriptor $desc `
+                -GatewayRoot (Get-GatewayRoot) -Identities @($ingressIdentity)
+            if (@($ingressScope.Unconfirmed).Count -gt 0) {
+                return [pscustomobject]@{
+                    State = 'unconfirmed'
+                    Pids = @($ingressScope.Unconfirmed |
+                        ForEach-Object { [int]$_.ProcessId })
+                    Error = 'identity_unconfirmed'
+                }
+            }
+            $workerPids = @($workerScope.Private |
+                ForEach-Object { [int]$_.ProcessId })
+            $ingressPids = @($ingressScope.Private |
+                ForEach-Object { [int]$_.ProcessId })
+            if ($workerPids.Count -eq 0 -or $ingressPids.Count -eq 0) {
+                # The pair is incomplete: the component start fills the missing
+                # component and leaves the live one alone. A recorded worker port
+                # is only a hint and never blocks recovery.
+                return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
+            }
+            if ($null -eq (Get-GatewayWorkerPort -Descriptor $desc) -and
+                    (Test-GatewayWorkerStartingExpired -Descriptor $desc `
+                        -Processes $workerScope.Private)) {
+                # A worker alive past StartTimeoutSeconds without a port file is
+                # stuck, not starting: the component start will replace it.
+                return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
+            }
+            $pids = @()
+            foreach ($processId in @($workerPids) + @($ingressPids)) {
+                if ([int]$processId -notin $pids) { $pids += [int]$processId }
+            }
+            return [pscustomobject]@{
+                State = 'verified'; Pids = @($pids); Error = $null
+            }
+        }
         $scope = Select-GatewayStopScope -Descriptor $desc -GatewayRoot (Get-GatewayRoot)
         if (@($scope.Private).Count -gt 0) {
             return [pscustomobject]@{
@@ -309,6 +378,24 @@ function Get-DefaultExitEvidence {
     } finally {
         if ($null -ne $stream) { $stream.Dispose() }
     }
+    # #133 A2: the worker binds an ephemeral port and never logs port=8000.
+    # Read the WorkerPortFile value so a record from the worker still binds the
+    # pid; the descriptor port stays accepted for the Python rollback. No
+    # matching record means no evidence - never a fabricated pid or port.
+    $ports = @()
+    $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
+    if ($null -ne $desc) {
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $script:ServiceKey } catch { }
+        if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+            $workerPort = Get-GatewayWorkerPort -Descriptor $desc
+            if ($null -ne $workerPort) { $ports += [int]$workerPort }
+        }
+        $ports += [int]$desc.Port
+    }
+    $ports = @($ports | Select-Object -Unique)
+    if ($ports.Count -eq 0) { return $null }
+    $portPattern = (@($ports | ForEach-Object { [string]$_ }) -join '|')
     $stampPattern = '^(?<at>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) INFO '
     $lastPid = $null
     $shutdownAt = $null
@@ -319,7 +406,8 @@ function Get-DefaultExitEvidence {
         # R32-KEY-AUTH: the line may carry the instance's own
         # downstream_key=... after pid (chat2api.py:6419-6421); the suffix is
         # optional so records written by either deployment still match.
-        $listen = [regex]::Match($line, $stampPattern + 'listening host=\S+ port=8000 pid=(?<pid>\d+)(?: downstream_key=\S+)?$')
+        $listen = [regex]::Match($line, $stampPattern +
+            ('listening host=\S+ port=(?:{0}) pid=(?<pid>\d+)(?: downstream_key=\S+)?$' -f $portPattern))
         if ($listen.Success) {
             $lastPid = [int]$listen.Groups['pid'].Value
             $shutdownAt = $null
@@ -330,9 +418,9 @@ function Get-DefaultExitEvidence {
         # The instance deployed first on 2026-09-30 wrote the same fact as
         # "shutdown requested ... by=" / "exit begin ... reason=normal"; both
         # forms are accepted so that instance's stop is read the same way.
-        $stop = [regex]::Match($line, $stampPattern + (
-            '(?:exit begin port=8000 pid=(?<pid>\d+) reason=(?:admin_shutdown|normal)$|' +
-            'shutdown requested port=8000 pid=(?<pid>\d+) by=)'))
+        $stop = [regex]::Match($line, $stampPattern + ((
+            '(?:exit begin port=(?:{0}) pid=(?<pid>\d+) reason=(?:admin_shutdown|normal)$|' +
+            'shutdown requested port=(?:{0}) pid=(?<pid>\d+) by=)') -f $portPattern))
         if ($stop.Success -and [int]$stop.Groups['pid'].Value -eq $lastPid -and
                 $null -eq $shutdownAt) {
             # The service log is written in local time (logging's asctime).
@@ -401,14 +489,15 @@ function Invoke-GatewayStart {
 
     # Same runtime primitive as the console and CLI; the start records
     # "running" with source=watch, and chat2api's startup line says so too.
+    # #133 A2: a start (not a restart) is what fills a missing worker while
+    # the ingress stays up; a restart would tear down the healthy ingress.
     $env:SELFUSEAI_GATEWAY_ACTION_SOURCE = 'watch'
     Enable-GatewayDesiredState
-    $restartArgs = @{ Key = $script:ServiceKey }
-    if ($HttpChecker) { $restartArgs.HttpChecker = $HttpChecker }
-    if ($Launcher) { $restartArgs.Launcher = $Launcher }
-    if ($Stopper) { $restartArgs.Stopper = $Stopper }
-    if ($Sleeper) { $restartArgs.Sleeper = $Sleeper }
-    return Restart-GatewayService @restartArgs
+    $startArgs = @{ Key = $script:ServiceKey }
+    if ($HttpChecker) { $startArgs.HttpChecker = $HttpChecker }
+    if ($Launcher) { $startArgs.Launcher = $Launcher }
+    if ($Sleeper) { $startArgs.Sleeper = $Sleeper }
+    return Start-GatewayService @startArgs
 }
 
 function Enter-ServiceLock {
@@ -820,8 +909,31 @@ function Invoke-WatchSelfTest {
     }
     & {
         function Select-GatewayStopScope {
-            param($Descriptor, $GatewayRoot)
-            [pscustomobject]@{ Private = @(); Unconfirmed = @() }
+            param($Descriptor, $GatewayRoot, [object[]]$Identities = @())
+            $component = ''
+            if (@($Identities).Count -gt 0) {
+                $componentProp = $Identities[0].PSObject.Properties['Component']
+                if ($null -ne $componentProp) {
+                    $component = [string]$componentProp.Value
+                }
+            }
+            if ($component -eq 'ingress') {
+                return [pscustomobject]@{
+                    Private = @($script:selfTestIngressScope); Unconfirmed = @()
+                }
+            }
+            return [pscustomobject]@{
+                Private = @($script:selfTestWorkerScope); Unconfirmed = @()
+            }
+        }
+
+        # #133 A2: the split worker publishes its real port in WorkerPortFile;
+        # the self-test fixes that port so the stale-record and listener-address
+        # decision table below exercises the same port source as production
+        # without reading a real data/chat2api-worker.port.
+        function Get-GatewayWorkerPort {
+            param($Descriptor)
+            return 5678
         }
 
         function Get-NetTCPConnection {
@@ -830,20 +942,168 @@ function Invoke-WatchSelfTest {
             [pscustomobject]@{ LocalAddress = $fixtureAddress; OwningProcess = 5678 }
         }
 
+        $descriptor = (Get-GatewayServiceDescriptors)['chat2api']
+        $script:selfTestWorkerScope = @()
+        $script:selfTestIngressScope = @()
         foreach ($fixture in @(
             @{ Address = '100.64.0.1'; Expected = 'absent' }
             @{ Address = 'fd00::1'; Expected = 'absent' }
-            @{ Address = '127.0.0.1'; Expected = 'unconfirmed' }
-            @{ Address = '0.0.0.0'; Expected = 'unconfirmed' }
-            @{ Address = '::'; Expected = 'unconfirmed' }
-            @{ Address = '::ffff:127.0.0.1'; Expected = 'unconfirmed' }
-            @{ Address = 'unreadable'; Expected = 'unconfirmed' }
+            @{ Address = '127.0.0.1'; Expected = 'absent' }
+            @{ Address = '0.0.0.0'; Expected = 'absent' }
+            @{ Address = '::'; Expected = 'absent' }
+            @{ Address = '::ffff:127.0.0.1'; Expected = 'absent' }
+            @{ Address = 'unreadable'; Expected = 'absent' }
         )) {
+            # No worker or ingress identity process: the recorded port is
+            # stale even when an unrelated process (loopback, wildcard or
+            # tailnet) now listens on it. It must never block recovery.
             $fixtureAddress = $fixture.Address
             $result = Invoke-DefaultProcessQuery
             if ($result.State -ne $fixture.Expected) {
-                throw ('self-test failed: listener address {0} expected {1}, got {2}' -f
+                throw ('self-test failed: stale worker port with listener {0} expected {1}, got {2}' -f
                     $fixtureAddress, $fixture.Expected, $result.State)
+            }
+            if ($null -ne (Get-GatewayWorkerRuntimePort -Descriptor $descriptor)) {
+                throw ('self-test failed: stale worker port with listener {0} was treated as the worker port' -f
+                    $fixtureAddress)
+            }
+        }
+
+        # A live worker with a dead ingress is not a verified pair: the watch
+        # must start the service so the component start fills the ingress only.
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+        })
+        $fixtureAddress = '100.64.0.1'
+        $workerOnly = Invoke-DefaultProcessQuery
+        if ($workerOnly.State -ne 'absent') {
+            throw ('self-test failed: a live worker without an ingress was not treated as incomplete (state={0})' -f
+                $workerOnly.State)
+        }
+        if ($null -ne (Get-GatewayWorkerRuntimePort -Descriptor $descriptor)) {
+            throw 'self-test failed: a tailnet-only listener was treated as the worker runtime port'
+        }
+
+        # Ingress only is incomplete too: the worker must be started.
+        $script:selfTestWorkerScope = @()
+        $script:selfTestIngressScope = @([pscustomobject]@{
+            ProcessId = 4243; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode ingress --port 8000'
+        })
+        $ingressOnly = Invoke-DefaultProcessQuery
+        if ($ingressOnly.State -ne 'absent') {
+            throw ('self-test failed: an ingress without a worker was not treated as incomplete (state={0})' -f
+                $ingressOnly.State)
+        }
+
+        # Both identities alive: the pair is verified and both PIDs are named.
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+        })
+        $both = Invoke-DefaultProcessQuery
+        if ($both.State -ne 'verified' -or
+                (@($both.Pids) -join ',') -ne '4242,4243') {
+            throw ('self-test failed: a live worker and ingress were not verified together (state={0}, pids={1})' -f
+                $both.State, (@($both.Pids) -join ','))
+        }
+        $script:selfTestWorkerScope = @()
+        $script:selfTestIngressScope = @()
+    }
+
+    # P2: a worker process alive past StartTimeoutSeconds without a port file
+    # is stuck, not starting: the watch returns absent so the component start
+    # can replace it.
+    & {
+        function Get-GatewayWorkerPort {
+            param($Descriptor)
+            return $null
+        }
+        function Select-GatewayStopScope {
+            param($Descriptor, $GatewayRoot, [object[]]$Identities = @())
+            $component = ''
+            if (@($Identities).Count -gt 0) {
+                $componentProp = $Identities[0].PSObject.Properties['Component']
+                if ($null -ne $componentProp) {
+                    $component = [string]$componentProp.Value
+                }
+            }
+            if ($component -eq 'ingress') {
+                return [pscustomobject]@{
+                    Private = @($script:selfTestIngressScope); Unconfirmed = @()
+                }
+            }
+            return [pscustomobject]@{
+                Private = @($script:selfTestWorkerScope); Unconfirmed = @()
+            }
+        }
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+            CreationDate = [datetime]::UtcNow.AddSeconds(-30)
+        })
+        $script:selfTestIngressScope = @([pscustomobject]@{
+            ProcessId = 4243; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode ingress --port 8000'
+            CreationDate = [datetime]::UtcNow
+        })
+        $expired = Invoke-DefaultProcessQuery
+        if ($expired.State -ne 'absent') {
+            throw ('self-test failed: a worker past the start budget was not treated as absent (state={0})' -f
+                $expired.State)
+        }
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+            CreationDate = [datetime]::UtcNow
+        })
+        $starting = Invoke-DefaultProcessQuery
+        if ($starting.State -ne 'verified' -or
+                (@($starting.Pids) -join ',') -ne '4242,4243') {
+            throw ('self-test failed: a worker within the start budget was not verified (state={0}, pids={1})' -f
+                $starting.State, (@($starting.Pids) -join ','))
+        }
+        $script:selfTestWorkerScope = @()
+        $script:selfTestIngressScope = @()
+    }
+
+    # J7: Invoke-GatewayStart must not forward the watch-only -Stopper seam to
+    # Start-GatewayService (it has no such parameter). A local override proves
+    # the binding without launching or stopping anything.
+    & {
+        function Start-GatewayService {
+            param($Key, $HttpChecker, $Launcher, $Sleeper)
+            return [pscustomobject]@{ Status = 'Started' }
+        }
+        $savedStartService = $script:StartService
+        $savedStopper = $script:Stopper
+        $savedLauncher = $script:Launcher
+        $savedHttpChecker = $script:HttpChecker
+        $savedSleeper = $script:Sleeper
+        $savedSource = $env:SELFUSEAI_GATEWAY_ACTION_SOURCE
+        $savedDesiredEnabled = $script:GatewayDesiredStateEnabled
+        try {
+            $script:StartService = $null
+            $script:Stopper = { param($key, $desc) }
+            $script:Launcher = $null
+            $script:HttpChecker = $null
+            $script:Sleeper = $null
+            $result = Invoke-GatewayStart
+            if ($null -eq $result -or [string]$result.Status -ne 'Started') {
+                throw 'self-test failed: Invoke-GatewayStart with a Stopper seam did not reach the runtime start'
+            }
+        } finally {
+            $script:StartService = $savedStartService
+            $script:Stopper = $savedStopper
+            $script:Launcher = $savedLauncher
+            $script:HttpChecker = $savedHttpChecker
+            $script:Sleeper = $savedSleeper
+            $script:GatewayDesiredStateEnabled = $savedDesiredEnabled
+            if ($null -eq $savedSource) {
+                Remove-Item Env:\SELFUSEAI_GATEWAY_ACTION_SOURCE -ErrorAction SilentlyContinue
+            } else {
+                $env:SELFUSEAI_GATEWAY_ACTION_SOURCE = $savedSource
             }
         }
     }

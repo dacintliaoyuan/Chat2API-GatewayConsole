@@ -235,7 +235,44 @@ function Invoke-ConsoleServiceReady {
             return (New-ConsoleServiceReadyResult -Key $Key -Status 'AlreadyRunning' `
                 -Detail '复用已就绪实例' -ProcessIds @($inspection.ProcessIds))
         }
+        # #133 A2/J1: in component mode a Degraded/Residual state is repaired
+        # per component. Start-GatewayComponents cleans only the residual
+        # component identities and launches only the missing ones; a whole-pair
+        # Stop-GatewayService here would also tear down a healthy ingress.
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $Key } catch { }
+        $componentMode = Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath
         if ($inspection.State -eq 'Degraded') {
+            if ($componentMode) {
+                $start = Start-GatewayService -Key $Key -HttpChecker $HttpChecker `
+                    -Sleeper $Sleeper
+                if ($start.Status -eq 'Started') {
+                    $processIds = @()
+                    try {
+                        $post = Get-GatewayServiceInspection -Key $Key
+                        if ($post.State -eq 'Running') {
+                            $processIds = @($post.ProcessIds)
+                        }
+                    } catch { }
+                    return (New-ConsoleServiceReadyResult -Key $Key -Status 'Started' `
+                        -Detail '已启动缺失组件' -ProcessIds $processIds)
+                }
+                if ($start.Status -eq 'AlreadyRunning') {
+                    return (New-ConsoleServiceReadyResult -Key $Key `
+                        -Status 'AlreadyRunning' -Detail '复用已就绪实例')
+                }
+                $startDetail = ''
+                if ($start.PSObject.Properties['Detail']) {
+                    $startDetail = [string]$start.Detail
+                }
+                if (-not $startDetail) { $startDetail = [string]$start.Status }
+                $status = 'Failed'
+                if ($start.Status -in @('StartPending', 'StartBlocked', 'Conflict')) {
+                    $status = [string]$start.Status
+                }
+                return (New-ConsoleServiceReadyResult -Key $Key -Status $status `
+                    -Detail $startDetail)
+            }
             return (New-ConsoleServiceReadyResult -Key $Key -Status 'Degraded' `
                 -Detail (Format-ConsoleServiceDetail -Prefix '端口已监听但健康检查失败' `
                     -ProcessIds @($inspection.ProcessIds) -Suffix '已保留进程') `
@@ -269,7 +306,11 @@ function Invoke-ConsoleServiceReady {
         }
 
         $terminated = @()
-        if (@($scope.Private).Count -gt 0) {
+        # #133 A2/J1: a component-mode Residual is cleaned per identity by the
+        # component start itself. Only a single-process shape (the Python
+        # rollback or the legacy production instance) goes through the
+        # whole-pair stop here.
+        if (@($scope.Private).Count -gt 0 -and -not $componentMode) {
             $cleanup = Stop-GatewayService -Key $Key -KeepDesiredState -Sleeper $Sleeper
             if ($cleanup.PSObject.Properties['TerminatedProcessIds']) {
                 $terminated = @($cleanup.TerminatedProcessIds)

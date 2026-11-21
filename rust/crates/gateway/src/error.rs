@@ -474,6 +474,70 @@ impl GatewayError {
         }
     }
 
+    // ----- #133 local ingress errors -----
+
+    /// The operator wrote a `stopped` intent; no request is queued.
+    pub fn gateway_stopped() -> Self {
+        Self::new(
+            503,
+            "The local gateway is stopped (gateway_stopped)",
+            "gateway_stopped",
+        )
+        .with_detail(json!({"forwarded": false}))
+        .with_should_retry(false)
+    }
+
+    /// The desired-state file is missing, unreadable, malformed or belongs to
+    /// another boot; no request is queued.
+    pub fn gateway_not_running() -> Self {
+        Self::new(
+            503,
+            "The local gateway is not running (gateway_not_running)",
+            "gateway_not_running",
+        )
+        .with_detail(json!({"forwarded": false}))
+        .with_should_retry(false)
+    }
+
+    /// The worker did not become connectable inside the recovery budget.
+    ///
+    /// Claude Code stops retrying only on `X-Should-Retry: false`; the JSON
+    /// `should_retry` field alone is not enough. The message repeats the code
+    /// because the client displays the message text, not `error.code`.
+    pub fn gateway_recovery_timeout() -> Self {
+        Self::new(
+            503,
+            "The local gateway worker did not recover in time (gateway_recovery_timeout)",
+            "gateway_recovery_timeout",
+        )
+        .with_detail(json!({"forwarded": false}))
+        .with_should_retry(false)
+    }
+
+    /// The bounded recovery queue (count or buffered bytes) is full.
+    pub fn gateway_recovery_queue_full() -> Self {
+        Self::new(
+            503,
+            "The local gateway recovery queue is full (gateway_recovery_queue_full)",
+            "gateway_recovery_queue_full",
+        )
+        .with_detail(json!({"forwarded": false}))
+        .with_retry_after("5")
+        .with_should_retry(true)
+    }
+
+    /// The request was already written to the worker and the worker connection
+    /// ended. `forwarded` is false only when no request byte reached the worker.
+    pub fn gateway_worker_lost(forwarded: bool) -> Self {
+        Self::new(
+            502,
+            "The local gateway worker connection was lost (gateway_worker_lost)",
+            "gateway_worker_lost",
+        )
+        .with_detail(json!({"forwarded": forwarded}))
+        .with_should_retry(false)
+    }
+
     // ----- console (8002) request-boundary codes (usagesrv.py) -----
 
     pub fn console_body(status: u16, code: &str) -> Self {

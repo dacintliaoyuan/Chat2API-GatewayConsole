@@ -17,6 +17,7 @@ pub mod error;
 pub mod event_log;
 pub mod gate;
 pub mod http;
+pub mod ingress;
 pub mod instance;
 pub mod ledger;
 pub mod login;
@@ -33,7 +34,7 @@ pub mod upstream_fault;
 pub mod watch;
 
 pub use body::{read_json_body, BodyPolicy};
-pub use config::{AuthMode, BindMode, GatewayConfig, Role};
+pub use config::{AuthMode, BindMode, GatewayConfig, Role, RunMode};
 pub use error::GatewayError;
 pub use gate::{GateState, RefusalReason, ShareGate};
 pub use readonly::ProxyState;

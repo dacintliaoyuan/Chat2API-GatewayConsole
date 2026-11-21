@@ -262,7 +262,9 @@ impl LoginPage for PlaywrightPage {
         {
             Some("filled") => CredentialField::Filled,
             Some("protected") => CredentialField::ProtectedAutofill,
-            _ => CredentialField::Missing,
+            Some("missing") => CredentialField::Missing,
+            Some("empty") => CredentialField::Empty,
+            _ => CredentialField::ReadFailed,
         }
     }
 

@@ -69,6 +69,7 @@ systemd
 - production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
 - 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：7998/7999/8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
+- `--mode worker` 与 `--mode ingress` 是本机 8000 的拆分形态，见 §2.7；云端 8002/8003 仍用单进程 production 模式。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
 - `um-console` 的 production 模式按角色绑定：cloud 8002、local 8001；candidate 仍只绑临时 loopback 端口。本机 8001 的启动与回滚见 §2.5。
 
@@ -76,14 +77,16 @@ systemd
 
 - 构建：在 `rust/` 下运行 `cargo build --release -p um-gateway`，产物为
   `rust/target/release/um-gateway-candidate.exe`。
-- 启动器：`lib/gateway-runtime.ps1` 的 `chat2api` 描述符 `StartPath` 指向该二进制，
-  `StartArguments` 为
-  `--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token`，
-  `StartWorkingDirectory` 固定为仓库根，使 Rust 的默认 token/profile 路径与 Python 8000
-  一致（`chat2api/token.json`、`chat2api/.edge-profile`）。`StartAction` 仍是
-  `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8000/health`，停止仍是
-  `StopStrategy=GracefulHttp` + `http://127.0.0.1:8000/admin/shutdown`，启动超时与
-  start/stop/restart 语义不变。
+- 启动器：`lib/gateway-runtime.ps1` 的 `chat2api` 描述符 `StartPath` 指向该二进制。
+  `StartArguments`（`--mode production --port 8000 --role local ...`）仍是单进程形状，
+  只在 `.bat` 回滚或过渡期使用；`StartWorkingDirectory` 固定为仓库根，使 Rust 的
+  默认 token/profile 路径与 Python 8000 一致（`chat2api/token.json`、
+  `chat2api/.edge-profile`）。`StartAction` 仍是 `HiddenBatch`，健康检查仍是
+  `http://127.0.0.1:8000/health`，停止仍是 `StopStrategy=GracefulHttp` +
+  `http://127.0.0.1:8000/admin/shutdown`，启动超时与 start/stop/restart 语义不变。
+- #133 A 起 8000 拆成 ingress 与 worker 两个进程；Rust 侧接口见 §2.7。
+  #133 A2 已把 PowerShell 描述符切到 `StartComponents`：`.exe` StartPath 按
+  worker → ingress 启动，`.bat` 回滚仍走单进程 `StartArguments`。
 - 停止边界：Rust 的 `/admin/shutdown` 返回 202 `{"status":"stopping"}`，与 Python 的
   202 一致；`StopStrategy=GracefulHttp` 先发送该请求，再由既有的 scoped stop 兜底，
   Rust 私有实例可优雅退出。
@@ -225,6 +228,149 @@ systemd
   替换描述符，覆盖 Started → AlreadyRunning → Stopped（含
   `terminated_process_ids`）→ AlreadyStopped 与端口冲突 `Conflict`；
   `python_exe` 指向不存在路径时 `service.start` 仍成功。
+
+### 2.7 本机 8000 入口与 worker（#133 A）
+
+- 同一个 `um-gateway-candidate` 二进制增加 `--mode worker` 与 `--mode ingress`；
+  `--mode candidate|production` 仍是单进程形态，云端 8002/8003 不使用拆分形态。
+- worker：本机模型处理进程，只绑定 `127.0.0.1` 的 `--port`（生产 `0`）。监听成功后
+  用临时文件 + rename 原子写 `--worker-port-file`（十进制端口 + 换行 + worker PID +
+  换行）；固定测试端口必须在 1024 以上且不在治理端口表内。优雅退出时删除该文件。
+- ingress：本机模型 API 入口，绑定 `127.0.0.1:8000`（测试可 `0`）；每次连接前重新
+  读 `--worker-port-file`，不缓存、不猜端口。worker 端口文件出现且能连上就转发。
+  Windows 上读取到 PID 行时校验该 PID 的完整可执行路径（规范化后比较）仍是当前
+  网关二进制，不是则视为陈旧记录；PID 行缺失或非法也按陈旧记录处理（不再兼容
+  port-only 记录）；非 Windows 跳过该身份校验。PowerShell 的
+  `Get-GatewayWorkerPort` 同样要求第二行合法 PID，缺失或非法返回未知。
+- 入口参数：`--worker-port-file` 默认 `data/chat2api-worker.port`；
+  `--desired-state-file` 可省略，省略时读环境变量
+  `SELFUSEAI_GATEWAY_DESIRED_STATE`（文件路径）；`--recovery-wait-seconds`
+  默认 `180`；`--recovery-queue-max` 默认 `64`；`--recovery-queue-max-bytes`
+  默认 `67108864`（64 MiB）；`--boot-id` 可省略，省略时读
+  `SELFUSEAI_GATEWAY_BOOT_ID`。
+- 运行意图：入口读 desired-state JSON 的 `state` 与 `boot_id`，仅当
+  `state == "running"` 且 `boot_id` 与入口 boot id 一致时排队；`stopped`
+  返回 503 `gateway_stopped`，缺失、不可读、格式不符或 boot 不一致返回 503
+  `gateway_not_running`。两者都不排队；停止意图在读取请求 body 之前生效。
+- 只有模型 API 请求（`/v1/*`、`/api/*`）进入恢复等待队列；`/admin/*`
+  （`/admin/shutdown` 单独处理）和 `/` 在 worker 不可连接时立即返回 503
+  `gateway_not_running`，不排队。`/health`、`/ready` 仍代理 worker。
+- 未转发请求在 worker 不可连接时排队，最多等待 `--recovery-wait-seconds`；
+  worker 端口文件出现且能连上后各转发一次。客户端断开时从队列移除且不转发。
+- 已向 worker 写出过请求字节后不重新排队、不重发；worker 中途断开返回 502
+  `gateway_worker_lost`，`detail.forwarded` 为 true。没有写出任何请求字节时
+  `detail.forwarded` 为 false。
+- 排队有界：最多 `--recovery-queue-max` 个请求、`--recovery-queue-max-bytes`
+  个缓冲 body 字节；超限返回 503 `gateway_recovery_queue_full`。
+- 错误契约：
+
+  | 场景 | HTTP | `error.code` | `should_retry` | `Retry-After` | `detail.forwarded` |
+  |---|---|---|---|---|---|
+  | 等待 `--recovery-wait-seconds` 仍未恢复 | 503 | `gateway_recovery_timeout` | false | — | false |
+  | 排队数量或字节超限 | 503 | `gateway_recovery_queue_full` | true | 5 | false |
+  | 显式停止 | 503 | `gateway_stopped` | false | — | false |
+  | 运行意图缺失/未知 | 503 | `gateway_not_running` | false | — | false |
+  | 已转发后 worker 断开 | 502 | `gateway_worker_lost` | false | — | true |
+
+- 错误 `message` 文本包含错误码本身（例如 `gateway_recovery_timeout`），因为
+  Claude Code 只显示 message 文本；Claude Code 2.1.327 只把
+  `X-Should-Retry: false` 当作停止重试的信号，不解析 body 的 `should_retry`。
+  除 `gateway_recovery_queue_full` 外的入口错误都带 `X-Should-Retry: false`。
+- `/v1/messages`（含 `/api/v1/messages`）用 Anthropic 错误形状，其余路径用
+  OpenAI 形状（复用 `GatewayError::response_for`）；错误响应带
+  `Cache-Control: no-store` 与 `X-Request-Id`。
+- 转发使用原始 HTTP/1.1 请求字节，并给 worker 发 `Connection: close`；响应转发
+  支持 `Content-Length`、chunked、close-delimited 与 SSE，逐块写出，不缓冲整个
+  上游响应。客户端 keep-alive 在响应自定界（长度或 chunked 终止块）时保持，
+  close-delimited 时关闭。空闲 keep-alive 连接在 `head_read_timeout` 后直接
+  关闭，不写 400；只有真正的请求行/头解析失败才写 400。
+- `/health`、`/ready` 代理 worker，worker 不在时 503；`/admin/shutdown`
+  先校验控制令牌（配置时），再释放排队请求（503 `gateway_stopped`），随后转发
+  worker 关闭；worker 不可达也照常退出（`shutdown_request=true`），不因不可达
+  拒绝入口退出。
+- worker 的优雅停止顺序：先置 shutdown、唤醒 accept 并 join 监听线程（端口先
+  释放），再停 login executor 与 auth watcher；避免入口等待端口释放时超时。
+- PowerShell 接入（#133 A2，2026-11-21）：
+  - `StartComponents` 先 worker 后 ingress；worker 参数为
+    `--mode worker --port 0 --role local --worker-port-file <绝对路径> ...`，
+    ingress 为 `--mode ingress --port 8000 --worker-port-file <绝对路径>
+    --desired-state-file <意图文件> --boot-id <当前 boot> ...`；两个子进程都注入
+    `SELFUSEAI_GATEWAY_BOOT_ID` 与 `SELFUSEAI_GATEWAY_DESIRED_STATE`。
+  - 启动幂等：两者健康时返回 `AlreadyRunning`；ingress 健康而 worker 缺失时只启动
+    worker；两者都缺失时按 worker → ingress 启动；组件残留只按自身身份清理，不重启
+    健康组件。worker 端口文件同时接受相对仓库根的描述符值和测试注入的绝对路径，
+    并要求第二行是合法 worker PID。
+  - 停止先写 `stopped` 意图，再依次 POST ingress `/admin/shutdown`、worker
+    `/admin/shutdown`（worker 端口读 `WorkerPortFile`），最后按身份兜底清理。
+  - inspection 在 worker 或 ingress 处于 Present/Residual/Starting 时走拆分分支，
+    worker `Conflict` 也留在拆分分支（它正面证明拆分形态，不能回落到单进程形状被误认成
+    `Residual`）；两者都缺失、或只有 ingress `Conflict`（8000 被未确认进程占用）时
+    回落到单进程形状，使 Python 回滚与过渡实例仍可识别。8000 的归属只判断
+    loopback 监听，tailnet IPv4/IPv6 监听单独保留；chat2api 的 `/health` 要求 200
+    （ingress 在 worker 缺失时返回 503）。
+  - worker 与 ingress 的健康分别判断：两者都健康才是 `Running`；任一组件
+    `Present/Residual/Starting` 但未全健康是 `Degraded`；拆分分支里只有两者都 `Absent`
+    才回落到单进程形状（最终可能是 `Stopped`）。worker 缺失而 ingress 仍在
+    8000 监听（`/health` 503）时是 `Degraded`，控制台入口只启动缺失的 worker，
+    不再走整对停止。
+  - worker 进程存活但尚未写 `WorkerPortFile` 时是 `Starting`，不是残留：启动在剩余
+    `StartTimeoutSeconds` 内等待端口/监听，不强制停止正在启动的 worker。超过
+    `StartTimeoutSeconds` 后（按 worker 进程的创建时间判断）归类为 `Residual`，由
+    已验证的 scoped stop 重启；watch 的进程查询此时返回 `absent`，只补缺失组件。
+  - `Start-GatewayComponents` 因组件 `Conflict` 返回 `Blocked` 时带 `Reason=Conflict`，
+    服务启动据此返回 `Conflict` 并使用冲突详情；只有残留清理被拒绝才返回
+    `StartBlocked` 和“受管残留进程清理失败”。
+  - 陈旧 `WorkerPortFile`（#133 A2 返修，2026-11-21）：worker 非优雅退出后
+    记录可能残留，端口还可能被无关进程复用。没有 worker 身份进程时该记录一律视为
+    陈旧：健康探测、watch 进程查询和 inspection 都不把它当作 worker 监听；端口占用
+    只有在监听者被确认为 worker 身份时才计入组件状态。`Start-GatewayComponents`
+    在启动 worker 前删除该文件；强制停止 worker 后也删除它。
+  - 启动参数引用（#133 A2 返修，2026-11-21）：`Start-GatewayObservedProcess`
+    对含空白或引号的参数加双引号，并按 Windows `CommandLineToArgvW` 规则转义
+    反斜杠与引号；不含空白的固定参数行保持原样。
+  - 停止等待（#133 A2 返修，2026-11-21）：组件停止先 POST ingress 与 worker
+    的 `/admin/shutdown`，再按 `StopTimeoutSeconds`（默认 5 秒）轮询 worker
+    退出，超时才按身份兜底强制清理。组件启动的 worker 等待计入同一个
+    `StartTimeoutSeconds` 预算，外层不再追加第二个完整超时。
+  - 退出证据范围（#133 A2 返修，2026-11-21）：watch 的
+    `Get-DefaultExitEvidence` 只解析 Python 回滚实例的
+    `listening host=... port=8000 pid=...` 与
+    `exit begin ... reason=admin_shutdown` 行。Rust worker/ingress 不写 listening
+    行，因此拆分形态下退出证据恒为“无证据”，watch 只按进程/端口状态判定；
+    这是已知未覆盖范围，不是“Rust 进程没有退出”。
+  - watch 的进程查询在组件模式下同时确认 worker 与 ingress 身份：任一缺失即返回
+    `absent`，由组件启动只补缺失组件；退出证据使用 `WorkerPortFile`。self-test
+    固定 worker 端口并覆盖陈旧端口记录和 tailnet 监听；绝对路径端口文件由
+    `tests/gateway-runtime.Tests.ps1` 覆盖。
+  - 本节的 Rust 接口不改变 8001 控制台和云端 8002/8003 的单进程形态。
+- 验证（#133 A，2026-11-21）：`cargo test -p um-gateway --test ingress`
+  18 passed（返修后为 20，见下）；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
+  其余用假 worker 覆盖恢复、超时、取消、队列上限、已转发断开、SSE、keep-alive、
+  `/health`/`/ready`、`/admin/*` 不排队与 `/admin/shutdown`（含错误令牌）。
+- 验证（#133 A2 返修，2026-11-21）：
+  - 工作目录：`D:/git/github/Chat2API-GatewayConsole/.worktrees/133-ps`。
+  - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/gateway-runtime.Tests.ps1`：
+    628 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
+    在监听、双组件在监听但未健康、worker `Conflict` + ingress `Absent`、ingress
+    `Conflict` 预检、legacy 单进程 inspection，控制台入口 `Degraded` 分支，
+    `Select-GatewayStopScope -Identities` 收窄、重复停止、worker 端口上的 tailnet
+    监听、陈旧 `WorkerPortFile`、启动中 worker 与超时归 Residual、不可读创建时间
+    fail closed、WorkerPortFile 不可读/非法、启动预算与有界停止等待、含空格可执行
+    路径的身份识别、残留清理前缀只出现一次，以及含空格路径的观察器启动）。
+  - `pwsh -NoProfile -ExecutionPolicy Bypass -File lib/watch-chat2api.ps1 -SelfTest`：
+    PASS（含 worker/ingress 双身份判定、陈旧 worker 端口记录、启动中 worker 超时
+    归 absent、tailnet 监听在 worker 端口，以及 `Invoke-GatewayStart` 不再向运行时
+    转发仅测试用的 `-Stopper`）。
+  - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/console-runtime.Tests.ps1`：
+    101 passed，0 failed（既有控制台入口回归；本轮 `ALL PASS`）。
+  - `cargo test -p um-gateway --test ingress`（工作目录 `rust/`）：20 passed，
+    0 failed；新增空闲 keep-alive 超时直接关闭、部分请求头超时返回 400 的用例。
+  - `cargo test -p um-gateway --lib`（工作目录 `rust/`）：42 passed，0 failed，
+    1 ignored；新增 worker 端口文件 PID 完整路径校验与不同镜像进程的用例。
+  - 未验证范围：真实 Rust worker/ingress 的崩溃与端口复用、真实 Edge 登录、
+    云端 8002/8003、桌面 App 壳；PowerShell 测试用替换的进程表、监听快照、
+    HTTP 与 `Start-Process` 边界，不启动真实服务。非 Windows 上 ingress 跳过
+    worker PID 的完整路径校验。
 
 ## 3. 云端 idle RSS 基线
 

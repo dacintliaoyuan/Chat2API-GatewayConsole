@@ -840,6 +840,15 @@ impl LoginService {
         self.inner.condvar.notify_all();
         persist_auth_state_locked(&self.inner, &state);
     }
+
+    /// Whether shutdown already stopped the executor (test/observability seam).
+    pub fn is_shutdown(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("login state poisoned")
+            .shutdown
+    }
 }
 
 impl ReauthenticationProvider for LoginService {
@@ -1974,6 +1983,11 @@ fn drive_login(
 
         let url = page.url();
         if url != last_url {
+            // The SSO broker and the credential form share a stage name.
+            // Give the next page its own rendering and autofill budget.
+            if origin_without_query(&url) != origin_without_query(&last_url) {
+                stage_seen.remove("umpass");
+            }
             last_url = url.clone();
             idle_deadline = Instant::now() + inner.config.idle_timeout;
         }
@@ -2099,7 +2113,9 @@ fn drive_login(
                 page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
                 page.credential_field(&UMPASS_PASSWORD_SELECTORS),
             ];
-            if fields != [CredentialField::Missing; 2] {
+            if fields.iter().any(|field| {
+                matches!(field, CredentialField::Filled | CredentialField::ProtectedAutofill)
+            }) {
                 saw_umpass_form = true;
             }
             // A rejection is only acted on once a UMPASS form was recognized in
@@ -2177,6 +2193,7 @@ fn drive_login(
                     }
                     let protected_autofill = fields.contains(&CredentialField::ProtectedAutofill);
                     if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
+                        note_umpass_fields(inner, round, fields, "not_attempted_no_credentials");
                         let (reason, form, detail) = if protected_autofill {
                             (
                                 PROTECTED_AUTOFILL_REASON,
@@ -2208,13 +2225,26 @@ fn drive_login(
                     } else {
                         // Explicit environment credentials are a pair. Never combine a
                         // browser-prefilled account with another password.
-                        if page
+                        let failure = if page
                             .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
                             .is_err()
-                            || page
-                                .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
-                                .is_err()
                         {
+                            Some("account_fill_failed")
+                        } else if page
+                            .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
+                            .is_err()
+                        {
+                            Some("password_fill_failed")
+                        } else {
+                            None
+                        };
+                        note_umpass_fields(
+                            inner,
+                            round,
+                            fields,
+                            failure.unwrap_or("fill_calls_succeeded"),
+                        );
+                        if failure.is_some() {
                             return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                         }
                     }
@@ -2416,6 +2446,20 @@ fn check_login_window(page: &dyn LoginPage, visible: bool) -> Option<LoginOutcom
     Some(LoginOutcome::Transient {
         reason: "window_closed".to_string(),
     })
+}
+
+fn note_umpass_fields(
+    inner: &LoginInner,
+    round: u64,
+    [account, password]: [CredentialField; 2],
+    fallback: &'static str,
+) {
+    let detail = format!(
+        "umpass_form account:{} password:{} fallback:{fallback}",
+        account.diagnostic_name(),
+        password.diagnostic_name()
+    );
+    inner.history.note_detail(round, Some(&detail));
 }
 
 fn stop_for_manual(

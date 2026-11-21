@@ -88,8 +88,24 @@ pub struct VisibleTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialField {
     Missing,
+    Empty,
+    Ambiguous,
+    ReadFailed,
     Filled,
     ProtectedAutofill,
+}
+
+impl CredentialField {
+    pub(super) fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Missing => "unresolved",
+            Self::Empty => "empty",
+            Self::Ambiguous => "ambiguous",
+            Self::ReadFailed => "read_failed",
+            Self::Filled => "filled",
+            Self::ProtectedAutofill => "protected_autofill",
+        }
+    }
 }
 
 /// The narrow page facade the login state machine drives.
@@ -297,6 +313,18 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
     command.env("HOME", home);
     command.arg(&request.initial_url);
     command.stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    if request
+        .executable
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("msedge.exe"))
+    {
+        // Edge's compatibility relaunch can exit the child with code 0
+        // before its replacement publishes DevToolsActivePort. Keep the
+        // original child as the owner for startup, liveness and cleanup.
+        command.arg("--edge-skip-compat-layer-relaunch");
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -662,13 +690,16 @@ impl LoginPage for RealPage {
         for attempt in 0..5 {
             match self.evaluate(&expression) {
                 Ok(Value::String(state)) if state == "filled" => return CredentialField::Filled,
+                Ok(Value::String(state)) if state == "missing" => return CredentialField::Missing,
+                Ok(Value::String(state)) if state == "empty" => return CredentialField::Empty,
+                Ok(Value::String(state)) if state == "ambiguous" => return CredentialField::Ambiguous,
                 Ok(Value::String(state)) if state == "protected" => {
                     if attempt == 4 {
                         return CredentialField::ProtectedAutofill;
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                _ => return CredentialField::Missing,
+                _ => return CredentialField::ReadFailed,
             }
         }
         CredentialField::ProtectedAutofill
@@ -912,9 +943,10 @@ fn credential_field_expression(selectors: &[&str]) -> String {
          try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
          catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
          var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
-         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length!==1)return 'missing';\
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(!found.length)return 'missing';\
+         if(found.length>1)return 'ambiguous';\
          var field=found[0];if((field.value||'').trim().length>0)return 'filled';\
-         return field.matches(':-webkit-autofill')?'protected':'missing';}})({selectors})"
+         return field.matches(':-webkit-autofill')?'protected':'empty';}})({selectors})"
     )
 }
 

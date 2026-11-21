@@ -311,7 +311,7 @@ impl LoginHistory {
         self.append(&record, epoch_now());
     }
 
-    /// Record the rejection evidence without adding a round.
+    /// Record diagnostic evidence without adding a round.
     pub fn note_detail(&self, round: u64, detail: Option<&str>) {
         let Some(record) = self.update_active(round, |record| {
             let detail = detail.map(sanitize_reason);

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use um_gateway::login::{LaunchRequest, LoginBrowserFactory, SystemBrowserFactory};
+use um_gateway::login::{CredentialField, LaunchRequest, LoginBrowserFactory, SystemBrowserFactory};
 
 #[test]
 #[ignore = "requires installed Edge; only uses an isolated profile and loopback fixture"]
@@ -114,6 +114,7 @@ fn real_edge_replaces_credentials_and_submits_without_spurious_input_events() {
         <form>
           <input id="account" value="old-fixture-account">
           <input id="password" type="password" value="old-fixture-password">
+          <input id="empty">
           <input class="duplicate" value="first"><input class="duplicate" value="second">
           <input id="locked" readonly value="read-only">
           <button id="submit">Sign in</button>
@@ -152,6 +153,13 @@ fn real_edge_replaces_credentials_and_submits_without_spurious_input_events() {
         .collect::<String>();
     let page = browser.page();
     page.goto(&format!("data:text/html,{encoded}")).unwrap();
+    assert_eq!(page.credential_field(&["#account"]), CredentialField::Filled);
+    assert_eq!(page.credential_field(&["#empty"]), CredentialField::Empty);
+    assert_eq!(page.credential_field(&["#absent"]), CredentialField::Missing);
+    assert_eq!(
+        page.credential_field(&[".duplicate"]),
+        CredentialField::Ambiguous
+    );
     assert!(page.fill(&[".duplicate"], "changed").is_err());
     assert!(page.fill(&["#locked"], "changed").is_err());
     page.fill(&["#account"], "fixture-account").unwrap();

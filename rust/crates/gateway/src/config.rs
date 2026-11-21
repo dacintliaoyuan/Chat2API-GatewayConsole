@@ -224,6 +224,30 @@ impl BindMode {
     }
 }
 
+/// The process shape selected by `--mode`.
+///
+/// `Gateway` is the existing single process. `Worker` is the local model worker:
+/// it is a normal gateway that binds `127.0.0.1` and writes its actual port to a
+/// port file. `Ingress` is the local 8000 listener that forwards to the worker;
+/// it does not assemble a gateway server of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunMode {
+    #[default]
+    Gateway,
+    Worker,
+    Ingress,
+}
+
+impl RunMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gateway => "gateway",
+            Self::Worker => "worker",
+            Self::Ingress => "ingress",
+        }
+    }
+}
+
 /// One gateway role.
 ///
 /// The local role assembles the general `/api/*` passthrough for the local 8000
@@ -372,6 +396,8 @@ pub struct GatewayConfig {
     /// Candidate mode (the default); `false` selects the explicit production
     /// binding policy.
     pub candidate: bool,
+    /// The process shape selected by `--mode`; gateway by default.
+    pub run_mode: RunMode,
     /// The broker instance key file; `None` disables the instance channel.
     pub instance_key_file: Option<PathBuf>,
     /// The instance-channel AF_UNIX socket path prefix.
@@ -439,6 +465,7 @@ impl Default for GatewayConfig {
             retry_delay_base: DEFAULT_RETRY_DELAY_BASE,
             slow_retry_threshold: DEFAULT_SLOW_RETRY_THRESHOLD,
             candidate: true,
+            run_mode: RunMode::Gateway,
             instance_key_file: None,
             instance_pipe_prefix: None,
             registration_file: None,
@@ -697,50 +724,76 @@ impl GatewayConfig {
     /// Fail closed before binding a socket.
     pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
         if !is_loopback_host(&self.bind_host) {
+            let label = if self.run_mode == RunMode::Gateway {
+                self.bind_mode().label()
+            } else {
+                self.run_mode.label()
+            };
             return Err(ConfigError(format!(
-                "{} bind host is not loopback: {}",
-                self.bind_mode().label(),
+                "{label} bind host is not loopback: {}",
                 self.bind_host
             )));
         }
-        if self.candidate {
-            if self.bind_port != 0 {
-                return Err(ConfigError(format!(
-                    "candidate must bind an ephemeral loopback port, got {}",
-                    self.bind_port
-                )));
+        match self.run_mode {
+            RunMode::Worker => {
+                // The worker is the local model process. Production passes port 0;
+                // a fixed test port must stay outside the governed console/gateway
+                // pair so a worker can never take 8000/8001 from the ingress.
+                if self.bind_port != 0
+                    && (self.bind_port < 1024 || governed_ports().contains(&self.bind_port))
+                {
+                    return Err(ConfigError(format!(
+                        "worker must bind an ephemeral loopback port or a non-governed high port, got {}",
+                        self.bind_port
+                    )));
+                }
             }
-            if governed_ports().contains(&self.bind_port) {
-                return Err(ConfigError(format!(
-                    "refusing to bind governed production port {}",
-                    self.bind_port
-                )));
+            RunMode::Ingress => {
+                return Err(ConfigError(
+                    "ingress mode is served by the ingress listener, not the gateway server"
+                        .to_string(),
+                ));
             }
-        } else {
-            if !production_ports().contains(&self.bind_port) {
-                return Err(ConfigError(format!(
-                    "production must bind one of 7998, 7999, 8000, 8002 or 8003 on loopback, got {}",
-                    self.bind_port
-                )));
+            RunMode::Gateway if self.candidate => {
+                if self.bind_port != 0 {
+                    return Err(ConfigError(format!(
+                        "candidate must bind an ephemeral loopback port, got {}",
+                        self.bind_port
+                    )));
+                }
+                if governed_ports().contains(&self.bind_port) {
+                    return Err(ConfigError(format!(
+                        "refusing to bind governed production port {}",
+                        self.bind_port
+                    )));
+                }
             }
-            // #75 user story 17: the local role assembles the general `/api/*`
-            // surface, so it may never run on the cloud 8002/8003 pair; the
-            // cloud role keeps that surface unassembled on 8002/8003 only.
-            let role_allowed = match self.role {
-                Role::Local => matches!(self.bind_port, 7998 | 7999 | 8000),
-                Role::Cloud => matches!(self.bind_port, 8002 | 8003),
-            };
-            if !role_allowed {
-                let allowed = match self.role {
-                    Role::Local => "7998, 7999 or 8000",
-                    Role::Cloud => "8002 or 8003",
+            RunMode::Gateway => {
+                if !production_ports().contains(&self.bind_port) {
+                    return Err(ConfigError(format!(
+                        "production must bind one of 7998, 7999, 8000, 8002 or 8003 on loopback, got {}",
+                        self.bind_port
+                    )));
+                }
+                // #75 user story 17: the local role assembles the general `/api/*`
+                // surface, so it may never run on the cloud 8002/8003 pair; the
+                // cloud role keeps that surface unassembled on 8002/8003 only.
+                let role_allowed = match self.role {
+                    Role::Local => matches!(self.bind_port, 7998 | 7999 | 8000),
+                    Role::Cloud => matches!(self.bind_port, 8002 | 8003),
                 };
-                return Err(ConfigError(format!(
-                    "production role {} must bind {}, got {}",
-                    self.role.as_str(),
-                    allowed,
-                    self.bind_port
-                )));
+                if !role_allowed {
+                    let allowed = match self.role {
+                        Role::Local => "7998, 7999 or 8000",
+                        Role::Cloud => "8002 or 8003",
+                    };
+                    return Err(ConfigError(format!(
+                        "production role {} must bind {}, got {}",
+                        self.role.as_str(),
+                        allowed,
+                        self.bind_port
+                    )));
+                }
             }
         }
         if !(1..=MAX_SHARE_REQUEST_BYTES).contains(&self.share_max_request_bytes) {

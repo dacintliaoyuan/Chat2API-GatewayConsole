@@ -17,7 +17,7 @@
 
 - `chat2api/.edge-profile/DevToolsActivePort`：只有原生 CDP 驱动启动浏览器时写；文件时间就是原生轮次开始时间。Playwright 驱动走 pipe，不写这个文件。
 - `chat2api/.edge-profile/login-browser.lock`：每轮登录的 profile 占用，内容含 `pid`、`process_started_epoch`、`acquired_epoch`；两个驱动共用。
-- `data/login-history.jsonl`：每轮记录，含 `driver`（`native` / `playwright`）与拒绝时命中的 `detail`（页面 selector）。
+- `data/login-history.jsonl`：每轮记录含 `driver`（`native` / `playwright`）。表单未就绪时，`detail` 记录账号栏、密码栏的探测状态，以及是否尝试用本机已配置的凭据补填和补填结果。页面明确拒绝凭据时，`detail` 记录命中的页面 selector。表单记录只包含固定状态，凭据值和浏览器异常原文留在内存中。
 - `data/login-playwright-python`：Playwright opt-in；文件存在时本机 8000 走 Playwright，移走并重启后走原生。
 
 ## 回归方法
