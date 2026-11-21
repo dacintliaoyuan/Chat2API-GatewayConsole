@@ -313,6 +313,18 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
     command.env("HOME", home);
     command.arg(&request.initial_url);
     command.stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    if request
+        .executable
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("msedge.exe"))
+    {
+        // Edge's compatibility relaunch can exit the child with code 0
+        // before its replacement publishes DevToolsActivePort. Keep the
+        // original child as the owner for startup, liveness and cleanup.
+        command.arg("--edge-skip-compat-layer-relaunch");
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
