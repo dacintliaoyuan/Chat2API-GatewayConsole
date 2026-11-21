@@ -1365,12 +1365,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 PortSwitch::RestoreFailed {
                     from,
+                    to,
                     reason,
                     restore_error,
-                    ..
                 } => (
                     format!(
-                        "未切换：{reason}；恢复 127.0.0.1:{from} 也失败：{restore_error}"
+                        "切换失败：{reason}；当前端口 127.0.0.1:{to}，恢复原端口 127.0.0.1:{from} 也失败：{restore_error}"
                     ),
                     Tone::Bad,
                 ),
@@ -1400,6 +1400,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_timer.upgrade() else {
             return;
         };
+        // The single-instance shortcut restores the Win32 window directly, without
+        // the tray callback. Detect that the window is visible again while the log
+        // reader is paused, and resume with the same backfill the tray uses.
+        if PAUSED.load(Ordering::SeqCst) && window.window().is_visible() {
+            show_now(&window);
+        }
         let paused = PAUSED.load(Ordering::SeqCst);
         let tip = {
             let auth = auth_tray
