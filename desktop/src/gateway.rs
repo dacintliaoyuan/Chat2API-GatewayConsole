@@ -520,16 +520,18 @@ impl GatewayHttp for HttpGateway {
     }
 
     fn listener_down(&self, base_url: &str) -> bool {
-        let Some(addr) = base_url
+        let Some(port) = base_url
             .strip_prefix("http://")
             .and_then(|addr| addr.parse::<std::net::SocketAddr>().ok())
+            .map(|addr| addr.port())
         else {
             return false;
         };
-        matches!(
-            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)),
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused
-        )
+        // A successful loopback bind proves the old listener is gone. A
+        // connect probe can time out on a firewall-dropped SYN even after the
+        // process closed the port, which made the desktop switch wait ten
+        // seconds and then report a stop failure.
+        port_available(port).is_ok()
     }
 }
 
