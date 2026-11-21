@@ -227,8 +227,59 @@ function Invoke-DefaultProcessQuery {
     # other chat2api.py instances must never
     # make the private instance look alive. A port 8000 listener that is not a
     # private instance is a conflict the watch must not start into.
+    #
+    # #133 A2: in component mode the watch watches the WORKER only. The ingress
+    # is started by the component start and must not keep the pair "alive" while
+    # the worker is gone. The worker's real port is the WorkerPortFile value; an
+    # occupied worker port with no worker process is an unconfirmed identity.
     try {
         $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $script:ServiceKey } catch { }
+        if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+            $identity = $desc.RecoveryIdentity
+            $scope = Select-GatewayStopScope -Descriptor $desc `
+                -GatewayRoot (Get-GatewayRoot) -Identities @($identity)
+            if (@($scope.Private).Count -gt 0) {
+                return [pscustomobject]@{
+                    State = 'verified'
+                    Pids = @($scope.Private | ForEach-Object { [int]$_.ProcessId })
+                    Error = $null
+                }
+            }
+            if (@($scope.Unconfirmed).Count -gt 0) {
+                return [pscustomobject]@{
+                    State = 'unconfirmed'
+                    Pids = @($scope.Unconfirmed | ForEach-Object { [int]$_.ProcessId })
+                    Error = 'identity_unconfirmed'
+                }
+            }
+            $port = Get-GatewayWorkerPort -Descriptor $desc
+            if ($null -ne $port) {
+                # A Tailscale or LAN listener on another address does not
+                # occupy the worker's loopback socket.
+                $listeners = Get-GatewayListenerSnapshot -Port $port
+                if (@($listeners.Unconfirmed).Count -gt 0) {
+                    return [pscustomobject]@{
+                        State = 'unconfirmed'
+                        Pids = @()
+                        Error = 'worker_port_{0}_listener_unconfirmed' -f $port
+                    }
+                }
+                if (@($listeners.Overlapping).Count -gt 0) {
+                    return [pscustomobject]@{
+                        State = 'unconfirmed'
+                        Pids = @($listeners.Overlapping |
+                            ForEach-Object { [int]$_.OwningProcess })
+                        Error = 'worker_port_{0}_held_by_non_worker_process' -f $port
+                    }
+                }
+            }
+            # Worker missing and its port free: absent even when the ingress
+            # is still running. The component start fills the worker and leaves
+            # the ingress alone.
+            return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
+        }
         $scope = Select-GatewayStopScope -Descriptor $desc -GatewayRoot (Get-GatewayRoot)
         if (@($scope.Private).Count -gt 0) {
             return [pscustomobject]@{
@@ -309,6 +360,24 @@ function Get-DefaultExitEvidence {
     } finally {
         if ($null -ne $stream) { $stream.Dispose() }
     }
+    # #133 A2: the worker binds an ephemeral port and never logs port=8000.
+    # Read the WorkerPortFile value so a record from the worker still binds the
+    # pid; the descriptor port stays accepted for the Python rollback. No
+    # matching record means no evidence - never a fabricated pid or port.
+    $ports = @()
+    $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
+    if ($null -ne $desc) {
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $script:ServiceKey } catch { }
+        if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+            $workerPort = Get-GatewayWorkerPort -Descriptor $desc
+            if ($null -ne $workerPort) { $ports += [int]$workerPort }
+        }
+        $ports += [int]$desc.Port
+    }
+    $ports = @($ports | Select-Object -Unique)
+    if ($ports.Count -eq 0) { return $null }
+    $portPattern = (@($ports | ForEach-Object { [string]$_ }) -join '|')
     $stampPattern = '^(?<at>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) INFO '
     $lastPid = $null
     $shutdownAt = $null
@@ -319,7 +388,8 @@ function Get-DefaultExitEvidence {
         # R32-KEY-AUTH: the line may carry the instance's own
         # downstream_key=... after pid (chat2api.py:6419-6421); the suffix is
         # optional so records written by either deployment still match.
-        $listen = [regex]::Match($line, $stampPattern + 'listening host=\S+ port=8000 pid=(?<pid>\d+)(?: downstream_key=\S+)?$')
+        $listen = [regex]::Match($line, $stampPattern +
+            ('listening host=\S+ port=(?:{0}) pid=(?<pid>\d+)(?: downstream_key=\S+)?$' -f $portPattern))
         if ($listen.Success) {
             $lastPid = [int]$listen.Groups['pid'].Value
             $shutdownAt = $null
@@ -330,9 +400,9 @@ function Get-DefaultExitEvidence {
         # The instance deployed first on 2026-09-30 wrote the same fact as
         # "shutdown requested ... by=" / "exit begin ... reason=normal"; both
         # forms are accepted so that instance's stop is read the same way.
-        $stop = [regex]::Match($line, $stampPattern + (
-            '(?:exit begin port=8000 pid=(?<pid>\d+) reason=(?:admin_shutdown|normal)$|' +
-            'shutdown requested port=8000 pid=(?<pid>\d+) by=)'))
+        $stop = [regex]::Match($line, $stampPattern + ((
+            '(?:exit begin port=(?:{0}) pid=(?<pid>\d+) reason=(?:admin_shutdown|normal)$|' +
+            'shutdown requested port=(?:{0}) pid=(?<pid>\d+) by=)') -f $portPattern))
         if ($stop.Success -and [int]$stop.Groups['pid'].Value -eq $lastPid -and
                 $null -eq $shutdownAt) {
             # The service log is written in local time (logging's asctime).
@@ -401,14 +471,16 @@ function Invoke-GatewayStart {
 
     # Same runtime primitive as the console and CLI; the start records
     # "running" with source=watch, and chat2api's startup line says so too.
+    # #133 A2: a start (not a restart) is what fills a missing worker while
+    # the ingress stays up; a restart would tear down the healthy ingress.
     $env:SELFUSEAI_GATEWAY_ACTION_SOURCE = 'watch'
     Enable-GatewayDesiredState
-    $restartArgs = @{ Key = $script:ServiceKey }
-    if ($HttpChecker) { $restartArgs.HttpChecker = $HttpChecker }
-    if ($Launcher) { $restartArgs.Launcher = $Launcher }
-    if ($Stopper) { $restartArgs.Stopper = $Stopper }
-    if ($Sleeper) { $restartArgs.Sleeper = $Sleeper }
-    return Restart-GatewayService @restartArgs
+    $startArgs = @{ Key = $script:ServiceKey }
+    if ($HttpChecker) { $startArgs.HttpChecker = $HttpChecker }
+    if ($Launcher) { $startArgs.Launcher = $Launcher }
+    if ($Stopper) { $startArgs.Stopper = $Stopper }
+    if ($Sleeper) { $startArgs.Sleeper = $Sleeper }
+    return Start-GatewayService @startArgs
 }
 
 function Enter-ServiceLock {
@@ -820,8 +892,17 @@ function Invoke-WatchSelfTest {
     }
     & {
         function Select-GatewayStopScope {
-            param($Descriptor, $GatewayRoot)
+            param($Descriptor, $GatewayRoot, [object[]]$Identities = @())
             [pscustomobject]@{ Private = @(); Unconfirmed = @() }
+        }
+
+        # #133 A2: the split worker publishes its real port in WorkerPortFile;
+        # the self-test fixes that port so the listener-address decision table
+        # below exercises the same port source as production without reading a
+        # real data/chat2api-worker.port.
+        function Get-GatewayWorkerPort {
+            param($Descriptor)
+            return 5678
         }
 
         function Get-NetTCPConnection {

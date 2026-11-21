@@ -77,17 +77,16 @@ systemd
 
 - 构建：在 `rust/` 下运行 `cargo build --release -p um-gateway`，产物为
   `rust/target/release/um-gateway-candidate.exe`。
-- 启动器：`lib/gateway-runtime.ps1` 的 `chat2api` 描述符 `StartPath` 指向该二进制，
-  `StartArguments` 为
-  `--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token`，
-  `StartWorkingDirectory` 固定为仓库根，使 Rust 的默认 token/profile 路径与 Python 8000
-  一致（`chat2api/token.json`、`chat2api/.edge-profile`）。`StartAction` 仍是
-  `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8000/health`，停止仍是
-  `StopStrategy=GracefulHttp` + `http://127.0.0.1:8000/admin/shutdown`，启动超时与
-  start/stop/restart 语义不变。
+- 启动器：`lib/gateway-runtime.ps1` 的 `chat2api` 描述符 `StartPath` 指向该二进制。
+  `StartArguments`（`--mode production --port 8000 --role local ...`）仍是单进程形状，
+  只在 `.bat` 回滚或过渡期使用；`StartWorkingDirectory` 固定为仓库根，使 Rust 的
+  默认 token/profile 路径与 Python 8000 一致（`chat2api/token.json`、
+  `chat2api/.edge-profile`）。`StartAction` 仍是 `HiddenBatch`，健康检查仍是
+  `http://127.0.0.1:8000/health`，停止仍是 `StopStrategy=GracefulHttp` +
+  `http://127.0.0.1:8000/admin/shutdown`，启动超时与 start/stop/restart 语义不变。
 - #133 A 起 8000 拆成 ingress 与 worker 两个进程；Rust 侧接口见 §2.7。
-  PowerShell 描述符的 `StartComponents` 切换由 #133 A2 完成；切换前上面的单进程
-  `StartArguments` 仍是本机 8000 的启动形式。
+  #133 A2 已把 PowerShell 描述符切到 `StartComponents`：`.exe` StartPath 按
+  worker → ingress 启动，`.bat` 回滚仍走单进程 `StartArguments`。
 - 停止边界：Rust 的 `/admin/shutdown` 返回 202 `{"status":"stopping"}`，与 Python 的
   202 一致；`StopStrategy=GracefulHttp` 先发送该请求，再由既有的 scoped stop 兜底，
   Rust 私有实例可优雅退出。
@@ -286,8 +285,24 @@ systemd
   拒绝入口退出。
 - worker 的优雅停止顺序：先置 shutdown、唤醒 accept 并 join 监听线程（端口先
   释放），再停 login executor 与 auth watcher；避免入口等待端口释放时超时。
-- PowerShell 描述符的 `StartComponents`、启动幂等、watch 与停止顺序由 #133 A2
-  接入；本节的 Rust 接口不改变 8001 控制台和云端 8002/8003 的单进程形态。
+- PowerShell 接入（#133 A2，2026-11-21）：
+  - `StartComponents` 先 worker 后 ingress；worker 参数为
+    `--mode worker --port 0 --role local --worker-port-file <绝对路径> ...`，
+    ingress 为 `--mode ingress --port 8000 --worker-port-file <绝对路径>
+    --desired-state-file <意图文件> --boot-id <当前 boot> ...`；两个子进程都注入
+    `SELFUSEAI_GATEWAY_BOOT_ID` 与 `SELFUSEAI_GATEWAY_DESIRED_STATE`。
+  - 启动幂等：两者健康时返回 `AlreadyRunning`；ingress 健康而 worker 缺失时只启动
+    worker；两者都缺失时按 worker → ingress 启动；组件残留只按自身身份清理，不重启
+    健康组件。worker 端口文件同时接受相对仓库根的描述符值和测试注入的绝对路径。
+  - 停止先写 `stopped` 意图，再依次 POST ingress `/admin/shutdown`、worker
+    `/admin/shutdown`（worker 端口读 `WorkerPortFile`），最后按身份兜底清理。
+  - inspection 只在 worker 或 ingress 处于 Present/Residual 时走拆分分支；两者都
+    缺失或 8000 被未确认进程占用时回落到单进程形状，使 Python 回滚与过渡实例仍可
+    识别。8000 的归属只判断 loopback 监听，tailnet IPv4/IPv6 监听单独保留；
+    chat2api 的 `/health` 要求 200（ingress 在 worker 缺失时返回 503）。
+  - watch 的进程查询只认 worker（`--mode worker`），listener 检查与退出证据使用
+    `WorkerPortFile`；self-test 固定 worker 端口并覆盖绝对路径端口文件。
+  - 本节的 Rust 接口不改变 8001 控制台和云端 8002/8003 的单进程形态。
 - 验证（#133 A，2026-11-21）：`cargo test -p um-gateway --test ingress`
   18 passed；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
   其余用假 worker 覆盖恢复、超时、取消、队列上限、已转发断开、SSE、keep-alive、

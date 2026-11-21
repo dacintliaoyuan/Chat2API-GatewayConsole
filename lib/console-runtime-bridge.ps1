@@ -236,6 +236,41 @@ function Invoke-ConsoleServiceReady {
                 -Detail '复用已就绪实例' -ProcessIds @($inspection.ProcessIds))
         }
         if ($inspection.State -eq 'Degraded') {
+            # #133 A2: a split 8000 pair is Degraded when exactly one
+            # component is ready. Start only the missing component instead of
+            # reporting a dead end (the runtime keeps a healthy component).
+            $startPath = $null
+            try { $startPath = Resolve-GatewayStartPath -Key $Key } catch { }
+            if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+                $start = Start-GatewayService -Key $Key -HttpChecker $HttpChecker `
+                    -Sleeper $Sleeper
+                if ($start.Status -eq 'Started') {
+                    $processIds = @()
+                    try {
+                        $post = Get-GatewayServiceInspection -Key $Key
+                        if ($post.State -eq 'Running') {
+                            $processIds = @($post.ProcessIds)
+                        }
+                    } catch { }
+                    return (New-ConsoleServiceReadyResult -Key $Key -Status 'Started' `
+                        -Detail '已启动缺失组件' -ProcessIds $processIds)
+                }
+                if ($start.Status -eq 'AlreadyRunning') {
+                    return (New-ConsoleServiceReadyResult -Key $Key `
+                        -Status 'AlreadyRunning' -Detail '复用已就绪实例')
+                }
+                $startDetail = ''
+                if ($start.PSObject.Properties['Detail']) {
+                    $startDetail = [string]$start.Detail
+                }
+                if (-not $startDetail) { $startDetail = [string]$start.Status }
+                $status = 'Failed'
+                if ($start.Status -in @('StartPending', 'StartBlocked', 'Conflict')) {
+                    $status = [string]$start.Status
+                }
+                return (New-ConsoleServiceReadyResult -Key $Key -Status $status `
+                    -Detail $startDetail)
+            }
             return (New-ConsoleServiceReadyResult -Key $Key -Status 'Degraded' `
                 -Detail (Format-ConsoleServiceDetail -Prefix '端口已监听但健康检查失败' `
                     -ProcessIds @($inspection.ProcessIds) -Suffix '已保留进程') `
