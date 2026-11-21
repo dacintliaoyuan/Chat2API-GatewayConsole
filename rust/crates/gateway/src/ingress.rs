@@ -148,7 +148,8 @@ impl IngressConfig {
 ///
 /// The worker is the only writer, and the ingress never guesses a port. A reader
 /// either sees the previous complete file or the new complete file, never a partial
-/// decimal.
+/// decimal. The second line carries the worker PID so the ingress can reject a
+/// record whose owner is no longer the gateway binary.
 pub fn write_worker_port_file(path: &Path, port: u16) -> io::Result<()> {
     let Some(parent) = path.parent() else {
         return Err(io::Error::new(
@@ -167,7 +168,7 @@ pub fn write_worker_port_file(path: &Path, port: u16) -> io::Result<()> {
     let temp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
     let result = (|| {
         let mut file = fs::File::create(&temp)?;
-        file.write_all(format!("{port}\n").as_bytes())?;
+        file.write_all(format!("{port}\n{}\n", std::process::id()).as_bytes())?;
         file.sync_all()?;
         fs::rename(&temp, path)
     })();
@@ -815,8 +816,76 @@ fn try_connect_worker(config: &IngressConfig) -> Option<(TcpStream, u16)> {
 
 fn read_worker_port(path: &Path) -> Option<u16> {
     let text = fs::read_to_string(path).ok()?;
-    let port = text.trim().parse::<u16>().ok()?;
-    (port != 0).then_some(port)
+    let mut lines = text.lines();
+    let port = lines.next()?.trim().parse::<u16>().ok()?;
+    if port == 0 {
+        return None;
+    }
+    if let Some(pid) = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+    {
+        // The second line is the worker PID. A record whose PID is no longer
+        // the gateway binary is stale: never forward an Authorization-bearing
+        // request to whatever now owns that port.
+        if !worker_identity_matches(pid) {
+            return None;
+        }
+    }
+    Some(port)
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut core::ffi::c_void;
+    fn QueryFullProcessImageNameW(
+        process: *mut core::ffi::c_void,
+        flags: u32,
+        name: *mut u16,
+        size: *mut u32,
+    ) -> i32;
+    fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+}
+
+#[cfg(windows)]
+fn worker_identity_matches(pid: u32) -> bool {
+    use std::os::windows::ffi::OsStringExt;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    let Some(expected) = std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }) else {
+        return false;
+    };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut buffer = vec![0u16; 32768];
+    let mut size = buffer.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return false;
+    }
+    let actual = std::ffi::OsString::from_wide(&buffer[..size as usize])
+        .to_string_lossy()
+        .into_owned();
+    std::path::Path::new(&actual)
+        .file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case(&expected))
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn worker_identity_matches(_pid: u32) -> bool {
+    // Non-Windows ingress skips the image-name check; the record is still a
+    // complete atomic port and the port must connect.
+    true
 }
 
 fn wait_for_worker_exit(state: &IngressState) {
@@ -1284,4 +1353,43 @@ fn is_timeout_error(error: &io::Error) -> bool {
         error.kind(),
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_port_file(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "um-gateway-port-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("worker.port")
+    }
+
+    #[test]
+    fn worker_port_file_accepts_a_port_only_record() {
+        let path = temp_port_file("port-only");
+        std::fs::write(&path, "12345\n").expect("write port file");
+        assert_eq!(read_worker_port(&path), Some(12345));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn worker_port_file_accepts_the_current_pid() {
+        let path = temp_port_file("current-pid");
+        std::fs::write(&path, format!("12345\n{}\n", std::process::id())).expect("write port file");
+        assert_eq!(read_worker_port(&path), Some(12345));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn worker_port_file_rejects_a_foreign_pid() {
+        let path = temp_port_file("foreign-pid");
+        std::fs::write(&path, "12345\n0\n").expect("write port file");
+        assert_eq!(read_worker_port(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
 }
