@@ -11,6 +11,7 @@
 //! gateway performs the automatic re-login while the app only reads
 //! `/admin/auth/status`.
 
+mod dwm;
 mod tray;
 
 use std::cell::RefCell;
@@ -27,7 +28,7 @@ use um_desktop::account::{
     AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::clipboard;
-use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
+use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus,
     GatewaySupervisor, HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
@@ -82,6 +83,30 @@ fn status_tone(tone: Tone) -> i32 {
         Tone::Warn => 1,
         Tone::Bad => 2,
         Tone::Neutral => 3,
+    }
+}
+
+fn theme_mode_index(theme: ThemeMode) -> i32 {
+    match theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    }
+}
+
+fn theme_mode_from_index(index: i32) -> ThemeMode {
+    match index {
+        1 => ThemeMode::Light,
+        2 => ThemeMode::Dark,
+        _ => ThemeMode::System,
+    }
+}
+
+fn theme_label(theme: ThemeMode) -> &'static str {
+    match theme {
+        ThemeMode::System => "跟随系统",
+        ThemeMode::Light => "浅色",
+        ThemeMode::Dark => "深色",
     }
 }
 
@@ -686,6 +711,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_instance_path(paths.instance_dir.display().to_string().into());
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(status_tone(settings_tone));
+    window.set_theme_mode(theme_mode_index(loaded_config.theme));
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -1374,6 +1400,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let theme_path = config_path.as_ref().ok().cloned();
     let save_path = config_path.ok();
     let save_config = Arc::clone(&current_config);
     let save_supervisor = Arc::clone(&gateway_supervisor);
@@ -1484,6 +1511,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let theme_config = Arc::clone(&current_config);
+    let weak_theme = window.as_weak();
+    window.on_theme_mode_changed(move |index| {
+        let Some(window) = weak_theme.upgrade() else {
+            return;
+        };
+        let theme = theme_mode_from_index(index);
+        window.set_theme_mode(theme_mode_index(theme));
+        let mut config = theme_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_theme(theme_path.as_deref(), &mut config, theme) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", theme_label(theme)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
     let timer = Timer::default();
     let weak_timer = window.as_weak();
     let shell_timer = shell.clone();
@@ -1540,6 +1590,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.show()?;
+    // The caption belongs to DWM, not Slint; follow the one derived value after
+    // the native window exists and keep following it when the system theme flips.
+    window.on_theme_dark_changed(|dark| {
+        if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, dark) {
+            eprintln!("um-desktop: {error}");
+        }
+    });
+    if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, window.get_theme_dark()) {
+        eprintln!("um-desktop: {error}");
+    }
     slint::run_event_loop_until_quit()?;
     Ok(())
 }
