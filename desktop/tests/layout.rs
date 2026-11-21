@@ -1258,6 +1258,119 @@ fn help_page_lists_shortcuts_and_login_guidance() {
 }
 
 #[test]
+fn the_log_page_opens_settings_from_its_toolbar() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert_eq!(
+        window.get_log_settings_icon(),
+        "settings",
+        "the log toolbar entry uses the settings gear"
+    );
+    assert!(
+        window.get_log_settings_width() > 0.0 && window.get_log_settings_height() > 0.0,
+        "the settings entry must be visible on the log page"
+    );
+
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    click(
+        &window,
+        window.get_log_settings_x() + window.get_log_settings_width() / 2.0,
+        window.get_log_settings_y() + window.get_log_settings_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(160));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_page(),
+        2,
+        "the log settings entry must open the settings page"
+    );
+}
+
+#[test]
+fn the_log_filter_row_keeps_every_control_above_the_list() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let controls = [
+        (
+            "time range",
+            window.get_log_period_x(),
+            window.get_log_period_y(),
+            window.get_log_period_width(),
+            window.get_log_period_height(),
+        ),
+        (
+            "level",
+            window.get_log_level_x(),
+            window.get_log_level_y(),
+            window.get_log_level_width(),
+            window.get_log_level_height(),
+        ),
+        (
+            "search",
+            window.get_log_search_x(),
+            window.get_log_search_y(),
+            window.get_log_search_width(),
+            window.get_log_search_height(),
+        ),
+        (
+            "refresh",
+            window.get_log_refresh_x(),
+            window.get_log_refresh_y(),
+            window.get_log_refresh_width(),
+            window.get_log_refresh_height(),
+        ),
+        (
+            "follow",
+            window.get_log_follow_x(),
+            window.get_log_follow_y(),
+            window.get_log_follow_width(),
+            window.get_log_follow_height(),
+        ),
+        (
+            "settings",
+            window.get_log_settings_x(),
+            window.get_log_settings_y(),
+            window.get_log_settings_width(),
+            window.get_log_settings_height(),
+        ),
+    ];
+    for (label, x, y, width, height) in controls {
+        assert!(
+            x >= 0.0 && width > 0.0 && height > 0.0,
+            "{label} control must have a visible box"
+        );
+        assert!(
+            y + height <= window.get_log_list_y() + 1.0,
+            "{label} control must sit above the log list"
+        );
+    }
+    for (index, (label, _, y, _, height)) in controls.iter().enumerate() {
+        for (other, _, other_y, _, other_height) in &controls[index + 1..] {
+            assert!(
+                *y < other_y + other_height && *other_y < y + height,
+                "{label} and {other} must share the filter row"
+            );
+        }
+    }
+    let order: Vec<f32> = controls.iter().map(|(_, x, _, _, _)| *x).collect();
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "filter controls must read left to right in ticket order: {order:?}"
+    );
+}
+
+#[test]
 fn log_refresh_acknowledgement_expires() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
