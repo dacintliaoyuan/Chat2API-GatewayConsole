@@ -11,6 +11,10 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, Share
 
 mod main_ui {
     slint::include_modules!();
+
+    pub fn register_chart(window: &MainWindow) {
+        slintplot::register!(window);
+    }
 }
 
 thread_local! {
@@ -23,11 +27,6 @@ fn init_backend() {
     });
 }
 
-fn ticks(values: &[&str]) -> ModelRc<SharedString> {
-    let values: Vec<SharedString> = values.iter().map(|value| (*value).into()).collect();
-    ModelRc::from(values.as_slice())
-}
-
 fn chart_points() -> Vec<main_ui::UsagePoint> {
     vec![
         main_ui::UsagePoint {
@@ -35,24 +34,24 @@ fn chart_points() -> Vec<main_ui::UsagePoint> {
             detail_label: "北京时间 00:00".into(),
             token_value: "40".into(),
             request_value: "1".into(),
-            token_height: 0.1,
-            request_height: 0.25,
+            token_count: 40.0,
+            request_count: 1.0,
         },
         main_ui::UsagePoint {
             label: "01:00".into(),
             detail_label: "北京时间 01:00".into(),
             token_value: "120".into(),
             request_value: "2".into(),
-            token_height: 0.3,
-            request_height: 0.5,
+            token_count: 120.0,
+            request_count: 2.0,
         },
         main_ui::UsagePoint {
             label: "02:00".into(),
             detail_label: "北京时间 02:00".into(),
             token_value: "80".into(),
             request_value: "1".into(),
-            token_height: 0.2,
-            request_height: 0.25,
+            token_count: 80.0,
+            request_count: 1.0,
         },
     ]
 }
@@ -60,11 +59,13 @@ fn chart_points() -> Vec<main_ui::UsagePoint> {
 fn chart() -> main_ui::MainWindow {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
     window.set_page(0);
     let points = chart_points();
     window.set_usage_points(ModelRc::from(points.as_slice()));
-    window.set_token_ticks(ticks(&["400", "300", "200", "100", "0"]));
-    window.set_request_ticks(ticks(&["4", "3", "2", "1", "0"]));
+    window.set_usage_labels(ModelRc::from([SharedString::from("00:00"), "01:00".into(), "02:00".into()]));
+    window.set_usage_token_counts(ModelRc::from([40.0, 120.0, 80.0]));
+    window.set_usage_request_counts(ModelRc::from([1.0, 2.0, 1.0]));
     window.window().set_size(LogicalSize::new(1060.0, 720.0));
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
@@ -133,11 +134,6 @@ fn switching_bar_line_and_token_request_keeps_the_pinned_value() {
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
     assert_eq!(chart.get_usage_pinned_index(), 1);
     assert_eq!(chart.get_usage_selection_value(), "2");
-    assert_eq!(chart.get_usage_axis_ticks().row_count(), 5);
-    assert_eq!(
-        chart.get_usage_axis_ticks().row_data(0).unwrap().as_str(),
-        "4"
-    );
 
     chart.set_usage_show_line(false);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
@@ -163,30 +159,47 @@ fn clicking_the_same_bucket_again_or_the_unpin_option_clears_the_pin() {
 }
 
 #[test]
-fn arrows_move_enter_pins_and_escape_clears() {
+fn keyboard_browses_and_pins_chart_data() {
     let chart = chart();
     click_bucket(&chart, 0);
     assert_eq!(chart.get_usage_pinned_index(), 0);
 
-    press(&chart, Key::RightArrow);
-    assert_eq!(chart.get_usage_pinned_index(), -1);
-    assert_eq!(chart.get_usage_active_index(), 1);
-    assert_eq!(chart.get_usage_selection_value(), "120");
-
-    press(&chart, Key::Return);
-    assert_eq!(chart.get_usage_pinned_index(), 1);
-    assert!(chart.get_usage_can_unpin());
-
+    chart.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(2.0, 2.0),
+    });
     press(&chart, Key::Escape);
-    assert_eq!(chart.get_usage_pinned_index(), -1);
     assert!(!chart.get_usage_can_unpin());
 
-    press(&chart, Key::LeftArrow);
-    assert_eq!(chart.get_usage_active_index(), 2);
-    assert_eq!(chart.get_usage_selection_value(), "80");
+    press(&chart, Key::Home);
+    press(&chart, Key::RightArrow);
+    assert_eq!(chart.get_usage_active_index(), 1);
+    assert_eq!(chart.get_usage_selection_value(), "120");
+    press(&chart, Key::Return);
+    assert_eq!(chart.get_usage_pinned_index(), 1);
 
+    press(&chart, Key::Escape);
+    press(&chart, Key::End);
+    assert_eq!(chart.get_usage_active_index(), 2);
     press(&chart, Key::Return);
     assert_eq!(chart.get_usage_pinned_index(), 2);
+}
+
+#[test]
+fn changing_range_through_the_segmented_control_reloads_the_chart() {
+    let chart = chart();
+    let selected = std::rc::Rc::new(std::cell::Cell::new(None));
+    chart.on_usage_range_changed({
+        let selected = selected.clone();
+        move |index| selected.set(Some(index))
+    });
+
+    click_bucket(&chart, 1);
+    let x = chart.get_usage_period_x() + chart.get_usage_period_width() / 2.0;
+    click(&chart, x, chart.get_usage_period_y() + 20.0);
+
+    assert_eq!(chart.get_usage_period(), 1);
+    assert_eq!(selected.get(), Some(1));
+    assert!(!chart.get_usage_can_unpin());
 }
 
 fn request_row(index: usize) -> main_ui::RequestRow {
@@ -205,6 +218,7 @@ fn request_row(index: usize) -> main_ui::RequestRow {
 fn closing_request_detail_keeps_filters_page_and_scroll_position() {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
     window.window().set_size(LogicalSize::new(1060.0, 720.0));
     window.set_page(1);
     let rows = (0..20).map(request_row).collect::<Vec<_>>();

@@ -1,5 +1,7 @@
-import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, TextEdit } from "std-widgets.slint";
-import { Theme, Panel, Heading, Hint, Selectable } from "theme.slint";
+import { ComboBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
+import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
+import { ChartEngine } from "@slintplot";
+export { ChartEngine }
 import { UsageChart, UsagePoint } from "usage-chart.slint";
 export { UsagePoint }
 
@@ -21,49 +23,50 @@ export struct RequestRow {
     detail: string,
 }
 
-component NavItem inherits Selectable {
-    height: 38px;
-    Text {
-        x: 10px; width: parent.width - 20px;
-        text: root.label; color: root.selected ? Theme.accent : Theme.ink;
-        font-size: 13px; font-weight: root.selected ? 650 : 500;
-        vertical-alignment: center; overflow: elide;
-    }
-}
-
 component StateCell inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
     in property <string> detail;
     in property <int> tone: 3;
-    spacing: 5px;
+    spacing: 4px;
     alignment: start;
-    Text { text: root.label; color: Theme.muted; font-size: 12px; }
+    Text { text: root.label; color: Theme.muted; font-size: 11px; font-weight: 600; }
     HorizontalLayout {
         spacing: 7px;
         alignment: start;
-        Rectangle { width: 7px; height: 7px; y: (parent.height - self.height) / 2; border-radius: 4px; background: Theme.status(root.tone); }
-        Text { text: root.value; color: Theme.ink; font-weight: 650; font-size: 15px; vertical-alignment: center; wrap: word-wrap; }
+        StatusDot {
+            tone: root.tone;
+            y: (parent.height - self.height) / 2;
+            pulsing: root.value == "检测中" || root.value == "登录中" || root.value == "读取中";
+        }
+        Text {
+            text: root.value;
+            color: Theme.ink;
+            font-family: Theme.font-display;
+            font-weight: 650;
+            font-size: 15px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
     }
     Hint { text: root.detail; visible: !root.detail.is-empty; }
     @children
 }
 
 component Divider inherits Rectangle { height: 1px; background: Theme.edge; }
-component VerticalDivider inherits Rectangle { width: 1px; background: Theme.edge; }
 
 component TextDetails inherits Panel {
     in property <string> title;
     in property <string> body;
     callback closed();
     VerticalLayout {
-        padding: 12px;
-        spacing: 8px;
+        padding: 14px;
+        spacing: 10px;
         HorizontalLayout {
             spacing: 8px;
             Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
-            Button { text: "复制全文"; clicked => { full-text.select-all(); full-text.copy(); } }
-            Button { text: "关闭"; clicked => { root.closed(); } }
+            ActionButton { label: "复制全文"; quiet: true; clicked => { full-text.select-all(); full-text.copy(); } }
+            ActionButton { label: "关闭"; quiet: true; clicked => { root.closed(); } }
         }
         full-text := TextEdit {
             text: root.body;
@@ -80,12 +83,15 @@ component TextDetails inherits Panel {
 // leave no room for the following siblings. Size it from its content instead and
 // opt out of the layout's extra space, so the page scrolls when content overflows.
 component Card inherits Panel {
-    in property <length> inset: 14px;
-    in property <length> gap: 9px;
+    in property <length> inset: 16px;
+    in property <length> gap: 10px;
     out property <length> content-height: content.preferred-height;
     out property <length> content-width: content.width;
     vertical-stretch: 0;
     preferred-height: content.preferred-height;
+    drop-shadow-offset-y: 1px;
+    drop-shadow-blur: 3px;
+    drop-shadow-color: Theme.card-shadow;
     content := VerticalLayout {
         padding: root.inset;
         spacing: root.gap;
@@ -101,9 +107,10 @@ export component MainWindow inherits Window {
     min-height: 420px;
     background: Theme.background;
     default-font-family: "Segoe UI";
-    default-font-size: 13px;
+    default-font-size: 12px;
     private property <bool> compact: root.width < 800px;
-    private property <bool> login-visible: root.show-intro || !root.login-status.is-empty
+    private property <bool> compact-log-filters: root.width < 920px;
+    private property <bool> login-visible: (root.show-intro && root.account-label != "已登录") || !root.login-status.is-empty
         || root.account-can-continue || (!root.account-can-clear && root.account-label != "已登录")
         || !root.account-saved-detail.is-empty;
 
@@ -138,14 +145,15 @@ export component MainWindow inherits Window {
     in property <string> last-update: "—";
     in-out property <int> usage-period: 0;
     in property <[UsagePoint]> usage-points: [];
-    in property <[string]> token-ticks: [];
-    in property <[string]> request-ticks: [];
+    in property <[string]> usage-labels;
+    in property <[float]> usage-token-counts;
+    in property <[float]> usage-request-counts;
     in property <string> token-total: "—";
     in property <string> request-total: "—";
     in property <bool> usage-loading: true;
     in property <string> usage-status;
     in property <int> usage-tone: 3;
-    in property <bool> allow-motion: false;
+    in property <bool> allow-motion: true;
     // Test seam: lets the interaction tests switch chart modes without pixels.
     in-out property <bool> usage-show-line: false;
     in-out property <bool> usage-show-requests: false;
@@ -212,11 +220,13 @@ export component MainWindow inherits Window {
     out property <bool> usage-can-unpin: usage-chart.can-unpin;
     out property <string> usage-selection-label: usage-chart.selection-label;
     out property <string> usage-selection-value: usage-chart.selection-value;
-    out property <[string]> usage-axis-ticks: usage-chart.axis-ticks;
     out property <length> usage-unpin-x: usage-chart.unpin-x;
     out property <length> usage-unpin-y: usage-chart.unpin-y;
     out property <length> usage-unpin-width: usage-chart.unpin-width;
     out property <length> usage-unpin-height: usage-chart.unpin-height;
+    out property <length> usage-period-x: usage-chart.period-x;
+    out property <length> usage-period-y: usage-chart.period-y;
+    out property <length> usage-period-width: usage-chart.period-width;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
     out property <length> request-list-width: request-list-pane.width;
@@ -260,10 +270,10 @@ export component MainWindow inherits Window {
 
     changed account-form-visible => {
         if (root.account-form-visible) {
-            if (root.credential-account-input.is-empty) { account-input.focus(); }
-            else { password-input.focus(); }
+            if (root.credential-account-input.is-empty) { account-input.take-focus(); }
+            else { password-input.take-focus(); }
         } else if (root.page == 2) {
-            edit-account.focus();
+            edit-account.take-focus();
         }
     }
     changed log-version => {
@@ -295,14 +305,20 @@ export component MainWindow inherits Window {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
         Rectangle {
-            width: root.compact ? 110px : 172px;
-            background: Theme.sidebar;
+            width: root.compact ? 84px : 196px;
+            background: Theme.rail;
             VerticalLayout {
-                padding: root.compact ? 8px : 14px;
-                spacing: 5px;
+                padding: root.compact ? 6px : 14px;
+                spacing: 4px;
                 Text {
-                    text: "本机控制台"; color: Theme.ink; font-size: root.compact ? 14px : 17px;
-                    font-weight: 650; height: 44px; vertical-alignment: center;
+                    text: root.compact ? "控制台" : "本机控制台";
+                    color: Theme.rail-ink;
+                    font-family: Theme.font-display;
+                    font-size: root.compact ? 13px : 17px;
+                    font-weight: 650;
+                    height: 44px;
+                    vertical-alignment: center;
+                    letter-spacing: 0.1px;
                 }
                 for label[index] in ["总览", "请求诊断", "运行日志", "设置"] : NavItem {
                     label: label;
@@ -310,8 +326,14 @@ export component MainWindow inherits Window {
                     activate => { root.navigate(index == 2 ? 3 : index == 3 ? 2 : index); }
                 }
                 Rectangle { vertical-stretch: 1; }
-                Hint { text: "关窗后继续运行"; visible: root.tray-available; }
-                Button { text: "退出并停止网关"; visible: !root.tray-available; clicked => { root.quit-requested(); } }
+                Hint { text: root.compact ? "托盘运行" : "关窗后继续运行"; color: Theme.rail-muted; visible: root.tray-available; }
+                FocusAction {
+                    label: root.compact ? "退出" : "退出并停止网关";
+                    quiet: true;
+                    danger: true;
+                    visible: !root.tray-available;
+                    clicked => { root.quit-requested(); }
+                }
             }
         }
 
@@ -323,9 +345,11 @@ export component MainWindow inherits Window {
                 spacing: 8px;
                 Heading {
                     text: root.page == 0 ? "总览" : root.page == 1 ? "请求与诊断" : root.page == 3 ? "运行日志" : "设置";
-                    font-size: 22px; horizontal-stretch: 1; vertical-alignment: center;
+                    font-size: 24px;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
                 }
-                Hint { text: root.active-address; visible: !root.active-address.is-empty; vertical-alignment: center; }
+                Tag { label: root.active-address; tone: 3; visible: !root.active-address.is-empty; }
             }
 
             page-host := Rectangle {
@@ -336,23 +360,23 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 content-width: self.visible-width;
                 overview-content := VerticalLayout {
+                    alignment: start;
                     min-height: self.preferred-height;
                     spacing: 12px;
                     state-card := Card {
                         FlexboxLayout {
                             alignment: stretch;
                             flex-direction: root.compact ? column : row;
+                            flex-wrap: no-wrap;
                             spacing: root.compact ? 12px : 14px;
                             StateCell {
                                 horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
                                 detail: root.gateway-detail; tone: root.gateway-tone;
                             }
-                            Divider { visible: root.compact; horizontal-stretch: 0; }
                             StateCell {
                                 horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
                                 detail: root.account-detail; tone: root.account-tone;
                             }
-                            VerticalDivider { visible: !root.compact; horizontal-stretch: 0; }
                             StateCell {
                                 horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
                                 detail: root.upstream-detail; tone: root.upstream-tone;
@@ -362,19 +386,19 @@ export component MainWindow inherits Window {
                     login-card := Card {
                         gap: 10px;
                         visible: root.login-visible;
-                        preferred-height: root.login-visible ? login-card.content-height : 0px;
+                        height: root.login-visible ? login-card.content-height : 0px;
                         VerticalLayout {
+                            alignment: start;
                             spacing: 10px;
-                            Hint {
-                                visible: root.show-intro;
+                            if root.show-intro && root.account-label != "已登录" : Hint {
                                 text: "登录 UM 后可以调用模型。也可以先查看网关和日志。";
                             }
-                            Hint { text: root.login-status; color: Theme.status(root.login-tone); visible: !root.login-status.is-empty; }
+                            if !root.login-status.is-empty : Hint { text: root.login-status; color: Theme.status_ink(root.login-tone); }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
-                                configure-account-button := Button {
+                                configure-account-button := ActionButton {
                                     visible: !root.account-can-clear || root.account-can-continue || !root.account-saved-detail.is-empty;
-                                    text: root.account-can-continue ? "继续登录" : "配置账号";
+                                    label: root.account-can-continue ? "继续登录" : "配置账号";
                                     enabled: !root.account-busy;
                                     primary: true;
                                     clicked => {
@@ -382,8 +406,8 @@ export component MainWindow inherits Window {
                                         else { root.configure-account(); }
                                     }
                                 }
-                                skip-login-button := Button {
-                                    visible: root.show-intro; text: "稍后登录";
+                                skip-login-button := ActionButton {
+                                    visible: root.show-intro && root.account-label != "已登录"; label: "稍后登录";
                                     clicked => { root.skip-login(); }
                                 }
                             }
@@ -392,13 +416,14 @@ export component MainWindow inherits Window {
                     usage-chart := UsageChart {
                         period <=> root.usage-period;
                         points: root.usage-points;
-                        token-ticks: root.token-ticks;
-                        request-ticks: root.request-ticks;
+                        labels: root.usage-labels;
+                        token-counts: root.usage-token-counts;
+                        request-counts: root.usage-request-counts;
                         token-total: root.token-total;
                         request-total: root.request-total;
                         loading: root.usage-loading;
                         status-text: root.usage-status;
-                        status-tone: Theme.status(root.usage-tone);
+                        status-tone: Theme.status_ink(root.usage-tone);
                         allow-motion: root.allow-motion;
                         show-line <=> root.usage-show-line;
                         show-requests <=> root.usage-show-requests;
@@ -415,28 +440,32 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     visible: !root.compact || root.selected-request.is-empty;
                     spacing: 8px;
-                    HorizontalLayout {
+                    FlexboxLayout {
+                        flex-wrap: wrap;
                         spacing: 8px;
-                        ComboBox {
-                            width: 84px; model: ["今天", "7 天", "30 天"]; current-index <=> root.request-period;
-                            accessible-label: "请求日期范围";
+                        Segmented {
+                            width: 224px;
+                            options: [{ text: "今天" }, { text: "7 天" }, { text: "30 天" }];
+                            current-index <=> root.request-period;
+                            label: "请求日期范围";
                             selected(_) => { root.query-requests(0); }
                         }
-                        ComboBox {
-                            width: 92px; model: ["全部结果", "成功", "失败"]; current-index <=> root.request-result;
-                            accessible-label: "请求结果";
+                        Segmented {
+                            width: 268px;
+                            options: [{ text: "全部结果" }, { text: "成功" }, { text: "失败" }];
+                            current-index <=> root.request-result;
+                            label: "请求结果";
                             selected(_) => { root.query-requests(0); }
                         }
-                        LineEdit {
+                        MaterialField {
                             horizontal-stretch: 1;
-                            placeholder-text: "模型或请求 ID";
-                            accessible-label: "查找请求";
+                            label: "模型或请求 ID";
                             text <=> root.request-keyword;
-                            accepted(_) => { root.query-requests(0); }
+                            accepted => { root.query-requests(0); }
                         }
-                        Button { text: "查询"; clicked => { root.query-requests(0); } }
+                        ActionButton { label: "查询"; primary: true; clicked => { root.query-requests(0); } }
                     }
-                    Hint { text: root.request-status; color: Theme.status(root.request-tone); }
+                    Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); }
                     request-list-panel := Panel {
                         vertical-stretch: 1;
                         ListView {
@@ -452,7 +481,7 @@ export component MainWindow inherits Window {
                                     HorizontalLayout {
                                         spacing: 8px;
                                         Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
-                                        Text { text: item.outcome; color: Theme.status(item.tone); }
+                                        Tag { label: item.outcome; tone: item.tone; }
                                     }
                                     Hint { text: item.at + "  " + item.summary; overflow: elide; wrap: no-wrap; }
                                 }
@@ -461,8 +490,8 @@ export component MainWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 8px; alignment: end;
-                        Button { text: "较新"; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
-                        Button { text: "较早"; enabled: root.older-requests; clicked => { root.query-requests(1); } }
+                        ActionButton { label: "较新"; quiet: true; enabled: root.newer-requests; clicked => { root.query-requests(-1); } }
+                        ActionButton { label: "较早"; quiet: true; enabled: root.older-requests; clicked => { root.query-requests(1); } }
                     }
                 }
                 if !root.selected-request.is-empty : TextDetails {
@@ -475,35 +504,49 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 visible: root.page == 3; vertical-stretch: 1; spacing: 8px;
-                HorizontalLayout {
+                FlexboxLayout {
+                    flex-wrap: wrap;
                     spacing: 8px;
-                    ComboBox {
-                        width: 96px; model: ["实时", "今天", "7 天", "30 天"]; current-index <=> root.log-period;
-                        accessible-label: "日志日期范围";
+                    Segmented {
+                        width: 240px;
+                        options: [{ text: "实时" }, { text: "今天" }, { text: "7 天" }, { text: "30 天" }];
+                        current-index <=> root.log-period;
+                        label: "日志日期范围";
                         selected(_) => { root.log-history(root.log-period, 0); }
                     }
-                    ComboBox {
-                        width: 80px; model: ["全部", "信息", "警告", "错误", "原始"];
-                        accessible-label: "日志级别";
+                    if root.compact-log-filters : ComboBox {
+                        width: 120px;
+                        model: ["全部级别", "信息", "警告", "错误", "原始"];
                         current-index <=> root.log-filter-level;
+                        accessible-label: "日志级别";
                         selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
-                    LineEdit {
-                        horizontal-stretch: 1; placeholder-text: "搜索日志"; accessible-label: "搜索日志";
+                    if !root.compact-log-filters : Segmented {
+                        width: 300px;
+                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始" }];
+                        current-index <=> root.log-filter-level;
+                        label: "日志级别";
+                        selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                    }
+                    MaterialField {
+                        width: root.compact ? 140px : 180px;
+                        label: "搜索日志";
                         text <=> root.log-filter-keyword;
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
-                    Button {
-                        text: "刷新";
+                    ActionButton {
+                        label: "刷新";
+                        quiet: true;
                         clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
                     }
                 }
                 HorizontalLayout {
                     spacing: 8px;
-                    Hint { text: root.log-status; color: Theme.status(root.log-tone); horizontal-stretch: 1; vertical-alignment: center; }
-                    Button {
+                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); horizontal-stretch: 1; vertical-alignment: center; }
+                    ActionButton {
                         visible: root.log-period == 0;
-                        text: root.log-follow ? "暂停跟随" : root.new-log-count > 0 ? "跳到最新（" + root.new-log-count + "）" : "恢复跟随";
+                        quiet: true;
+                        label: root.log-follow ? "暂停跟随" : root.new-log-count > 0 ? "跳到最新（" + root.new-log-count + "）" : "恢复跟随";
                         clicked => {
                             root.log-follow = !root.log-follow;
                             if (root.log-follow) {
@@ -512,8 +555,8 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    Button { visible: root.log-period != 0; enabled: root.newer-logs; text: "较新"; clicked => { root.log-history(root.log-period, -1); } }
-                    Button { visible: root.log-period != 0; enabled: root.older-logs; text: "较早"; clicked => { root.log-history(root.log-period, 1); } }
+                    ActionButton { visible: root.log-period != 0; quiet: true; enabled: root.newer-logs; label: "较新"; clicked => { root.log-history(root.log-period, -1); } }
+                    ActionButton { visible: root.log-period != 0; quiet: true; enabled: root.older-logs; label: "较早"; clicked => { root.log-history(root.log-period, 1); } }
                 }
                 Panel {
                     vertical-stretch: 1;
@@ -535,9 +578,13 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 padding-left: 8px; padding-right: 8px; spacing: 8px;
-                                Text { text: row.at; width: root.compact ? 122px : 160px; font-size: 12px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
-                                Text { text: row.level; width: 49px; font-size: 12px; font-weight: 650; color: row.level == "错误" ? Theme.bad : row.level == "警告" ? Theme.warn : Theme.muted; vertical-alignment: center; }
-                                Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                                DataText { text: row.at; width: root.compact ? 118px : 152px; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                Tag {
+                                    label: row.level;
+                                    tone: row.level == "错误" ? 2 : row.level == "警告" ? 1 : 3;
+                                    width: 54px;
+                                }
+                                Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 12px; vertical-alignment: center; overflow: elide; }
                             }
                         }
                     }
@@ -556,67 +603,82 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 content-width: self.visible-width;
                 settings-content := VerticalLayout {
+                    alignment: start;
                     min-height: self.preferred-height;
                     spacing: 12px;
                     Card {
                         VerticalLayout {
+                            alignment: start;
                             spacing: 9px;
-                            Heading { text: "UM 账号"; }
+                            SectionLabel { text: "UM 账号"; }
                             Hint { text: root.account-saved; }
-                            account-saved-detail := Hint { visible: !root.account-saved-detail.is-empty; text: root.account-saved-detail; }
-                            Text { text: root.account-label; color: Theme.status(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
-                            Hint { visible: !root.account-detail.is-empty; text: root.account-detail; }
+                            account-saved-detail := Hint {
+                                visible: !root.account-saved-detail.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: root.account-saved-detail;
+                            }
+                            Text { text: root.account-label; color: Theme.status_ink(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
+                            if !root.account-detail.is-empty : Hint { text: root.account-detail; }
                             HorizontalLayout {
+                                height: root.account-form-visible ? 0px : self.preferred-height;
                                 spacing: 8px; alignment: start;
-                                edit-account := Button {
+                                edit-account := FocusAction {
                                     visible: !root.account-form-visible; enabled: !root.account-busy;
-                                    text: root.account-can-clear ? "更新账号密码" : "配置账号";
+                                    label: root.account-can-clear ? "更新账号密码" : "配置账号";
                                     clicked => { root.open-account-form(); }
                                 }
-                                Button {
+                                ActionButton {
                                     visible: root.account-can-continue && !root.account-form-visible;
-                                    enabled: !root.account-busy; primary: true; text: "继续登录";
+                                    enabled: !root.account-busy; primary: true; label: "继续登录";
                                     clicked => { root.continue-login(); }
                                 }
                             }
                             HorizontalLayout {
+                                height: root.account-can-clear && !root.account-form-visible ? self.preferred-height : 0px;
                                 alignment: start;
-                                clear-account := Button {
+                                clear-account := FocusAction {
                                     visible: root.account-can-clear && !root.account-form-visible;
                                     enabled: !root.account-busy;
-                                    text: "清除已保存的账号密码";
+                                    quiet: true;
+                                    danger: true;
+                                    label: "清除已保存的账号密码";
                                     clicked => { root.clear-credentials(); }
                                 }
                             }
-                            Hint { visible: !root.credential-status.is-empty; text: root.credential-status; color: Theme.status(root.credential-tone); }
-                            Hint { visible: !root.login-status.is-empty; text: root.login-status; color: Theme.status(root.login-tone); }
+                            if !root.credential-status.is-empty : Hint { text: root.credential-status; color: Theme.status_ink(root.credential-tone); }
+                            if !root.login-status.is-empty : Hint { text: root.login-status; color: Theme.status_ink(root.login-tone); }
                             VerticalLayout {
                                 visible: root.account-form-visible;
+                                height: self.visible ? self.preferred-height : 0px;
                                 spacing: 8px;
                                 Divider { }
-                                Heading { text: "录入账号密码"; }
+                                SectionLabel { text: "录入账号密码"; }
                                 Hint { text: "账号密码保存在本机，供此网关重新登录。"; }
-                                account-input := LineEdit {
+                                account-input := Field {
+                                    label: "UMPASS 账号";
+                                    placeholder: "账号";
                                     text <=> root.credential-account-input;
-                                    placeholder-text: "UMPASS 账号";
-                                    accessible-label: "UMPASS 账号";
-                                    accepted(_) => { password-input.focus(); }
+                                    accepted => { password-input.take-focus(); }
                                 }
-                                password-input := LineEdit {
+                                password-input := Field {
+                                    label: "UMPASS 密码";
+                                    placeholder: "密码";
+                                    password: true;
                                     text <=> root.credential-password-input;
-                                    input-type: root.password-visible ? InputType.text : InputType.password;
-                                    placeholder-text: "UMPASS 密码";
-                                    accessible-label: "UMPASS 密码";
-                                    accepted(_) => {
+                                    accepted => {
                                         if (!root.account-busy) { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
                                 }
-                                password-toggle := CheckBox { text: "显示密码"; checked: root.password-visible; toggled => { root.toggle-password-visible(); } }
+                                password-toggle := Toggle {
+                                    label: "显示密码";
+                                    checked: root.password-visible;
+                                    toggled => { root.toggle-password-visible(); }
+                                }
                                 HorizontalLayout {
                                     alignment: end; spacing: 8px;
-                                    cancel-account := Button { text: "取消"; clicked => { root.close-account-form(); } }
-                                    save-account := Button {
-                                        text: "保存账号"; primary: true; enabled: !root.account-busy;
+                                    cancel-account := FocusAction { label: "取消"; quiet: true; clicked => { root.close-account-form(); } }
+                                    save-account := FocusAction {
+                                        label: "保存账号"; primary: true; enabled: !root.account-busy;
                                         clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
                                 }
@@ -626,19 +688,21 @@ export component MainWindow inherits Window {
                     Card {
                         VerticalLayout {
                             spacing: 9px;
-                            Heading { text: "模型 API 地址"; }
+                            SectionLabel { text: "模型 API 地址"; }
                             Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
                                 Hint { text: "127.0.0.1:"; vertical-alignment: center; }
-                                LineEdit {
-                                    width: 96px; text <=> root.port-input; enabled: !root.port-busy;
-                                    accessible-label: "模型 API 端口";
-                                    accepted(_) => { if (!root.port-busy) { root.save-port(root.port-input); } }
+                                MaterialField {
+                                    width: 148px;
+                                    label: "端口";
+                                    text <=> root.port-input;
+                                    enabled: !root.port-busy;
+                                    accepted => { if (!root.port-busy) { root.save-port(root.port-input); } }
                                 }
-                                Button { text: "切换端口"; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
+                                ActionButton { label: "切换端口"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
-                            Hint { text: root.settings-status; color: Theme.status(root.settings-tone); }
+                            Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
                         }
                     }
                     Card {
@@ -646,15 +710,17 @@ export component MainWindow inherits Window {
                             spacing: 9px;
                             HorizontalLayout {
                                 spacing: 8px;
-                                Heading { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
-                                Button {
-                                    text: root.show-technical ? "收起详情" : "查看详情";
+                                SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
+                                ActionButton {
+                                    label: root.show-technical ? "收起详情" : "查看详情";
+                                    quiet: true;
                                     clicked => { root.show-technical = !root.show-technical; }
                                 }
                             }
-                            VerticalLayout {
-                                visible: root.show-technical; spacing: 8px;
-                                Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status(root.supervision-tone); }
+                            if root.show-technical : VerticalLayout {
+                                spacing: 8px;
+                                Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status_ink(root.supervision-tone); }
+                                Hint { text: root.account-saved-detail; visible: !root.account-saved-detail.is-empty; }
                                 Hint { text: "配置文件  " + root.config-path; }
                                 Hint { text: "实例数据  " + root.instance-path; }
                             }
@@ -666,8 +732,9 @@ export component MainWindow inherits Window {
 
             status-row := HorizontalLayout {
                 spacing: 8px;
-                Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
-                Hint { text: "更新于 " + root.last-update; wrap: no-wrap; }
+                StatusDot { tone: 0; y: (parent.height - self.height) / 2; }
+                Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
+                DataText { text: "更新于 " + root.last-update; vertical-alignment: center; }
             }
         }
     }

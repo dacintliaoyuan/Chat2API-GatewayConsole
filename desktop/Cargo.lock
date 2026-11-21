@@ -4157,6 +4157,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "slintplot"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c510f1641087d83f87dcf92db638a56dae866e83ec8fce0c757f41643fbaf32"
+
+[[package]]
 name = "slotmap"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4781,6 +4787,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "slintplot",
  "um-console",
  "ureq",
  "windows",

@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::TimeZone;
-use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel};
 use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
     AuthRead, AuthState, HttpAuthAdmin, LoadOutcome,
@@ -403,29 +403,29 @@ fn coverage_tone(coverage: Coverage) -> i32 {
 }
 
 fn apply_usage(window: &MainWindow, view: UsageView) {
-    let to_ticks = |labels: Vec<String>| {
-        let ticks: Vec<SharedString> = labels.into_iter().map(Into::into).collect();
-        ModelRc::from(ticks.as_slice())
-    };
-    let token_axis = to_ticks(view.token_ticks);
-    let request_axis = to_ticks(view.request_ticks);
     let points = if matches!(view.coverage, Coverage::Empty | Coverage::Unavailable) {
         Vec::new()
     } else {
-        view.buckets.into_iter().map(|bucket| UsagePoint {
-            label: bucket.label.clone().into(),
-            detail_label: format!("北京时间 {}", bucket.label).into(),
-            token_value: bucket.tokens.into(),
-            request_value: bucket.requests.into(),
-            token_height: bucket.token_fraction.unwrap_or(-1.0),
-            request_height: bucket.request_fraction.unwrap_or(-1.0),
-        }).collect::<Vec<_>>()
+        view.buckets
+            .into_iter()
+            .map(|bucket| UsagePoint {
+                label: bucket.label.get(5..).filter(|_| bucket.label.len() == 10)
+                    .unwrap_or(&bucket.label).into(),
+                detail_label: format!("北京时间 {}", bucket.label).into(),
+                token_value: bucket.tokens.into(),
+                request_value: bucket.requests.into(),
+                token_count: bucket.token_count.map_or(f32::NAN, |value| value as f32),
+                request_count: bucket.request_count.map_or(f32::NAN, |value| value as f32),
+            })
+            .collect::<Vec<_>>()
     };
-    window.set_token_ticks(token_axis);
-    window.set_request_ticks(request_axis);
     window.set_token_total(view.token_total.into());
     window.set_request_total(view.request_total.into());
-    window.set_usage_points(ModelRc::from(points.as_slice()));
+    let points = ModelRc::from(points.as_slice());
+    window.set_usage_labels(ModelRc::new(points.clone().map(|point| point.label)));
+    window.set_usage_token_counts(ModelRc::new(points.clone().map(|point| point.token_count)));
+    window.set_usage_request_counts(ModelRc::new(points.clone().map(|point| point.request_count)));
+    window.set_usage_points(points);
     window.set_usage_status(view.message.into());
     window.set_usage_tone(coverage_tone(view.coverage));
     window.set_usage_loading(false);
@@ -617,6 +617,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let window = MainWindow::new()?;
+    slintplot::register!(window);
     window.set_allow_motion(allow_motion());
     let config_path = config::default_config_path();
     let (loaded_config, settings_status, settings_tone) = match &config_path {

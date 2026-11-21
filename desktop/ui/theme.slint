@@ -1,20 +1,58 @@
 import { Palette } from "std-widgets.slint";
 
+// Magpie's product palette: near-neutral surfaces, one blue accent, green for
+// live/healthy states. The tokens and the 120/150 ms motion follow the Magpie
+// desktop frontend so the console reads as the same instrument.
 export global Theme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-    out property <color> background: dark ? #141b25 : #f4f6fa;
-    out property <color> sidebar: dark ? #192331 : #eaf0f7;
-    out property <color> surface: dark ? #1c2735 : #ffffff;
-    out property <color> edge: dark ? #364457 : #dce2ed;
-    out property <color> ink: dark ? #eef3fa : #19222e;
-    out property <color> muted: dark ? #b6c3d6 : #515d70;
-    out property <color> accent: dark ? #a9caff : #1b5ccc;
-    out property <color> selected: dark ? #29446a : #dfeaff;
-    out property <color> good: dark ? #84dfac : #176a3c;
-    out property <color> warn: dark ? #ffc685 : #8b4c0c;
-    out property <color> bad: dark ? #ffa9a0 : #b42318;
+    out property <color> background: dark ? #1a1a1c : #f5f5f7;
+    out property <color> surface: dark ? #1c1c1e : #ffffff;
+    out property <color> surface-2: dark ? #2c2c2e : #f0f0f2;
+    out property <color> field: dark ? #2c2c2e : #f0f0f2;
+    out property <color> edge: dark ? #38383a : #d2d2d7;
+    out property <color> edge-strong: dark ? #48484a : #b8b8be;
+    out property <color> ink: dark ? #f5f5f7 : #1d1d1f;
+    out property <color> muted: dark ? #b0b0b8 : #6e6e73;
+    out property <color> accent: dark ? #0a84ff : #0071e3;
+    out property <color> accent-strong: dark ? #3a99ff : #0062c4;
+    out property <color> on-accent: #ffffff;
+    out property <color> accent-soft: dark ? #0a2a44 : #e8f2ff;
+    out property <color> series-b: dark ? #34c759 : #1f8a3a;
+    out property <color> series-b-soft: dark ? #12301c : #e8f8ec;
+    out property <color> good: #34c759;
+    out property <color> warn: #ff9f0a;
+    out property <color> bad: #ff3b30;
+    out property <color> good-text: dark ? #4ade80 : #13743a;
+    out property <color> warn-text: dark ? #fbbf24 : #9a5b0b;
+    out property <color> bad-text: dark ? #fca5a5 : #a9271c;
+    out property <color> rail: dark ? #1c1c1e : #f5f5f7;
+    out property <color> rail-2: dark ? #161616 : #ececf0;
+    out property <color> rail-ink: dark ? #f5f5f7 : #1d1d1f;
+    out property <color> rail-muted: dark ? #98989d : #6e6e73;
+    out property <color> rail-selected: dark ? #2c2c2e : #e8f2ff;
+    out property <color> rail-hover: dark ? #242426 : #ececf0;
+    out property <color> grid: dark ? #2c2c2e : #e4e4e4;
+    out property <color> data: dark ? #f5f5f7 : #1d1d1f;
+    out property <color> hover: dark ? #2c2c2e : #f0f0f2;
+    out property <color> selected: dark ? #2c2c2e : #e8f2ff;
+    out property <color> card-shadow: dark ? #00000066 : #00000014;
+    out property <string> font-display: "Segoe UI";
+    out property <string> font-body: "Segoe UI";
+    out property <string> font-data: "Consolas";
+
     public pure function status(tone: int) -> color {
         return tone == 0 ? Theme.good : tone == 1 ? Theme.warn : tone == 2 ? Theme.bad : Theme.muted;
+    }
+
+    public pure function status_ink(tone: int) -> color {
+        return tone == 0 ? Theme.good-text : tone == 1 ? Theme.warn-text : tone == 2 ? Theme.bad-text : Theme.muted;
+    }
+
+    public pure function soft(tone: int) -> color {
+        return tone == 0 ? (dark ? #12301c : #e8f8ec)
+            : tone == 1 ? (dark ? #33240f : #fdf3e2)
+            : tone == 2 ? (dark ? #3a1717 : #fdecea)
+            : (dark ? #2c2c2e : #f0f0f2);
     }
 }
 
@@ -28,8 +66,10 @@ export component Panel inherits Rectangle {
 
 export component Heading inherits Text {
     color: Theme.ink;
+    font-family: Theme.font-display;
     font-size: 17px;
     font-weight: 650;
+    letter-spacing: 0.1px;
 }
 
 export component Hint inherits Text {
@@ -38,15 +78,71 @@ export component Hint inherits Text {
     wrap: word-wrap;
 }
 
+export component SectionLabel inherits Text {
+    color: Theme.ink;
+    font-family: Theme.font-display;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: 0.1px;
+}
+
+export component DataText inherits Text {
+    font-family: Theme.font-data;
+    font-size: 12px;
+    color: Theme.data;
+}
+
+export component StatusDot inherits Rectangle {
+    in property <int> tone: 3;
+    in property <bool> pulsing: false;
+    private property <bool> pulse-on: false;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: Theme.status(root.tone);
+    opacity: root.pulsing && root.pulse-on ? 0.35 : 1;
+    animate background { duration: 120ms; easing: ease-in-out; }
+    animate opacity { duration: 700ms; easing: ease-in-out; }
+    Timer {
+        interval: 700ms;
+        running: root.pulsing;
+        triggered => { root.pulse-on = !root.pulse-on; }
+    }
+}
+
+export component Tag inherits Rectangle {
+    in property <string> label;
+    in property <int> tone: 3;
+    height: 20px;
+    border-radius: 5px;
+    background: Theme.soft(root.tone);
+    animate background { duration: 120ms; easing: ease-in-out; }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.label;
+            color: Theme.status_ink(root.tone);
+            font-family: Theme.font-data;
+            font-size: 11px;
+            font-weight: 650;
+            vertical-alignment: center;
+            animate color { duration: 120ms; easing: ease-in-out; }
+        }
+    }
+}
+
 export component Selectable inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     callback activate();
     min-height: 36px;
     border-radius: 6px;
-    background: root.selected ? Theme.selected : pointer.has-hover ? Theme.sidebar : transparent;
+    background: root.selected ? Theme.selected : pointer.has-hover ? Theme.hover : transparent;
     border-color: Theme.accent;
     border-width: keyboard.has-focus ? 1px : 0px;
+    animate background { duration: 120ms; easing: ease-in-out; }
+    animate border-width { duration: 120ms; easing: ease-in-out; }
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.activate(); }
@@ -64,4 +160,296 @@ export component Selectable inherits Rectangle {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }
     }
+}
+
+export component FocusAction inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus.has-focus;
+    callback clicked();
+    public function take-focus() { focus.focus(); }
+    height: 32px;
+    border-radius: 6px;
+    background: !root.enabled ? Theme.field
+        : root.primary ? (pointer.pressed ? Theme.accent-strong : pointer.has-hover ? Theme.accent-strong : Theme.accent)
+        : root.quiet ? (pointer.has-hover ? Theme.hover : transparent)
+        : (pointer.has-hover ? Theme.hover : Theme.surface);
+    border-width: focus.has-focus ? 2px : root.quiet ? 0px : 1px;
+    border-color: focus.has-focus ? Theme.accent : root.danger ? Theme.bad : root.primary ? Theme.accent : Theme.edge;
+    opacity: root.enabled ? 1 : 0.55;
+    animate background { duration: 120ms; easing: ease-in-out; }
+    animate border-color { duration: 120ms; easing: ease-in-out; }
+    animate border-width { duration: 120ms; easing: ease-in-out; }
+    animate opacity { duration: 120ms; easing: ease-in-out; }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : Theme.ink;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            animate color { duration: 120ms; easing: ease-in-out; }
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                if (root.enabled) { root.clicked(); }
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+}
+
+export component ActionButton inherits FocusAction {
+}
+
+export struct SegmentedItem {
+    text: string,
+}
+
+export component Segmented inherits Rectangle {
+    in property <[SegmentedItem]> options;
+    in-out property <int> current-index: 0;
+    in property <string> label: "选项";
+    callback selected(int);
+    height: 30px;
+    background: Theme.field;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus ? Theme.accent : Theme.edge;
+    animate border-color { duration: 120ms; easing: ease-in-out; }
+        focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow && root.current-index > 0) {
+                root.current-index -= 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.current-index + 1 < root.options.length) {
+                root.current-index += 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for item[index] in root.options : Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 4px;
+            background: root.current-index == index ? Theme.surface : transparent;
+            border-width: 1px;
+            border-color: root.current-index == index ? Theme.edge : transparent;
+            animate background { duration: 120ms; easing: ease-in-out; }
+            animate border-color { duration: 120ms; easing: ease-in-out; }
+            Text {
+                text: item.text;
+                color: root.current-index == index ? Theme.accent : Theme.muted;
+                font-size: 12px;
+                font-weight: root.current-index == index ? 650 : 500;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                animate color { duration: 120ms; easing: ease-in-out; }
+            }
+            pointer := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => {
+                    root.current-index = index;
+                    root.selected(index);
+                }
+            }
+        }
+    }
+    accessible-role: groupbox;
+    accessible-label: root.label;
+}
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> text;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    in property <bool> invalid: false;
+    out property <bool> has-focus: input.has-focus;
+    callback accepted();
+    callback edited(string);
+    public function take-focus() { input.focus(); }
+    spacing: 5px;
+    Text {
+        text: root.label;
+        color: Theme.muted;
+        font-size: 11px;
+        font-weight: 600;
+        visible: !root.label.is-empty;
+    }
+    Rectangle {
+        height: 34px;
+        background: Theme.field;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.accent : Theme.edge;
+        animate border-color { duration: 120ms; easing: ease-in-out; }
+        input := TextInput {
+            x: 10px;
+            y: 0px;
+            width: parent.width - 20px;
+            height: parent.height;
+            text <=> root.text;
+            font-family: Theme.font-body;
+            font-size: 12px;
+            color: Theme.ink;
+            input-type: root.password ? InputType.password : InputType.text;
+            enabled: root.enabled;
+            accepted => { root.accepted(); }
+            edited => { root.edited(self.text); }
+        }
+        Text {
+            x: 10px;
+            y: 0px;
+            width: parent.width - 20px;
+            height: parent.height;
+            text: root.placeholder;
+            color: Theme.muted;
+            font-size: 12px;
+            vertical-alignment: center;
+            visible: root.text.is-empty && !input.has-focus;
+        }
+    }
+}
+
+export component MaterialField inherits Field {
+    min-width: 148px;
+}
+
+export component Toggle inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> checked: false;
+    out property <bool> has-focus: focus.has-focus;
+    callback toggled();
+    public function take-focus() { focus.focus(); }
+    height: 18px;
+    background: transparent;
+    HorizontalLayout {
+        spacing: 7px;
+        alignment: start;
+        Rectangle {
+            width: 17px;
+            height: 17px;
+            border-radius: 4px;
+            background: root.checked ? Theme.accent : Theme.field;
+            border-width: focus.has-focus ? 2px : 1px;
+            border-color: focus.has-focus ? Theme.accent : root.checked ? Theme.accent : Theme.edge;
+            animate background { duration: 120ms; easing: ease-in-out; }
+            animate border-color { duration: 120ms; easing: ease-in-out; }
+            Path {
+                x: 3px;
+                y: 3px;
+                width: 11px;
+                height: 11px;
+                viewbox-width: 10;
+                viewbox-height: 10;
+                fill: transparent;
+                stroke: Theme.on-accent;
+                stroke-width: 1.8px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                visible: root.checked;
+                MoveTo { x: 2; y: 5; }
+                LineTo { x: 4; y: 7.5; }
+                LineTo { x: 8.5; y: 2; }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.checked = !root.checked;
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            focus.focus();
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => { root.checked = !root.checked; root.toggled(); }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> show-label: true;
+    callback activate();
+    height: 36px;
+    border-radius: 6px;
+    background: root.selected ? Theme.rail-selected : pointer.has-hover ? Theme.rail-hover : transparent;
+    border-width: keyboard.has-focus ? 2px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: 120ms; easing: ease-in-out; }
+    animate border-width { duration: 120ms; easing: ease-in-out; }
+    HorizontalLayout {
+        padding-left: root.show-label ? 10px : 0px;
+        padding-right: root.show-label ? 10px : 0px;
+        alignment: root.show-label ? start : center;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: root.selected ? Theme.accent : Theme.rail-muted;
+            font-size: root.show-label ? 12px : 11px;
+            font-weight: root.selected ? 650 : 500;
+            vertical-alignment: center;
+            animate color { duration: 120ms; easing: ease-in-out; }
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { keyboard.focus(); root.activate(); }
+    }
+    keyboard := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.activate();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.activate(); }
 }

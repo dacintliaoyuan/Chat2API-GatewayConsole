@@ -118,9 +118,8 @@ fn one_real_ledger_supplies_calendar_buckets_and_logical_request_counts() {
     assert_eq!(today.buckets[0].label, "00:00");
     assert_eq!(today.buckets[0].tokens, "4300000009");
     assert_eq!(today.buckets[0].requests, "1");
-    assert!(today.buckets[0].token_fraction.unwrap() > 0.97);
-    assert_eq!(today.request_ticks, ["4", "3", "2", "1", "0"]);
-    assert_eq!(today.token_ticks, ["4.4B", "3.3B", "2.2B", "1.1B", "0"]);
+    assert_eq!(today.buckets[0].token_count, Some(4_300_000_009));
+    assert_eq!(today.buckets[0].request_count, Some(1));
     assert_eq!(today.token_total, "4300000009");
     assert_eq!(today.request_total, "1");
     let week = read_usage(&ledger, Range::Week, now);
@@ -259,7 +258,8 @@ fn success_failure_stream_and_embeddings_rows_are_counted_from_the_ledger() {
     assert_eq!(today.buckets[0].requests, "4");
     assert_eq!(today.token_total, "≥ 177");
     assert_eq!(today.request_total, "4");
-    assert!(today.buckets[0].token_fraction.unwrap() > 0.8);
+    assert_eq!(today.buckets[0].token_count, Some(177));
+    assert_eq!(today.buckets[0].request_count, Some(4));
 
     let page = read_requests(&ledger, Range::Today, 0, "", None, now);
     assert_eq!(page.rows.len(), 4);

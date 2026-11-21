@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use slint::platform::{Key, WindowEvent};
+use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 slint::include_modules!();
@@ -19,6 +19,7 @@ fn init_backend() {
 fn window_at(width: f32, height: f32) -> MainWindow {
     init_backend();
     let window = MainWindow::new().expect("create MainWindow");
+    slintplot::register!(window);
     window
         .window()
         .set_size(slint::LogicalSize::new(width, height));
@@ -254,6 +255,48 @@ fn log_row(index: usize) -> LogRow {
         text: format!("line-{index}").into(),
         detail: format!("2026-11-21 10:00:00 +08:00  信息\n\nline-{index}").into(),
     }
+}
+
+#[test]
+fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(3);
+    let rows: Vec<LogRow> = (0..20).map(log_row).collect();
+    window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let height = window.get_log_list_height();
+    assert!(
+        height >= 4.0 * 36.0,
+        "log list height at minimum size: {height}"
+    );
+
+    window.set_log_filter_keyword("timeout".into());
+    let applied = Rc::new(RefCell::new(None));
+    window.on_apply_log_filter({
+        let applied = Rc::clone(&applied);
+        move |level, keyword| *applied.borrow_mut() = Some((level, keyword))
+    });
+
+    // At the minimum width the level menu sits next to the date filter.
+    let position = slint::LogicalPosition::new(444.0, 72.0);
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    press(&window, Key::DownArrow);
+    press(&window, Key::Return);
+    assert_eq!(*applied.borrow(), Some((1, "timeout".into())));
+
+    window.window().set_size(slint::LogicalSize::new(1060.0, 720.0));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.window().set_size(slint::LogicalSize::new(540.0, 420.0));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_log_filter_level(), 1);
 }
 
 #[test]

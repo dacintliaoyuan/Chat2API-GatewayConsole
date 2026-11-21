@@ -20,7 +20,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Intentional one-time normalisations go here, one path per line with a reason.
-ALLOW: frozenset[str] = frozenset()
+ALLOW: frozenset[str] = frozenset({
+    # The Magpie palette rewrite replaces the legacy mixed-ending file; the
+    # rewritten tokens are LF like the rest of the desktop UI.
+    "desktop/ui/theme.slint",
+})
 
 
 def _style(raw: bytes) -> str:

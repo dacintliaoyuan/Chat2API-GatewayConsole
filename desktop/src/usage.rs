@@ -48,8 +48,8 @@ pub struct Bucket {
     pub label: String,
     pub tokens: String,
     pub requests: String,
-    pub token_fraction: Option<f32>,
-    pub request_fraction: Option<f32>,
+    pub token_count: Option<i64>,
+    pub request_count: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,8 +57,6 @@ pub struct UsageView {
     pub buckets: Vec<Bucket>,
     pub token_total: String,
     pub request_total: String,
-    pub token_ticks: Vec<String>,
-    pub request_ticks: Vec<String>,
     pub coverage: Coverage,
     pub message: String,
 }
@@ -118,31 +116,6 @@ fn display(reading: &Value) -> String {
     format!("{prefix}{value}")
 }
 
-fn plot_axis(max: Option<i64>) -> (u64, Vec<String>) {
-    let Some(max) = max else {
-        return (1, Vec::new());
-    };
-    let ideal_step = (max as u64).div_ceil(4).max(1);
-    let rounding = 10u64.pow(ideal_step.ilog10().saturating_sub(1));
-    let step = ideal_step.div_ceil(rounding) * rounding;
-    let ticks = (0..=4)
-        .rev()
-        .map(|index| axis_label(index * step))
-        .collect();
-    (step * 4, ticks)
-}
-
-fn axis_label(value: u64) -> String {
-    for (unit, suffix) in [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")] {
-        if value >= unit {
-            let decimal = format!("{:.2}", value as f64 / unit as f64);
-            let number = decimal.trim_end_matches('0').trim_end_matches('.');
-            return format!("{number}{suffix}");
-        }
-    }
-    value.to_string()
-}
-
 fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, String) {
     match value["status"].as_str() {
         Some("ok") if empty => (Coverage::Empty, empty_message.to_string()),
@@ -170,8 +143,6 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
                 buckets: Vec::new(),
                 token_total: "—".into(),
                 request_total: "—".into(),
-                token_ticks: Vec::new(),
-                request_ticks: Vec::new(),
                 coverage: Coverage::Unavailable,
                 message: format!("无法读取选定时间的用量：{error}"),
             };
@@ -186,29 +157,20 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
         value["coverage"]["scanned"].as_u64() == Some(0),
         "所选时间没有已记录的模型请求。",
     );
-    let max_for = |key: &str| rows.iter().filter_map(|row| amount(&row[key])).max();
-    let token_max = max_for("tokens");
-    let request_max = max_for("requests");
-    let (token_axis, token_ticks) = plot_axis(token_max);
-    let (request_axis, request_ticks) = plot_axis(request_max);
-    let fraction =
-        |reading: &Value, axis: u64| amount(reading).map(|value| value as f32 / axis as f32);
     let buckets = rows
         .iter()
         .map(|row| Bucket {
             label: text(&row["label"], "—"),
             tokens: display(&row["tokens"]),
             requests: display(&row["requests"]),
-            token_fraction: fraction(&row["tokens"], token_axis),
-            request_fraction: fraction(&row["requests"], request_axis),
+            token_count: amount(&row["tokens"]),
+            request_count: amount(&row["requests"]),
         })
         .collect();
     UsageView {
         buckets,
         token_total: display(&value["total"]["tokens"]),
         request_total: display(&value["total"]["requests"]),
-        token_ticks,
-        request_ticks,
         coverage,
         message,
     }
