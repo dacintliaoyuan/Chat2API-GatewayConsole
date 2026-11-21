@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, ModelRc, VecModel};
+use um_desktop::config::validate_port;
 
 slint::include_modules!();
 
@@ -181,6 +182,130 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
     assert!(
         window.get_settings_content_height() > window.get_settings_viewport_height(),
         "the settings page must scroll at the minimum window size"
+    );
+}
+
+#[test]
+fn the_port_row_offers_a_numeric_input_and_apply_button() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(window.get_port_input_numeric(), "端口输入必须是数字输入");
+    assert!(
+        window.get_port_apply_width() > 0.0 && window.get_port_apply_height() > 0.0,
+        "应用按钮必须可见"
+    );
+    assert!(
+        window.get_port_apply_x()
+            >= window.get_port_input_x() + window.get_port_input_width() - 1.0,
+        "应用按钮必须排在端口输入右侧"
+    );
+    assert!(
+        window.get_gateway_address_y()
+            >= window.get_port_apply_y() + window.get_port_apply_height() - 1.0,
+        "模型 API 地址必须单独占第二行"
+    );
+    assert_eq!(
+        window.get_gateway_address_text(),
+        "http://127.0.0.1:8001",
+        "地址行必须显示完整 base URL"
+    );
+}
+
+#[test]
+fn the_port_apply_button_reports_the_entered_port() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(None::<String>));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        move |text| *applied.borrow_mut() = Some(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_port_apply_x() + window.get_port_apply_width() / 2.0,
+        window.get_port_apply_y() + window.get_port_apply_height() / 2.0,
+    );
+    assert_eq!(
+        applied.borrow().clone(),
+        Some("8100".to_string()),
+        "点击应用必须把输入端口交给 save-port"
+    );
+}
+
+#[test]
+fn the_apply_button_waits_for_an_in_flight_switch() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        move |text| applied.borrow_mut().push(text.to_string())
+    });
+
+    let x = window.get_port_apply_x() + window.get_port_apply_width() / 2.0;
+    let y = window.get_port_apply_y() + window.get_port_apply_height() / 2.0;
+    window.set_port_busy(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(&window, x, y);
+    assert!(
+        applied.borrow().is_empty(),
+        "切换进行中时应用按钮不能再次提交"
+    );
+
+    window.set_port_busy(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(&window, x, y);
+    assert_eq!(*applied.borrow(), vec!["8100".to_string()]);
+}
+
+#[test]
+fn an_invalid_port_is_marked_and_keeps_the_entered_text() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("not-a-port".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        let window = window.as_weak();
+        move |text| {
+            applied.borrow_mut().push(text.to_string());
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            if let Err(error) = validate_port(&text) {
+                window.set_port_input_invalid(true);
+                window.set_port_input_error(format!("端口无效：{error}").into());
+            }
+        }
+    });
+
+    click(
+        &window,
+        window.get_port_apply_x() + window.get_port_apply_width() / 2.0,
+        window.get_port_apply_y() + window.get_port_apply_height() / 2.0,
+    );
+    assert_eq!(*applied.borrow(), vec!["not-a-port".to_string()]);
+    assert!(window.get_port_input_invalid(), "非法端口必须标记为无效");
+    assert!(
+        window.get_port_input_error_visible(),
+        "非法端口必须显示原因"
+    );
+    assert_eq!(
+        window.get_port_input(),
+        "not-a-port",
+        "被拒绝的端口不能被悄悄改写"
     );
 }
 
@@ -593,8 +718,8 @@ fn the_settings_address_row_copies_the_base_and_v1_urls() {
 
     click(
         &window,
-        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
-        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
     );
     assert_eq!(
         copied.borrow().last().map(String::as_str),
@@ -604,14 +729,71 @@ fn the_settings_address_row_copies_the_base_and_v1_urls() {
 
     click(
         &window,
-        window.get_settings_v1_copy_x() + window.get_settings_v1_copy_width() / 2.0,
-        window.get_settings_v1_copy_y() + window.get_settings_v1_copy_height() / 2.0,
+        window.get_copy_v1_x() + window.get_copy_v1_width() / 2.0,
+        window.get_copy_v1_y() + window.get_copy_v1_height() / 2.0,
     );
     assert_eq!(
         copied.borrow().last().map(String::as_str),
         Some("http://127.0.0.1:8001/v1"),
         "the settings /v1 copy entry must copy the base URL with the /v1 suffix"
     );
+}
+
+#[test]
+fn the_gateway_address_row_places_both_copy_entries_after_the_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(
+        window.get_copy_base_x()
+            >= window.get_gateway_address_x() + window.get_gateway_address_width() - 1.0,
+        "复制 base 入口必须排在地址右侧"
+    );
+    assert!(
+        window.get_copy_v1_x() >= window.get_copy_base_x() + window.get_copy_base_width() - 1.0,
+        "复制 /v1 入口必须排在复制 base 入口右侧"
+    );
+    for (label, y, height) in [
+        (
+            "复制 base",
+            window.get_copy_base_y(),
+            window.get_copy_base_height(),
+        ),
+        (
+            "复制 /v1",
+            window.get_copy_v1_y(),
+            window.get_copy_v1_height(),
+        ),
+    ] {
+        assert!(
+            y < window.get_gateway_address_y() + window.get_gateway_address_height()
+                && window.get_gateway_address_y() < y + height,
+            "{label} 入口必须和地址在同一行"
+        );
+    }
+}
+
+#[test]
+fn a_successful_switch_shows_the_new_address_in_the_status_row() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        !window.get_settings_status_visible(),
+        "没有状态时状态行不占位"
+    );
+
+    window.set_settings_status("已切换到 127.0.0.1:8100".into());
+    window.set_settings_tone(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(
+        window.get_settings_status_visible(),
+        "应用成功后必须显示状态行"
+    );
+    assert_eq!(window.get_settings_status(), "已切换到 127.0.0.1:8100");
 }
 
 #[test]
@@ -624,13 +806,13 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
 
     click(
         &window,
-        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
-        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
     );
     window.set_copy_ok(true);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_settings_base_icon(), "check");
-    assert_eq!(window.get_settings_v1_icon(), "copy");
+    assert_eq!(window.get_copy_base_icon(), "check");
+    assert_eq!(window.get_copy_v1_icon(), "copy");
     assert_eq!(window.get_copy_status(), "已复制到剪贴板");
     assert_eq!(window.get_copy_tone(), 0);
     assert!(window.get_copy_status_visible());
@@ -639,17 +821,17 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
     assert!(window.get_copy_status_visible());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
     assert!(!window.get_copy_status_visible(), "the copy status clears after two seconds");
-    assert_eq!(window.get_settings_base_icon(), "copy");
+    assert_eq!(window.get_copy_base_icon(), "copy");
 
     click(
         &window,
-        window.get_settings_v1_copy_x() + window.get_settings_v1_copy_width() / 2.0,
-        window.get_settings_v1_copy_y() + window.get_settings_v1_copy_height() / 2.0,
+        window.get_copy_v1_x() + window.get_copy_v1_width() / 2.0,
+        window.get_copy_v1_y() + window.get_copy_v1_height() / 2.0,
     );
     window.set_copy_ok(true);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_settings_base_icon(), "copy");
-    assert_eq!(window.get_settings_v1_icon(), "check");
+    assert_eq!(window.get_copy_base_icon(), "copy");
+    assert_eq!(window.get_copy_v1_icon(), "check");
     assert_eq!(window.get_copy_status(), "已复制到剪贴板");
 }
 
@@ -663,8 +845,8 @@ fn a_failed_copy_reports_the_busy_clipboard() {
 
     click(
         &window,
-        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
-        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
     );
     window.set_copy_error("剪贴板被占用".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
@@ -672,8 +854,8 @@ fn a_failed_copy_reports_the_busy_clipboard() {
     assert_eq!(window.get_copy_status(), "复制失败：剪贴板被占用");
     assert_eq!(window.get_copy_tone(), 2);
     assert!(window.get_copy_status_visible());
-    assert_eq!(window.get_settings_base_icon(), "copy");
-    assert_eq!(window.get_settings_v1_icon(), "copy");
+    assert_eq!(window.get_copy_base_icon(), "copy");
+    assert_eq!(window.get_copy_v1_icon(), "copy");
 
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
     assert!(!window.get_copy_status_visible());
@@ -732,8 +914,8 @@ fn addresses_stay_copyable_when_the_gateway_is_not_running() {
 
     click(
         &window,
-        window.get_settings_base_copy_x() + window.get_settings_base_copy_width() / 2.0,
-        window.get_settings_base_copy_y() + window.get_settings_base_copy_height() / 2.0,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
     );
     assert_eq!(
         copied.borrow().clone(),

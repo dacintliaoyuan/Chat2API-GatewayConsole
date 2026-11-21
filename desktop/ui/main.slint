@@ -467,16 +467,32 @@ export component MainWindow inherits Window {
     out property <length> technical-card-height: technical-card.height;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
-    out property <length> settings-base-copy-x: settings-base-copy.absolute-position.x;
-    out property <length> settings-base-copy-y: settings-base-copy.absolute-position.y;
-    out property <length> settings-base-copy-width: settings-base-copy.width;
-    out property <length> settings-base-copy-height: settings-base-copy.height;
-    out property <length> settings-v1-copy-x: settings-v1-copy.absolute-position.x;
-    out property <length> settings-v1-copy-y: settings-v1-copy.absolute-position.y;
-    out property <length> settings-v1-copy-width: settings-v1-copy.width;
-    out property <length> settings-v1-copy-height: settings-v1-copy.height;
-    out property <string> settings-base-icon: settings-base-copy.icon;
-    out property <string> settings-v1-icon: settings-v1-copy.icon;
+    out property <length> port-input-x: port-input.absolute-position.x;
+    out property <length> port-input-y: port-input.absolute-position.y;
+    out property <length> port-input-width: port-input.width;
+    out property <length> port-input-height: port-input.height;
+    out property <bool> port-input-numeric: port-input.numeric;
+    out property <bool> port-input-error-visible: port-error-hint.visible;
+    out property <length> port-apply-x: port-apply.absolute-position.x;
+    out property <length> port-apply-y: port-apply.absolute-position.y;
+    out property <length> port-apply-width: port-apply.width;
+    out property <length> port-apply-height: port-apply.height;
+    out property <bool> settings-status-visible: settings-status-hint.visible;
+    out property <length> gateway-address-x: gateway-address.absolute-position.x;
+    out property <length> gateway-address-y: gateway-address.absolute-position.y;
+    out property <length> gateway-address-width: gateway-address.width;
+    out property <length> gateway-address-height: gateway-address.height;
+    out property <string> gateway-address-text: gateway-address.text;
+    out property <length> copy-base-x: copy-base.absolute-position.x;
+    out property <length> copy-base-y: copy-base.absolute-position.y;
+    out property <length> copy-base-width: copy-base.width;
+    out property <length> copy-base-height: copy-base.height;
+    out property <length> copy-v1-x: copy-v1.absolute-position.x;
+    out property <length> copy-v1-y: copy-v1.absolute-position.y;
+    out property <length> copy-v1-width: copy-v1.width;
+    out property <length> copy-v1-height: copy-v1.height;
+    out property <string> copy-base-icon: copy-base.icon;
+    out property <string> copy-v1-icon: copy-v1.icon;
     out property <length> request-list-width: request-list-pane.width;
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
@@ -1370,7 +1386,7 @@ export component MainWindow inherits Window {
                             Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
-                                Hint { text: "127.0.0.1:"; height: Theme.control-height; vertical-alignment: center; }
+                                Hint { text: "网关端口"; height: Theme.control-height; vertical-alignment: center; }
                                 port-input := MaterialField {
                                     width: 148px;
                                     placeholder: "端口";
@@ -1381,23 +1397,33 @@ export component MainWindow inherits Window {
                                     edited(_) => { root.port-input-invalid = false; root.port-input-error = ""; }
                                     accepted => { if (!root.port-busy) { root.save-port(root.port-input); } }
                                 }
-                                ActionButton { label: "切换端口"; icon: "swap"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
+                                port-apply := ActionButton { label: "应用"; icon: "swap"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
-                            if !root.port-input-error.is-empty : Hint { text: root.port-input-error; color: Theme.bad-text; }
-                            if !root.settings-status.is-empty : Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
+                            port-error-hint := Hint {
+                                visible: !root.port-input-error.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: root.port-input-error;
+                                color: Theme.bad-text;
+                            }
+                            settings-status-hint := Hint {
+                                visible: !root.settings-status.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: root.settings-status;
+                                color: Theme.status_ink(root.settings-tone);
+                            }
                             Divider { }
                             HorizontalLayout {
                                 spacing: 8px;
                                 alignment: center;
                                 Hint { text: "模型 API 地址"; vertical-alignment: center; wrap: no-wrap; }
-                                DataText {
+                                gateway-address := DataText {
                                     text: root.base-url;
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
                                     overflow: elide;
                                     wrap: no-wrap;
                                 }
-                                settings-base-copy := ActionButton {
+                                copy-base := ActionButton {
                                     width: Theme.icon-button;
                                     height: Theme.icon-button;
                                     label: "复制模型 API 地址";
@@ -1407,7 +1433,7 @@ export component MainWindow inherits Window {
                                     tooltip: "复制模型 API 地址";
                                     clicked => { root.request-copy(root.base-url, 1); }
                                 }
-                                settings-v1-copy := ActionButton {
+                                copy-v1 := ActionButton {
                                     width: Theme.icon-button;
                                     height: Theme.icon-button;
                                     label: "复制 /v1 地址";
@@ -1503,7 +1529,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             spacing: 9px;
                             SectionLabel { text: "端口切换"; }
-                            Hint { text: "在「设置 → 模型 API 地址」修改端口。切换前会检查新端口是否可用，并等待在途请求结束；失败时恢复原端口。"; }
+                            Hint { text: "在「设置 → 网关端口」修改端口。切换前会检查新端口是否可用，并等待在途请求结束；失败时恢复原端口。"; }
                             Hint { text: "模型 API 只监听本机回环地址，分享链不会经过这个端口。"; }
                         }
                     }
