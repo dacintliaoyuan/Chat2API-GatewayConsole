@@ -75,6 +75,24 @@ component TextDetails inherits Panel {
     }
 }
 
+// A card in a scrollable page. A plain Rectangle in a layout has a zero
+// preferred height and stretch 1, so it would absorb the viewport height and
+// leave no room for the following siblings. Size it from its content instead and
+// opt out of the layout's extra space, so the page scrolls when content overflows.
+component Card inherits Panel {
+    in property <length> inset: 14px;
+    in property <length> gap: 9px;
+    out property <length> content-height: content.preferred-height;
+    out property <length> content-width: content.width;
+    vertical-stretch: 0;
+    preferred-height: content.preferred-height;
+    content := VerticalLayout {
+        padding: root.inset;
+        spacing: root.gap;
+        @children
+    }
+}
+
 export component MainWindow inherits Window {
     title: "本机控制台";
     preferred-width: 1060px;
@@ -85,6 +103,9 @@ export component MainWindow inherits Window {
     default-font-family: "Segoe UI";
     default-font-size: 13px;
     private property <bool> compact: root.width < 800px;
+    private property <bool> login-visible: root.show-intro || !root.login-status.is-empty
+        || root.account-can-continue || (!root.account-can-clear && root.account-label != "已登录")
+        || !root.account-saved-detail.is-empty;
 
     in-out property <int> page: 0;
     in property <string> gateway-value: "检测中";
@@ -165,6 +186,29 @@ export component MainWindow inherits Window {
     private property <bool> show-technical;
     in property <bool> tray-available: true;
 
+    // Test seam: geometry and focus facts the keyboard/layout tests assert on.
+    out property <length> overview-content-height: overview-content.preferred-height;
+    out property <length> overview-viewport-height: overview-scroll.visible-height;
+    out property <length> overview-scroll-content-height: overview-scroll.content-height;
+    out property <length> overview-state-card-height: state-card.height;
+    out property <length> overview-state-content-height: state-card.content-height;
+    out property <length> overview-state-content-width: state-card.content-width;
+    out property <length> overview-login-card-height: login-card.height;
+    out property <length> overview-login-content-height: login-card.content-height;
+    out property <length> overview-chart-y: usage-chart.y;
+    out property <length> overview-chart-height: usage-chart.height;
+    out property <length> settings-content-height: settings-content.preferred-height;
+    out property <length> settings-viewport-height: settings-scroll.visible-height;
+    out property <length> status-row-y: status-row.y;
+    out property <length> status-row-height: status-row.height;
+    out property <length> window-width: root.width;
+    out property <length> window-height: root.height;
+    out property <bool> account-input-focused: account-input.has-focus;
+    out property <bool> password-input-focused: password-input.has-focus;
+    out property <bool> password-toggle-focused: password-toggle.has-focus;
+    out property <bool> save-button-focused: save-account.has-focus;
+    out property <bool> cancel-button-focused: cancel-account.has-focus;
+
     callback navigate(int);
     callback configure-account();
     callback skip-login();
@@ -202,6 +246,20 @@ export component MainWindow inherits Window {
         }
     }
 
+    FocusScope {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                if (root.account-form-visible) { root.close-account-form(); return accept; }
+                if (!root.selected-request.is-empty) { root.selected-request = ""; return accept; }
+                if (!root.open-log-id.is-empty) { root.open-log-id = ""; return accept; }
+            }
+            return reject;
+        }
+
     HorizontalLayout {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
@@ -227,6 +285,7 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
+            alignment: stretch;
             padding: root.compact ? 12px : 20px;
             spacing: 12px;
             HorizontalLayout {
@@ -238,53 +297,43 @@ export component MainWindow inherits Window {
                 Hint { text: root.active-address; visible: !root.active-address.is-empty; vertical-alignment: center; }
             }
 
+            page-host := Rectangle {
+                vertical-stretch: 1;
+                clip: true;
             overview-scroll := ScrollView {
                 visible: root.page == 0;
                 vertical-stretch: 1;
                 content-width: self.visible-width;
-                VerticalLayout {
+                overview-content := VerticalLayout {
+                    min-height: self.preferred-height;
                     spacing: 12px;
-                    Panel {
-                        VerticalLayout {
-                            padding: 14px; spacing: 12px;
-                            visible: root.compact;
-                            StateCell {
-                                label: "网关"; value: root.gateway-value; detail: root.gateway-detail; tone: root.gateway-tone;
-                            }
-                            Divider { }
-                            StateCell {
-                                label: "UM 登录"; value: root.account-label; detail: root.account-detail; tone: root.account-tone;
-                            }
-                            Divider { }
-                            StateCell {
-                                label: "上游"; value: root.upstream-value; detail: root.upstream-detail; tone: root.upstream-tone;
-                            }
-                        }
-                        HorizontalLayout {
-                            visible: !root.compact;
-                            padding: 14px; spacing: 14px;
+                    state-card := Card {
+                        FlexboxLayout {
+                            alignment: stretch;
+                            flex-direction: root.compact ? column : row;
+                            spacing: root.compact ? 12px : 14px;
                             StateCell {
                                 horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
                                 detail: root.gateway-detail; tone: root.gateway-tone;
                             }
-                            VerticalDivider { }
+                            Divider { visible: root.compact; horizontal-stretch: 0; }
                             StateCell {
                                 horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
                                 detail: root.account-detail; tone: root.account-tone;
                             }
-                            VerticalDivider { }
+                            VerticalDivider { visible: !root.compact; horizontal-stretch: 0; }
                             StateCell {
                                 horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
                                 detail: root.upstream-detail; tone: root.upstream-tone;
                             }
                         }
                     }
-                    Panel {
-                        visible: root.show-intro || !root.login-status.is-empty || root.account-can-continue
-                            || (!root.account-can-clear && root.account-label != "已登录")
-                            || !root.account-saved-detail.is-empty;
+                    login-card := Card {
+                        gap: 10px;
+                        visible: root.login-visible;
+                        preferred-height: root.login-visible ? login-card.content-height : 0px;
                         VerticalLayout {
-                            padding: 14px; spacing: 10px;
+                            spacing: 10px;
                             Hint {
                                 visible: root.show-intro;
                                 text: "登录 UM 后可以调用模型。也可以先查看网关和日志。";
@@ -309,7 +358,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    UsageChart {
+                    usage-chart := UsageChart {
                         period <=> root.usage-period;
                         points: root.usage-points;
                         token-ticks: root.token-ticks;
@@ -384,7 +433,8 @@ export component MainWindow inherits Window {
                 }
                 TextDetails {
                     visible: !root.selected-request.is-empty;
-                    width: root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
+                    width: root.selected-request.is-empty ? 0px
+                        : root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
                     title: root.request-detail-title;
                     body: root.request-detail;
                     closed => { root.selected-request = ""; }
@@ -462,7 +512,7 @@ export component MainWindow inherits Window {
                 }
                 TextDetails {
                     visible: !root.open-log-id.is-empty;
-                    height: root.compact ? 130px : 170px;
+                    height: root.open-log-id.is-empty ? 0px : root.compact ? 130px : 170px;
                     title: root.open-log-title;
                     body: root.open-log-body;
                     closed => { root.open-log-id = ""; }
@@ -473,11 +523,12 @@ export component MainWindow inherits Window {
                 visible: root.page == 2;
                 vertical-stretch: 1;
                 content-width: self.visible-width;
-                VerticalLayout {
+                settings-content := VerticalLayout {
+                    min-height: self.preferred-height;
                     spacing: 12px;
-                    Panel {
+                    Card {
                         VerticalLayout {
-                            padding: 14px; spacing: 9px;
+                            spacing: 9px;
                             Heading { text: "UM 账号"; }
                             Hint { text: root.account-saved; }
                             Text { text: root.account-label; color: Theme.status(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
@@ -518,11 +569,11 @@ export component MainWindow inherits Window {
                                         if (!root.account-busy) { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
                                 }
-                                CheckBox { text: "显示密码"; checked: root.password-visible; toggled => { root.toggle-password-visible(); } }
+                                password-toggle := CheckBox { text: "显示密码"; checked: root.password-visible; toggled => { root.toggle-password-visible(); } }
                                 HorizontalLayout {
                                     alignment: end; spacing: 8px;
-                                    Button { text: "取消"; clicked => { root.close-account-form(); } }
-                                    Button {
+                                    cancel-account := Button { text: "取消"; clicked => { root.close-account-form(); } }
+                                    save-account := Button {
                                         text: "保存账号"; primary: true; enabled: !root.account-busy;
                                         clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
                                     }
@@ -530,9 +581,9 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    Panel {
+                    Card {
                         VerticalLayout {
-                            padding: 14px; spacing: 9px;
+                            spacing: 9px;
                             Heading { text: "模型 API 地址"; }
                             Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             HorizontalLayout {
@@ -548,9 +599,9 @@ export component MainWindow inherits Window {
                             Hint { text: root.settings-status; color: Theme.status(root.settings-tone); }
                         }
                     }
-                    Panel {
+                    Card {
                         VerticalLayout {
-                            padding: 14px; spacing: 9px;
+                            spacing: 9px;
                             HorizontalLayout {
                                 spacing: 8px;
                                 Heading { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
@@ -574,12 +625,14 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            }
 
-            HorizontalLayout {
+            status-row := HorizontalLayout {
                 spacing: 8px;
                 Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
                 Hint { text: "更新于 " + root.last-update; wrap: no-wrap; }
             }
         }
+    }
     }
 }
