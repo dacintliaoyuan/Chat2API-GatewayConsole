@@ -51,6 +51,7 @@ pub enum Tone {
     Good,
     Warn,
     Bad,
+    Neutral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

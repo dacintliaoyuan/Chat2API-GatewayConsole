@@ -138,11 +138,10 @@ export component Selectable inherits Rectangle {
     callback activate();
     min-height: 36px;
     border-radius: 6px;
-    background: root.selected ? Theme.selected : pointer.has-hover ? Theme.hover : transparent;
-    border-color: Theme.accent;
-    border-width: keyboard.has-focus ? 1px : 0px;
+    background: root.selected ? Theme.selected
+        : keyboard.has-focus ? Theme.hover
+        : pointer.has-hover ? Theme.hover : transparent;
     animate background { duration: 120ms; easing: ease-in-out; }
-    animate border-width { duration: 120ms; easing: ease-in-out; }
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.activate(); }
@@ -167,6 +166,7 @@ export component FocusAction inherits Rectangle {
     in property <bool> primary: false;
     in property <bool> quiet: false;
     in property <bool> danger: false;
+    in property <bool> link: false;
     in property <bool> enabled: true;
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
@@ -175,9 +175,9 @@ export component FocusAction inherits Rectangle {
     border-radius: 6px;
     background: !root.enabled ? Theme.field
         : root.primary ? (pointer.pressed ? Theme.accent-strong : pointer.has-hover ? Theme.accent-strong : Theme.accent)
-        : root.quiet ? (pointer.has-hover ? Theme.hover : transparent)
+        : root.quiet || root.link ? (pointer.has-hover ? Theme.hover : transparent)
         : (pointer.has-hover ? Theme.hover : Theme.surface);
-    border-width: focus.has-focus ? 2px : root.quiet ? 0px : 1px;
+    border-width: focus.has-focus ? 2px : root.quiet || root.link ? 0px : 1px;
     border-color: focus.has-focus ? Theme.accent : root.danger ? Theme.bad : root.primary ? Theme.accent : Theme.edge;
     opacity: root.enabled ? 1 : 0.55;
     animate background { duration: 120ms; easing: ease-in-out; }
@@ -190,7 +190,7 @@ export component FocusAction inherits Rectangle {
         alignment: center;
         Text {
             text: root.label;
-            color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : Theme.ink;
+            color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
@@ -255,9 +255,9 @@ export component Segmented inherits Rectangle {
         for item[index] in root.options : Rectangle {
             horizontal-stretch: 1;
             border-radius: 4px;
-            background: root.current-index == index ? Theme.surface : transparent;
+            background: root.current-index == index ? Theme.accent-soft : transparent;
             border-width: 1px;
-            border-color: root.current-index == index ? Theme.edge : transparent;
+            border-color: root.current-index == index ? Theme.accent-soft : transparent;
             animate background { duration: 120ms; easing: ease-in-out; }
             animate border-color { duration: 120ms; easing: ease-in-out; }
             Text {
@@ -294,12 +294,11 @@ export component Field inherits VerticalLayout {
     callback edited(string);
     public function take-focus() { input.focus(); }
     spacing: 5px;
-    Text {
+    if !root.label.is-empty : Text {
         text: root.label;
         color: Theme.muted;
         font-size: 11px;
         font-weight: 600;
-        visible: !root.label.is-empty;
     }
     Rectangle {
         height: 34px;
@@ -417,11 +416,19 @@ export component NavItem inherits Rectangle {
     callback activate();
     height: 36px;
     border-radius: 6px;
-    background: root.selected ? Theme.rail-selected : pointer.has-hover ? Theme.rail-hover : transparent;
-    border-width: keyboard.has-focus ? 2px : 0px;
-    border-color: Theme.accent;
+    background: root.selected ? Theme.rail-selected
+        : keyboard.has-focus ? Theme.rail-hover
+        : pointer.has-hover ? Theme.rail-hover : transparent;
     animate background { duration: 120ms; easing: ease-in-out; }
-    animate border-width { duration: 120ms; easing: ease-in-out; }
+    keyboard := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.activate();
+                return accept;
+            }
+            return reject;
+        }
+    }
     HorizontalLayout {
         padding-left: root.show-label ? 10px : 0px;
         padding-right: root.show-label ? 10px : 0px;
@@ -439,15 +446,6 @@ export component NavItem inherits Rectangle {
     pointer := TouchArea {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }
-    }
-    keyboard := FocusScope {
-        key-pressed(event) => {
-            if (event.text == Key.Return || event.text == " ") {
-                root.activate();
-                return accept;
-            }
-            return reject;
-        }
     }
     accessible-role: button;
     accessible-label: root.label;

@@ -79,6 +79,7 @@ fn status_tone(tone: Tone) -> i32 {
         Tone::Good => 0,
         Tone::Warn => 1,
         Tone::Bad => 2,
+        Tone::Neutral => 3,
     }
 }
 
@@ -625,7 +626,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ConfigLoadOutcome::Missing => (
                 DesktopConfig::default(),
                 "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关".to_string(),
-                Tone::Warn,
+                Tone::Neutral,
             ),
             ConfigLoadOutcome::Loaded(config) => (
                 config,

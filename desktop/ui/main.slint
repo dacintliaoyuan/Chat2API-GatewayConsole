@@ -235,6 +235,10 @@ export component MainWindow inherits Window {
     out property <length> request-list-height: request-list-panel.height;
     out property <length> log-list-height: log-list.height;
     out property <length> log-details-height: log-details.height;
+    out property <length> log-level-x: compact-level.absolute-position.x;
+    out property <length> log-level-y: compact-level.absolute-position.y;
+    out property <length> log-level-width: compact-level.width;
+    out property <length> log-level-height: compact-level.height;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -306,6 +310,7 @@ export component MainWindow inherits Window {
         width: root.width; height: root.height;
         Rectangle {
             width: root.compact ? 84px : 196px;
+            animate width { duration: 150ms; easing: ease-in-out; }
             background: Theme.rail;
             VerticalLayout {
                 padding: root.compact ? 6px : 14px;
@@ -345,7 +350,7 @@ export component MainWindow inherits Window {
                 spacing: 8px;
                 Heading {
                     text: root.page == 0 ? "总览" : root.page == 1 ? "请求与诊断" : root.page == 3 ? "运行日志" : "设置";
-                    font-size: 24px;
+                    font-size: 22px;
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -457,13 +462,20 @@ export component MainWindow inherits Window {
                             label: "请求结果";
                             selected(_) => { root.query-requests(0); }
                         }
-                        MaterialField {
+                        VerticalLayout {
                             horizontal-stretch: 1;
-                            label: "模型或请求 ID";
-                            text <=> root.request-keyword;
-                            accepted => { root.query-requests(0); }
+                            spacing: 0px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                MaterialField {
+                                    horizontal-stretch: 1;
+                                    placeholder: "模型或请求 ID";
+                                    text <=> root.request-keyword;
+                                    accepted => { root.query-requests(0); }
+                                }
+                                ActionButton { height: 34px; label: "查询"; primary: true; clicked => { root.query-requests(0); } }
+                            }
                         }
-                        ActionButton { label: "查询"; primary: true; clicked => { root.query-requests(0); } }
                     }
                     Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); }
                     request-list-panel := Panel {
@@ -514,8 +526,10 @@ export component MainWindow inherits Window {
                         label: "日志日期范围";
                         selected(_) => { root.log-history(root.log-period, 0); }
                     }
-                    if root.compact-log-filters : ComboBox {
-                        width: 120px;
+                    compact-level := ComboBox {
+                        visible: root.compact-log-filters;
+                        width: root.compact-log-filters ? 120px : 0px;
+                        height: root.compact-log-filters ? 30px : 0px;
                         model: ["全部级别", "信息", "警告", "错误", "原始"];
                         current-index <=> root.log-filter-level;
                         accessible-label: "日志级别";
@@ -530,11 +544,12 @@ export component MainWindow inherits Window {
                     }
                     MaterialField {
                         width: root.compact ? 140px : 180px;
-                        label: "搜索日志";
+                        placeholder: "搜索日志";
                         text <=> root.log-filter-keyword;
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
                     ActionButton {
+                        height: 34px;
                         label: "刷新";
                         quiet: true;
                         clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
@@ -655,14 +670,12 @@ export component MainWindow inherits Window {
                                 SectionLabel { text: "录入账号密码"; }
                                 Hint { text: "账号密码保存在本机，供此网关重新登录。"; }
                                 account-input := Field {
-                                    label: "UMPASS 账号";
-                                    placeholder: "账号";
+                                    placeholder: "UMPASS 账号";
                                     text <=> root.credential-account-input;
                                     accepted => { password-input.take-focus(); }
                                 }
                                 password-input := Field {
-                                    label: "UMPASS 密码";
-                                    placeholder: "密码";
+                                    placeholder: "UMPASS 密码";
                                     password: true;
                                     text <=> root.credential-password-input;
                                     accepted => {
@@ -695,12 +708,12 @@ export component MainWindow inherits Window {
                                 Hint { text: "127.0.0.1:"; vertical-alignment: center; }
                                 MaterialField {
                                     width: 148px;
-                                    label: "端口";
+                                    placeholder: "端口";
                                     text <=> root.port-input;
                                     enabled: !root.port-busy;
                                     accepted => { if (!root.port-busy) { root.save-port(root.port-input); } }
                                 }
-                                ActionButton { label: "切换端口"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
+                                ActionButton { height: 34px; label: "切换端口"; primary: true; enabled: !root.port-busy; clicked => { root.save-port(root.port-input); } }
                             }
                             Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
                         }

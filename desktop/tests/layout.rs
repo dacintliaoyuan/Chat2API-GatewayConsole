@@ -279,7 +279,9 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     });
 
     // At the minimum width the level menu sits next to the date filter.
-    let position = slint::LogicalPosition::new(444.0, 72.0);
+    let x = window.get_log_level_x() + window.get_log_level_width() / 2.0;
+    let y = window.get_log_level_y() + window.get_log_level_height() / 2.0;
+    let position = slint::LogicalPosition::new(x, y);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position,
         button: PointerEventButton::Left,
