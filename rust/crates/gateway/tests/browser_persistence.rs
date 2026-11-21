@@ -94,3 +94,79 @@ fn real_edge_persists_cookie_across_close_and_reopen() {
         "persistent cookie was lost across browser close"
     );
 }
+
+#[test]
+#[ignore = "requires installed Edge; uses only fixture form values and an isolated profile"]
+fn real_edge_replaces_credentials_and_submits_without_spurious_input_events() {
+    let temp = support::TempDir::new("um-rust-browser-form-");
+    let factory = SystemBrowserFactory;
+    let mut browser = factory
+        .launch(&LaunchRequest {
+            executable: factory.resolve_browser().expect("installed Edge"),
+            profile_dir: temp.path().join("isolated-profile"),
+            headful: false,
+            display: None,
+            initial_url: "about:blank".into(),
+        })
+        .expect("isolated browser");
+    let html = r#"
+        <!doctype html><meta charset="utf-8">
+        <form>
+          <input id="account" value="old-fixture-account">
+          <input id="password" type="password" value="old-fixture-password">
+          <input class="duplicate" value="first"><input class="duplicate" value="second">
+          <input id="locked" readonly value="read-only">
+          <button id="submit">Sign in</button>
+        </form>
+        <p id="accepted" hidden>accepted</p>
+        <p id="invalid-input" hidden>unexpected empty or synthetic input</p>
+        <script>
+          const account = document.querySelector('#account');
+          const password = document.querySelector('#password');
+          let events = 0;
+          let submits = 0;
+          for (const field of [account, password]) {
+            field.addEventListener('input', event => {
+              events++;
+              if (!event.isTrusted || !field.value) {
+                document.querySelector('#invalid-input').hidden = false;
+              }
+            });
+          }
+          document.querySelector('form').addEventListener('submit', event => {
+            event.preventDefault();
+            submits++;
+            const duplicates = Array.from(document.querySelectorAll('.duplicate'));
+            document.querySelector('#accepted').hidden = !(
+              events === 2 && submits === 1 &&
+              account.value === 'fixture-account' &&
+              password.value === 'fixture-password' &&
+              duplicates.map(field => field.value).join(',') === 'first,second' &&
+              document.querySelector('#locked').value === 'read-only'
+            );
+          });
+        </script>"#;
+    let encoded = html
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    let page = browser.page();
+    page.goto(&format!("data:text/html,{encoded}")).unwrap();
+    assert!(page.fill(&[".duplicate"], "changed").is_err());
+    assert!(page.fill(&["#locked"], "changed").is_err());
+    page.fill(&["#account"], "fixture-account").unwrap();
+    page.fill(&["#password"], "fixture-password").unwrap();
+    let clicked = page
+        .one_visible(&["#submit"])
+        .expect("single submit button");
+    page.click(&clicked).unwrap();
+    assert!(
+        !page.any_visible(&["#invalid-input"]),
+        "filling triggered unexpected input events"
+    );
+    assert!(
+        page.any_visible(&["#accepted"]),
+        "the form did not accept exactly one submission"
+    );
+    browser.close().expect("close isolated browser");
+}

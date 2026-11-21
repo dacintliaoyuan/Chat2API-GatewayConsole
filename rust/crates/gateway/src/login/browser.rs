@@ -686,33 +686,21 @@ impl LoginPage for RealPage {
     }
 
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
-        // Clear the field first, then focus and insert the text through the
-        // DevTools Input domain: ADFS's Knockout binding only observes real
-        // input events, so a plain value assignment would leave its observable
-        // empty and the submit would post an empty password. Re-dispatch `input`
-        // and `change` afterwards and verify the committed value.
+        // Replace the selection with one browser input. Clearing the DOM value
+        // first would notify the page of an empty credential, and firing another
+        // input/change afterwards can run validation again.
         let prepare = fill_prepare_expression(selectors);
-        match self.evaluate(&prepare) {
-            Ok(Value::Bool(true)) => {}
-            Ok(_) => return Err("login field disappeared".to_string()),
-            Err(error) => return Err(error),
-        }
-        self.call("Input.insertText", serde_json::json!({"text": value}))
-            .map_err(|error| error.to_string())?;
-        let settle = fill_settle_expression(selectors, value);
-        match self.evaluate(&settle) {
-            Ok(state) => {
-                if state.get("ok").and_then(Value::as_bool) == Some(true) {
-                    Ok(())
-                } else {
-                    let reason = state
-                        .get("reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown");
-                    Err(format!("login field value mismatch: {reason}"))
-                }
-            }
-            Err(error) => Err(error),
+        let target = self.evaluate(&prepare)?;
+        let target = target
+            .as_str()
+            .ok_or_else(|| "login field is missing, ambiguous or not editable".to_string())?;
+        let inserted = self.call("Input.insertText", json!({"text": value}));
+        let settled = self.evaluate(&fill_settle_expression(target, value));
+        inserted?;
+        if settled? == Value::Bool(true) {
+            Ok(())
+        } else {
+            Err("login field did not retain the inserted value".to_string())
         }
     }
 
@@ -1018,47 +1006,45 @@ fn retry_click(mut attempt: impl FnMut() -> Result<(), ClickFailure>) -> Result<
 fn fill_prepare_expression(selectors: &[&str]) -> String {
     let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
     format!(
-        "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
-         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
-         && s.visibility!=='hidden'&&s.display!=='none';}};\
-         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
-         if(marker>=0){{var base=sel.slice(0,marker);\
-         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
-         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
-         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
-         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
-         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
-         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
-         var el=found[0];el.value='';\
-         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
-         el.focus();el.select&&el.select();return true;}})({selectors})"
+        r#"(function(selectors) {{
+            const found = new Set();
+            for (const selector of selectors) {{
+                try {{
+                    for (const el of document.querySelectorAll(selector)) {{
+                        const style = getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width && rect.height && style.visibility === 'visible') {{
+                            found.add(el);
+                        }}
+                    }}
+                }} catch (_) {{}}
+            }}
+            if (found.size !== 1) return null;
+            const el = found.values().next().value;
+            if (!(el instanceof HTMLInputElement) || el.readOnly ||
+                el.matches(':disabled') || el.closest('[aria-disabled="true"]')) return null;
+            el.focus();
+            if (!el.isConnected || document.activeElement !== el) return null;
+            el.select();
+            if (!el.isConnected || document.activeElement !== el) return null;
+            const target = Math.random().toString(36).slice(2);
+            el.setAttribute('data-um-login-fill-target', target);
+            return target;
+        }})({selectors})"#
     )
 }
 
-fn fill_settle_expression(selectors: &[&str], value: &str) -> String {
-    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
-    let value = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+fn fill_settle_expression(target: &str, value: &str) -> String {
+    let target = json!(target);
+    let value = json!(value);
     format!(
-        "(function(selectors,expected){{var visible=function(el){{var r=el.getBoundingClientRect();\
-         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
-         && s.visibility!=='hidden'&&s.display!=='none';}};\
-         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
-         if(marker>=0){{var base=sel.slice(0,marker);\
-         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
-         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
-         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
-         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
-         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
-         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)\
-         return {{ok:false,reason:'missing'}};var el=found[0];\
-         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
-         el.dispatchEvent(new Event('change',{{bubbles:true}}));\
-         if(el.value!==expected)return {{ok:false,reason:'value-mismatch'}};\
-         return {{ok:true}};}})({selectors},{value})"
+        r#"(function(target, expected) {{
+            const marker = 'data-um-login-fill-target';
+            const matches = Array.from(document.querySelectorAll('[' + marker + ']'))
+                .filter(el => el.getAttribute(marker) === target);
+            for (const el of matches) el.removeAttribute(marker);
+            return matches.length === 1 && matches[0].value === expected;
+        }})({target}, {value})"#
     )
 }
 
@@ -1503,20 +1489,5 @@ mod tests {
         });
         assert_eq!(calls, 1);
         assert_eq!(result, Err("connection lost".to_string()));
-    }
-
-    #[test]
-    fn the_fill_expressions_clear_and_dispatch_input_and_change() {
-        let selectors = ["input[name=\"Password\"]"];
-        let prepare = fill_prepare_expression(&selectors);
-        assert!(prepare.contains("el.value=''"));
-        assert!(prepare.contains("new Event('input'"));
-        assert!(prepare.contains("el.focus()"));
-        let settle = fill_settle_expression(&selectors, "s3cret");
-        assert!(settle.contains("new Event('input'"));
-        assert!(settle.contains("new Event('change'"));
-        assert!(settle.contains("el.value!==expected"));
-        assert!(settle.contains("\"s3cret\""));
-        assert!(settle.contains("value-mismatch"));
     }
 }
