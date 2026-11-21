@@ -240,7 +240,8 @@ systemd
   读 `--worker-port-file`，不缓存、不猜端口。worker 端口文件出现且能连上就转发。
   Windows 上读取到 PID 行时校验该 PID 的完整可执行路径（规范化后比较）仍是当前
   网关二进制，不是则视为陈旧记录；PID 行缺失或非法也按陈旧记录处理（不再兼容
-  port-only 记录）；非 Windows 跳过该身份校验。
+  port-only 记录）；非 Windows 跳过该身份校验。PowerShell 的
+  `Get-GatewayWorkerPort` 同样要求第二行合法 PID，缺失或非法返回未知。
 - 入口参数：`--worker-port-file` 默认 `data/chat2api-worker.port`；
   `--desired-state-file` 可省略，省略时读环境变量
   `SELFUSEAI_GATEWAY_DESIRED_STATE`（文件路径）；`--recovery-wait-seconds`
@@ -297,7 +298,8 @@ systemd
     `SELFUSEAI_GATEWAY_BOOT_ID` 与 `SELFUSEAI_GATEWAY_DESIRED_STATE`。
   - 启动幂等：两者健康时返回 `AlreadyRunning`；ingress 健康而 worker 缺失时只启动
     worker；两者都缺失时按 worker → ingress 启动；组件残留只按自身身份清理，不重启
-    健康组件。worker 端口文件同时接受相对仓库根的描述符值和测试注入的绝对路径。
+    健康组件。worker 端口文件同时接受相对仓库根的描述符值和测试注入的绝对路径，
+    并要求第二行是合法 worker PID。
   - 停止先写 `stopped` 意图，再依次 POST ingress `/admin/shutdown`、worker
     `/admin/shutdown`（worker 端口读 `WorkerPortFile`），最后按身份兜底清理。
   - inspection 在 worker 或 ingress 处于 Present/Residual/Starting 时走拆分分支，
@@ -348,13 +350,13 @@ systemd
 - 验证（#133 A2 返修，2026-11-21）：
   - 工作目录：`D:/git/github/Chat2API-GatewayConsole/.worktrees/133-ps`。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/gateway-runtime.Tests.ps1`：
-    617 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
+    628 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
     在监听、双组件在监听但未健康、worker `Conflict` + ingress `Absent`、ingress
     `Conflict` 预检、legacy 单进程 inspection，控制台入口 `Degraded` 分支，
     `Select-GatewayStopScope -Identities` 收窄、重复停止、worker 端口上的 tailnet
-    监听、陈旧 `WorkerPortFile`、启动中 worker 与超时归 Residual、启动预算与有界
-    停止等待、含空格可执行路径的身份识别、残留清理前缀只出现一次，以及含空格
-    路径的观察器启动）。
+    监听、陈旧 `WorkerPortFile`、启动中 worker 与超时归 Residual、不可读创建时间
+    fail closed、WorkerPortFile 不可读/非法、启动预算与有界停止等待、含空格可执行
+    路径的身份识别、残留清理前缀只出现一次，以及含空格路径的观察器启动）。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File lib/watch-chat2api.ps1 -SelfTest`：
     PASS（含 worker/ingress 双身份判定、陈旧 worker 端口记录、启动中 worker 超时
     归 absent、tailnet 监听在 worker 端口，以及 `Invoke-GatewayStart` 不再向运行时
