@@ -1278,6 +1278,13 @@ impl GatewaySupervisor {
             );
         if has_listener {
             if let Err(reason) = self.drain_before_switch(new_port, progress, cancelled) {
+                // A committed drain closes the old listener before the stop
+                // wait finishes. If it is already gone, bring the old port
+                // back before reporting the failure; an explicit quit keeps
+                // the stopped state instead.
+                if !cancelled() && self.http.listener_down(&self.base_url()) {
+                    return self.restore_port(from, new_port, reason, Ok(()), progress);
+                }
                 return reject(reason);
             }
         } else {
@@ -1415,6 +1422,19 @@ impl GatewaySupervisor {
     ) -> PortSwitch {
         progress(PortSwitchProgress::Restoring);
         self.port = from;
+        if let Some(mut child) = self.child.take() {
+            // A committed stop may have closed the listener while the old child
+            // is still finishing its auth watch. Reap or kill it before starting
+            // the replacement; otherwise start_or_attach would probe the stale
+            // child and report a HealthTimeout instead of a restored port.
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    let _ = child.kill();
+                }
+                Err(_) => {}
+            }
+        }
         let restored = self.start_or_attach();
         if matches!(&restored.state, GatewayState::Running { .. }) {
             if let Err(error) = config_restore {
