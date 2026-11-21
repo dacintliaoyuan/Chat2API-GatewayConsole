@@ -155,6 +155,81 @@ fn missing_empty_partial_and_unreadable_ledgers_are_distinct() {
 }
 
 #[test]
+fn request_page_keeps_summary_model_speeds_chart_and_first_token_across_the_page() {
+    let tmp = common::TempDir::new("usage-analytics");
+    let ledger = tmp.path().join("usage.jsonl");
+    let rows = (0..70)
+        .map(|index| {
+            let model = if index % 2 == 0 { "alpha" } else { "beta" };
+            json!({
+                "time": format!(
+                    "2026-11-20T{:02}:{:02}:00+08:00",
+                    10 + index / 60,
+                    index % 60
+                ),
+                "service": "chat2api",
+                "model": model,
+                "stream": true,
+                "status": "ok",
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_report_status": "reported",
+                "reasoning_tokens": 0,
+                "total_tokens": 20,
+                "estimated": false,
+                "duration_ms": 1000,
+                "first_token_ms": 100,
+                "usage_source": "upstream",
+                "protocol": "chat",
+                "key_id": null,
+                "request_id": format!("{index:032x}"),
+                "attribution": "absent",
+            })
+        })
+        .collect::<Vec<_>>();
+    write_rows(&ledger, &rows);
+    let now = time("2026-11-20T19:00:00+08:00");
+    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    assert_eq!(page.rows.len(), 60, "the page still holds 60 rows");
+    assert_eq!(page.summary.token_total, "1,400");
+    assert_eq!(page.summary.request_total, "70");
+    assert_eq!(page.summary.cache_hit_rate, "20.0%");
+    assert_eq!(page.summary.speed, "10.0");
+    assert_eq!(page.summary.first_token, "100 ms");
+    assert_eq!(page.model_speeds.len(), 2);
+    assert_eq!(page.model_speeds[0].model, "alpha");
+    assert_eq!(page.model_speeds[0].requests, "35");
+    assert_eq!(page.model_speeds[0].output, "350");
+    assert_eq!(page.model_speeds[0].speed, "10.0");
+    assert_eq!(page.model_speeds[0].first_token, "100 ms");
+    assert_eq!(page.model_speeds[1].model, "beta");
+    assert_eq!(page.chart.models, ["alpha", "beta"]);
+    assert_eq!(page.chart.points.len(), 24);
+    let ten = &page.chart.points[10];
+    assert_eq!(ten.label, "10:00");
+    assert_eq!(ten.token_count, Some(1200));
+    assert_eq!(ten.request_count, Some(60));
+    assert_eq!(ten.speed_count, Some(10.0));
+    assert_eq!(ten.models.len(), 2);
+    assert_eq!(page.rows[0].first_token, "100 ms");
+}
+
+#[test]
+fn request_detail_shows_first_token_or_a_dash_for_legacy_rows() {
+    let tmp = common::TempDir::new("usage-first-token");
+    let ledger = tmp.path().join("usage.jsonl");
+    write_rows(&ledger, &[row("2026-11-20T00:01:00+08:00", "ok", 8, 2)]);
+    let now = time("2026-11-20T19:00:00+08:00");
+    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let request = &page.rows[0];
+    assert_eq!(request.first_token, "—");
+    let detail = request_detail(request, None);
+    assert!(detail.contains("首字  —"));
+    assert_eq!(page.summary.first_token, "—");
+}
+
+#[test]
 fn diagnostics_search_page_and_link_only_matches_for_this_request() {
     let tmp = common::TempDir::new("usage-requests");
     let ledger = tmp.path().join("usage.jsonl");

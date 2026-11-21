@@ -1,10 +1,13 @@
 import { ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
-import { ChartEngine, ChartTheme } from "@slintplot";
+import { ChartEngine, ChartDataset, ChartTheme } from "@slintplot";
 import { AppIcon } from "icons.slint";
 export { ChartEngine }
-import { UsageChart, UsagePoint } from "usage-chart.slint";
+import { UsageChart, UsagePoint, RequestAnalytics, RequestMetric, RequestPoint, ModelSpeedRow } from "usage-chart.slint";
 export { UsagePoint }
+export { RequestMetric }
+export { RequestPoint }
+export { ModelSpeedRow }
 
 export struct LogRow {
     id: string,
@@ -21,6 +24,7 @@ export struct RequestRow {
     outcome: string,
     tone: int,
     summary: string,
+    first-token: string,
     detail: string,
 }
 
@@ -343,6 +347,18 @@ export component MainWindow inherits Window {
     in property <string> request-detail-title;
     in property <string> request-detail;
     in-out property <length> request-scroll-y: 0px;
+    in property <[RequestMetric]> request-metrics;
+    in property <[RequestPoint]> request-chart-points;
+    in property <[string]> request-chart-labels;
+    in property <[float]> request-chart-token-counts;
+    in property <[float]> request-chart-request-counts;
+    in property <[float]> request-chart-speed-counts;
+    in property <[ChartDataset]> request-chart-token-series;
+    in property <[ChartDataset]> request-chart-request-series;
+    in property <[ChartDataset]> request-chart-speed-series;
+    in property <[ModelSpeedRow]> request-model-speeds;
+    in-out property <int> request-metric: 0;
+    in-out property <bool> request-split-by-model: false;
 
     in-out property <string> port-input: "7999";
     in-out property <bool> port-input-invalid;
@@ -396,6 +412,18 @@ export component MainWindow inherits Window {
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
     out property <length> request-list-height: request-list-panel.height;
+    out property <int> request-metric-index: request-analytics.metric-index;
+    out property <bool> request-split: request-analytics.split;
+    out property <string> request-metric-label: request-analytics.metric-label;
+    out property <[float]> request-plotted-values: request-analytics.plotted-values;
+    out property <int> request-chart-series-count: request-analytics.series-count;
+    out property <int> request-model-row-count: request-analytics.model-row-count;
+    out property <string> request-model-first: root.request-model-speeds.length > 0
+        ? root.request-model-speeds[0].model : "";
+    out property <string> request-model-speed: root.request-model-speeds.length > 0
+        ? root.request-model-speeds[0].speed : "";
+    out property <string> request-first-token: root.requests.length > 0
+        ? root.requests[0].first-token : "";
     out property <length> log-list-height: log-list.height;
     out property <length> log-details-height: log-details.height;
     out property <length> log-level-x: log-level-control.absolute-position.x;
@@ -596,6 +624,7 @@ export component MainWindow inherits Window {
     HorizontalLayout {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
+        alignment: stretch;
         Rectangle {
             width: root.compact ? 84px : 196px;
             animate width { duration: Theme.motion ? 150ms : 0ms; easing: ease-in-out; }
@@ -703,6 +732,7 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
+            width: root.width - (root.compact ? 84px : 196px);
             alignment: stretch;
             padding: root.compact ? 12px : 20px;
             spacing: 12px;
@@ -846,11 +876,30 @@ export component MainWindow inherits Window {
                 }
             }
 
-            HorizontalLayout {
+            VerticalLayout {
                 visible: root.page == 1;
                 vertical-stretch: 1;
-                spacing: 12px;
-                request-list-pane := VerticalLayout {
+                min-height: 0px;
+                spacing: 8px;
+                request-analytics := RequestAnalytics {
+                    metrics: root.request-metrics;
+                    points: root.request-chart-points;
+                    labels: root.request-chart-labels;
+                    token-counts: root.request-chart-token-counts;
+                    request-counts: root.request-chart-request-counts;
+                    speed-counts: root.request-chart-speed-counts;
+                    token-series: root.request-chart-token-series;
+                    request-series: root.request-chart-request-series;
+                    speed-series: root.request-chart-speed-series;
+                    model-speeds: root.request-model-speeds;
+                    metric <=> root.request-metric;
+                    split-by-model <=> root.request-split-by-model;
+                    allow-motion: root.allow-motion;
+                }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 12px;
+                    request-list-pane := VerticalLayout {
                     horizontal-stretch: 1;
                     visible: !root.compact || root.selected-request.is-empty;
                     spacing: 8px;
@@ -922,7 +971,7 @@ export component MainWindow inherits Window {
                                             Text { text: item.model; color: Theme.ink; horizontal-stretch: 1; overflow: elide; font-weight: 600; }
                                             Tag { label: item.outcome; tone: item.tone; }
                                         }
-                                        Hint { text: item.at + "  " + item.summary; overflow: elide; wrap: no-wrap; }
+                                        Hint { text: item.at + "  " + item.summary + "  ·  首字 " + item.first-token; overflow: elide; wrap: no-wrap; }
                                     }
                                 }
                             }
@@ -942,6 +991,7 @@ export component MainWindow inherits Window {
                     title: root.request-detail-title;
                     body: root.request-detail;
                     closed => { root.selected-request = ""; }
+                }
                 }
             }
 

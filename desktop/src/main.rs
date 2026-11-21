@@ -477,6 +477,143 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
     window.set_usage_loading(false);
 }
 
+fn chart_dataset(label: &str, values: Vec<f32>) -> ChartDataset {
+    ChartDataset {
+        label: label.into(),
+        series_type: ChartSeriesType::Bar,
+        values: ModelRc::from(values.as_slice()),
+        points: ModelRc::default(),
+        color: slint::Color::from_argb_u8(0, 0, 0, 0),
+        hidden: false,
+        fill: false,
+        tension: 0.0,
+        stepped: false,
+        right_axis: false,
+    }
+}
+
+fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
+    page.chart
+        .models
+        .iter()
+        .map(|model| {
+            let values = page
+                .chart
+                .points
+                .iter()
+                .map(|point| {
+                    point
+                        .models
+                        .iter()
+                        .find(|row| &row.model == model)
+                        .map_or(f32::NAN, |row| match metric {
+                            1 => row.requests.map_or(f32::NAN, |value| value as f32),
+                            2 => row.speed.map_or(f32::NAN, |value| value as f32),
+                            _ => row.tokens.map_or(f32::NAN, |value| value as f32),
+                        })
+                })
+                .collect::<Vec<_>>();
+            chart_dataset(model, values)
+        })
+        .collect()
+}
+
+fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
+    let summary = &page.summary;
+    let speed = |value: &str| {
+        if value == "—" {
+            "—".to_string()
+        } else {
+            format!("{value} Token/秒")
+        }
+    };
+    let metrics = vec![
+        RequestMetric {
+            label: "Token".into(),
+            value: summary.token_total.clone().into(),
+            detail: format!("输入 {} · 输出 {}", summary.token_input, summary.token_output).into(),
+        },
+        RequestMetric {
+            label: "请求".into(),
+            value: summary.request_total.clone().into(),
+            detail: format!("失败 {}", summary.request_failed).into(),
+        },
+        RequestMetric {
+            label: "缓存命中率".into(),
+            value: summary.cache_hit_rate.clone().into(),
+            detail: "缓存读取 / 输入 Token".into(),
+        },
+        RequestMetric {
+            label: "输出速度".into(),
+            value: speed(&summary.speed).into(),
+            detail: if summary.speed_note.is_empty() {
+                "Token/秒 · 整次平均".into()
+            } else {
+                summary.speed_note.clone().into()
+            },
+        },
+    ];
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    let points = page
+        .chart
+        .points
+        .iter()
+        .map(|point| RequestPoint {
+            label: point.label.clone().into(),
+            token_value: point.tokens.clone().into(),
+            request_value: point.requests.clone().into(),
+            speed_value: point.speed.clone().into(),
+            token_count: point.token_count.map_or(f32::NAN, |value| value as f32),
+            request_count: point.request_count.map_or(f32::NAN, |value| value as f32),
+            speed_count: point.speed_count.map_or(f32::NAN, |value| value as f32),
+        })
+        .collect::<Vec<_>>();
+    window.set_request_chart_labels(ModelRc::from(
+        points
+            .iter()
+            .map(|point| point.label.clone())
+            .collect::<Vec<_>>()
+            .as_slice(),
+    ));
+    window.set_request_chart_token_counts(ModelRc::from(
+        points
+            .iter()
+            .map(|point| point.token_count)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    ));
+    window.set_request_chart_request_counts(ModelRc::from(
+        points
+            .iter()
+            .map(|point| point.request_count)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    ));
+    window.set_request_chart_speed_counts(ModelRc::from(
+        points
+            .iter()
+            .map(|point| point.speed_count)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    ));
+    window.set_request_chart_points(ModelRc::from(points.as_slice()));
+    window.set_request_chart_token_series(ModelRc::from(model_series(page, 0).as_slice()));
+    window.set_request_chart_request_series(ModelRc::from(model_series(page, 1).as_slice()));
+    window.set_request_chart_speed_series(ModelRc::from(model_series(page, 2).as_slice()));
+    let model_rows = page
+        .model_speeds
+        .iter()
+        .map(|row| ModelSpeedRow {
+            model: row.model.clone().into(),
+            requests: row.requests.clone().into(),
+            output: row.output.clone().into(),
+            speed: row.speed.clone().into(),
+            first_token: row.first_token.clone().into(),
+        })
+        .collect::<Vec<_>>();
+    window.set_request_model_speeds(ModelRc::from(model_rows.as_slice()));
+}
+
 #[derive(Default)]
 struct RequestNav {
     pages: Vec<Option<String>>,
@@ -538,10 +675,12 @@ fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>
                     _ => status_tone(Tone::Warn),
                 },
                 summary: format!("{}  {}", row.duration, row.request_id.as_deref().unwrap_or("")).into(),
+                first_token: row.first_token.clone().into(),
                 detail: "".into(),
             }).collect::<Vec<_>>();
             let count = rows.len();
             window.set_requests(ModelRc::from(rows.as_slice()));
+            apply_request_analytics(&window, &page);
             if count == 0 || !page.message.is_empty() {
                 window.set_request_status(page.message.into());
             } else {

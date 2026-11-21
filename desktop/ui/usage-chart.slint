@@ -1,5 +1,6 @@
-import { BarChart, ChartSeriesType } from "@slintplot";
-import { Theme, Panel, Heading, Hint, DataText, Segmented, ActionButton } from "theme.slint";
+import { ListView } from "std-widgets.slint";
+import { BarChart, ChartDataset, ChartSeriesType } from "@slintplot";
+import { Theme, Panel, Heading, Hint, DataText, Segmented, ActionButton, SectionLabel } from "theme.slint";
 
 export struct UsagePoint {
     label: string,
@@ -8,6 +9,189 @@ export struct UsagePoint {
     request-value: string,
     token-count: float,
     request-count: float,
+}
+
+export struct RequestMetric {
+    label: string,
+    value: string,
+    detail: string,
+}
+
+export struct RequestPoint {
+    label: string,
+    token-value: string,
+    request-value: string,
+    speed-value: string,
+    token-count: float,
+    request-count: float,
+    speed-count: float,
+}
+
+export struct ModelSpeedRow {
+    model: string,
+    requests: string,
+    output: string,
+    speed: string,
+    first-token: string,
+}
+
+// Request-page analytics: four metric cards, a Token/请求/速度 chart with an
+// optional per-model split, and the per-model speed table.
+export component RequestAnalytics inherits Panel {
+    // The request page gives the list the remaining height; at the minimum
+    // window size this card may clip instead of pushing the status row down.
+    min-height: 0px;
+    in property <[RequestMetric]> metrics;
+    in property <[RequestPoint]> points;
+    in property <[string]> labels;
+    in property <[float]> token-counts;
+    in property <[float]> request-counts;
+    in property <[float]> speed-counts;
+    in property <[ChartDataset]> token-series;
+    in property <[ChartDataset]> request-series;
+    in property <[ChartDataset]> speed-series;
+    in property <[ModelSpeedRow]> model-speeds;
+    in-out property <int> metric: 0;
+    in-out property <bool> split-by-model: false;
+    in property <bool> allow-motion: true;
+    in property <string> status-text;
+    in property <color> status-tone: Theme.muted;
+
+    out property <int> metric-index: root.metric;
+    out property <bool> split: root.split-by-model;
+    out property <string> metric-label: root.metric == 1 ? "请求数"
+        : root.metric == 2 ? "输出速度" : "Token";
+    out property <[float]> plotted-values: root.metric == 1 ? root.request-counts
+        : root.metric == 2 ? root.speed-counts : root.token-counts;
+    out property <int> series-count: !root.split-by-model ? 1
+        : root.metric == 1 ? root.request-series.length
+        : root.metric == 2 ? root.speed-series.length
+        : root.token-series.length;
+    out property <int> model-row-count: root.model-speeds.length;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            for metric in root.metrics : Rectangle {
+                horizontal-stretch: 1;
+                height: 62px;
+                border-radius: 8px;
+                background: Theme.surface-2;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    Hint { text: metric.label; }
+                    DataText {
+                        text: metric.value;
+                        font-size: 18px;
+                        font-weight: 650;
+                        overflow: elide;
+                    }
+                    Hint { text: metric.detail; overflow: elide; wrap: no-wrap; }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+            Heading { text: "请求趋势"; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Segmented {
+                width: 196px;
+                options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
+                label: "请求指标";
+                current-index: root.metric;
+                selected(index) => { root.metric = index; }
+            }
+            Segmented {
+                width: 148px;
+                options: [{ text: "合计" }, { text: "按模型" }];
+                label: "拆分维度";
+                current-index: root.split-by-model ? 1 : 0;
+                selected(index) => { root.split-by-model = index == 1; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 148px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: parent.height;
+                BarChart {
+                    width: parent.width;
+                    height: parent.height;
+                    labels: root.labels;
+                    datasets: root.split-by-model
+                        ? (root.metric == 1 ? root.request-series
+                            : root.metric == 2 ? root.speed-series : root.token-series)
+                        : [{
+                            label: root.metric-label,
+                            values: root.metric == 1 ? root.request-counts
+                                : root.metric == 2 ? root.speed-counts : root.token-counts,
+                            series-type: ChartSeriesType.bar,
+                            color: root.metric == 1 ? Theme.series-b : Theme.accent,
+                        }];
+                    begin-at-zero: true;
+                    integer-ticks: root.metric != 2;
+                    value-decimals: root.metric == 2 ? 1 : 0;
+                    show-legend: root.split-by-model;
+                    show-points: false;
+                    show-tooltip: false;
+                    animated: root.allow-motion;
+                    bar-radius: 3px;
+                    fill-opacity: 0.78;
+                    accessible-label: "请求趋势图";
+                }
+            }
+
+            VerticalLayout {
+                width: 336px;
+                spacing: 3px;
+                SectionLabel { text: "模型速度"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Hint { text: "模型"; horizontal-stretch: 1; }
+                    Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
+                    Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
+                    Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
+                    Hint { text: "首字"; width: 62px; horizontal-alignment: right; }
+                }
+                ListView {
+                    height: 112px;
+                    for row in root.model-speeds : HorizontalLayout {
+                        spacing: 6px;
+                        height: 20px;
+                        Text {
+                            text: row.model;
+                            color: Theme.ink;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
+                        DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
+                        DataText { text: row.output; width: 58px; horizontal-alignment: right; }
+                        DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
+                        DataText { text: row.first-token; width: 62px; horizontal-alignment: right; }
+                    }
+                }
+                if root.model-speeds.length == 0 : Hint {
+                    text: "暂无模型速度数据";
+                }
+            }
+        }
+
+        if !root.status-text.is-empty : Hint {
+            text: root.status-text;
+            color: root.status-tone;
+        }
+    }
 }
 
 export component UsageChart inherits Panel {

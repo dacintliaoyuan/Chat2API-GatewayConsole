@@ -314,6 +314,136 @@ fn requests_page_newest_first_and_attach_retries() {
 }
 
 #[test]
+fn requests_expose_first_token_ms_and_keep_legacy_rows_missing() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    let rows = [
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "duration_ms": 900,
+            "first_token_ms": 180,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+        json!({
+            "time": "2026-11-17T10:00:05+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "duration_ms": 900,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+    ];
+    std::fs::write(
+        &ledger,
+        rows.iter()
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    let rows = payload["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0]["firstTokenMs"],
+        json!({"kind": "missing", "note": "账本没有记录首字耗时，不推算"})
+    );
+    assert_eq!(
+        rows[1]["firstTokenMs"],
+        json!({"kind": "exact", "value": 180})
+    );
+}
+
+#[test]
+fn requests_summarize_the_whole_filtered_set_not_only_the_page() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    let rows = (0..70)
+        .map(|index| {
+            let model = if index % 2 == 0 { "m1" } else { "m2" };
+            json!({
+                "time": format!(
+                    "2026-11-17T{:02}:{:02}:00+08:00",
+                    10 + index / 60,
+                    index % 60
+                ),
+                "model": model,
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_report_status": "reported",
+                "reasoning_tokens": 0,
+                "duration_ms": 1000,
+                "first_token_ms": 100,
+                "usage_source": "upstream",
+                "status": "ok",
+            })
+        })
+        .collect::<Vec<_>>();
+    std::fs::write(
+        &ledger,
+        rows.iter()
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 60, now()).expect("requests");
+    assert_eq!(payload["page"]["rows"].as_array().expect("rows").len(), 60);
+    assert_eq!(
+        payload["summary"]["tokens"]["total"],
+        json!({"kind": "exact", "value": 1400})
+    );
+    assert_eq!(
+        payload["summary"]["requests"]["recorded"],
+        json!({"kind": "exact", "value": 70})
+    );
+    assert_eq!(
+        payload["summary"]["cache"]["hitRate"],
+        json!({"kind": "exact", "value": 20.0})
+    );
+    assert_eq!(
+        payload["summary"]["speed"]["value"],
+        json!({"kind": "exact", "value": 10.0})
+    );
+    assert_eq!(
+        payload["summary"]["firstTokenMs"],
+        json!({"kind": "exact", "value": 100})
+    );
+    let model_speeds = payload["modelSpeeds"].as_array().expect("model speeds");
+    assert_eq!(model_speeds.len(), 2);
+    assert_eq!(model_speeds[0]["model"], json!("m1"));
+    assert_eq!(
+        model_speeds[0]["requests"],
+        json!({"kind": "exact", "value": 35})
+    );
+    assert_eq!(
+        model_speeds[0]["speed"],
+        json!({"kind": "exact", "value": 10.0})
+    );
+    assert_eq!(
+        model_speeds[0]["firstTokenMs"],
+        json!({"kind": "exact", "value": 100})
+    );
+    assert_eq!(model_speeds[1]["model"], json!("m2"));
+
+    let filtered = um_requests(&ledger, "today", Some("m2"), "all", "", None, 60, now())
+        .expect("filtered requests");
+    assert_eq!(
+        filtered["summary"]["requests"]["recorded"],
+        json!({"kind": "exact", "value": 35})
+    );
+    let model_speeds = filtered["modelSpeeds"].as_array().expect("model speeds");
+    assert_eq!(model_speeds.len(), 1);
+    assert_eq!(model_speeds[0]["model"], json!("m2"));
+}
+
+#[test]
 fn logs_read_the_bounded_service_window_and_redact_secrets() {
     let temp = temp();
     let service = temp.path().join("chat2api.log");

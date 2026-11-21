@@ -266,8 +266,127 @@ fn request_row(index: usize) -> main_ui::RequestRow {
         outcome: "成功".into(),
         tone: 0,
         summary: "1200 ms  f314e7d8c7526367baec95ac155b6406".into(),
+        first_token: "120 ms".into(),
         detail: "".into(),
     }
+}
+
+#[test]
+fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(1060.0, 720.0));
+    window.set_page(1);
+    let metrics = vec![
+        main_ui::RequestMetric {
+            label: "Token".into(),
+            value: "1,400".into(),
+            detail: "输入 700 · 输出 700".into(),
+        },
+        main_ui::RequestMetric {
+            label: "请求".into(),
+            value: "70".into(),
+            detail: "失败 0".into(),
+        },
+        main_ui::RequestMetric {
+            label: "缓存命中率".into(),
+            value: "20.0%".into(),
+            detail: "缓存读取 / 输入 Token".into(),
+        },
+        main_ui::RequestMetric {
+            label: "输出速度".into(),
+            value: "10.0 Token/秒".into(),
+            detail: "Token/秒 · 整次平均".into(),
+        },
+    ];
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    let points = vec![
+        main_ui::RequestPoint {
+            label: "10:00".into(),
+            token_value: "1,200".into(),
+            request_value: "60".into(),
+            speed_value: "10.0".into(),
+            token_count: 1200.0,
+            request_count: 60.0,
+            speed_count: 10.0,
+        },
+        main_ui::RequestPoint {
+            label: "11:00".into(),
+            token_value: "200".into(),
+            request_value: "10".into(),
+            speed_value: "10.0".into(),
+            token_count: 200.0,
+            request_count: 10.0,
+            speed_count: 10.0,
+        },
+    ];
+    window.set_request_chart_points(ModelRc::from(points.as_slice()));
+    window.set_request_chart_labels(ModelRc::from([SharedString::from("10:00"), "11:00".into()]));
+    window.set_request_chart_token_counts(ModelRc::from([1200.0, 200.0]));
+    window.set_request_chart_request_counts(ModelRc::from([60.0, 10.0]));
+    window.set_request_chart_speed_counts(ModelRc::from([10.0, 10.0]));
+    let series = vec![
+        main_ui::ChartDataset {
+            label: "alpha".into(),
+            series_type: main_ui::ChartSeriesType::Bar,
+            values: ModelRc::from([1200.0f32, 200.0].as_slice()),
+            ..Default::default()
+        },
+        main_ui::ChartDataset {
+            label: "beta".into(),
+            series_type: main_ui::ChartSeriesType::Bar,
+            values: ModelRc::from([0.0f32, 0.0].as_slice()),
+            ..Default::default()
+        },
+    ];
+    window.set_request_chart_token_series(ModelRc::from(series.as_slice()));
+    window.set_request_chart_request_series(ModelRc::from(series.as_slice()));
+    window.set_request_chart_speed_series(ModelRc::from(series.as_slice()));
+    let models = vec![
+        main_ui::ModelSpeedRow {
+            model: "alpha".into(),
+            requests: "35".into(),
+            output: "350".into(),
+            speed: "10.0".into(),
+            first_token: "100 ms".into(),
+        },
+        main_ui::ModelSpeedRow {
+            model: "beta".into(),
+            requests: "35".into(),
+            output: "350".into(),
+            speed: "10.0".into(),
+            first_token: "100 ms".into(),
+        },
+    ];
+    window.set_request_model_speeds(ModelRc::from(models.as_slice()));
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+
+    assert_eq!(window.get_request_metrics().row_count(), 4);
+    assert_eq!(window.get_request_model_row_count(), 2);
+    assert_eq!(window.get_request_model_first().as_str(), "alpha");
+    assert_eq!(window.get_request_model_speed().as_str(), "10.0");
+    assert_eq!(window.get_request_first_token().as_str(), "120 ms");
+    assert_eq!(window.get_request_metric_label().as_str(), "Token");
+    assert_eq!(window.get_request_plotted_values().row_count(), 2);
+    assert_eq!(
+        window.get_request_plotted_values().row_data(0),
+        Some(1200.0)
+    );
+    assert_eq!(window.get_request_chart_series_count(), 1);
+
+    window.set_request_metric(2);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert_eq!(window.get_request_metric_label().as_str(), "输出速度");
+    assert_eq!(window.get_request_plotted_values().row_data(0), Some(10.0));
+
+    window.set_request_split_by_model(true);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(window.get_request_split());
+    assert_eq!(window.get_request_chart_series_count(), 2);
 }
 
 #[test]

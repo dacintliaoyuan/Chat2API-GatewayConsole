@@ -307,6 +307,9 @@ pub struct Event {
     pub output_tokens: Option<i64>,
     pub duration_ms: Option<i64>,
     pub duration_state: DurationState,
+    /// Time from request start to the first streamed byte, as written by the
+    /// desktop gateway. Old rows and non-stream requests leave it absent.
+    pub first_token_ms: Option<i64>,
     pub status: Option<Value>,
     pub cache_tokens: Option<i64>,
     pub reasoning_tokens: Option<i64>,
@@ -396,6 +399,7 @@ fn event_from_record(record: &Map<String, Value>) -> Event {
         output_tokens: first_int(record, &["output_tokens"]),
         duration_ms,
         duration_state,
+        first_token_ms: first_int(record, &["first_token_ms"]),
         status: record.get("status").cloned(),
         cache_tokens: first_int(record, &["cached_input_tokens", "cache_tokens"]),
         reasoning_tokens: first_int(record, &["reasoning_tokens"]),
@@ -733,6 +737,40 @@ fn total_reading(event: &Event) -> Reading {
     sum_readings(&[token_reading(event, "input"), token_reading(event, "output")])
 }
 
+/// Average first-token latency over the rows that recorded it. Rows written
+/// before the field existed stay missing instead of being counted as zero.
+fn first_token_reading(events: &[&Event]) -> Reading {
+    let values: Vec<i64> = events
+        .iter()
+        .filter_map(|event| event.first_token_ms)
+        .collect();
+    if events.is_empty() {
+        return Reading::missing("所选时间没有请求");
+    }
+    if values.is_empty() {
+        return Reading::missing("账本没有记录首字耗时，不推算");
+    }
+    let average = values.iter().sum::<i64>() as f64 / values.len() as f64;
+    let rounded = (average * 10.0).round() / 10.0;
+    let reading = if rounded.fract() == 0.0 {
+        Reading::exact_int(rounded as i64)
+    } else {
+        Reading::exact_float(rounded)
+    };
+    if values.len() == events.len() {
+        reading
+    } else {
+        Reading::estimate_float(
+            rounded,
+            &format!(
+                "按 {} 个记录了首字耗时的请求平均；{} 个旧记录缺字段",
+                values.len(),
+                events.len() - values.len()
+            ),
+        )
+    }
+}
+
 fn cache_reading(event: &Event) -> Reading {
     match event.cache_report_status.as_deref() {
         Some("reported") => match event.cache_tokens {
@@ -922,6 +960,211 @@ fn speed_payload(logical: &[&Event], empty_note: &str) -> Value {
             "note": "整次平均含首字等待；不是首字耗时或纯生成速度",
         },
     })
+}
+
+/// Cache-read share of the input tokens over the rows that reported cache use.
+fn cache_hit_rate_reading(events: &[&Event]) -> Reading {
+    if events.is_empty() {
+        return Reading::missing("所选时间没有请求");
+    }
+    let reported: Vec<&&Event> = events
+        .iter()
+        .filter(|event| event.cache_report_status.as_deref() == Some("reported"))
+        .collect();
+    if reported.is_empty() {
+        if events
+            .iter()
+            .any(|event| event.cache_report_status.as_deref() == Some("unreported"))
+        {
+            return Reading::unreported("上游没有报告缓存");
+        }
+        return Reading::unknown("旧记录没有缓存报告状态（Q11 unknown）");
+    }
+    let cached: i64 = reported
+        .iter()
+        .map(|event| event.cache_tokens.unwrap_or(0))
+        .sum();
+    let inputs = reported
+        .iter()
+        .map(|event| event.input_tokens)
+        .collect::<Option<Vec<_>>>();
+    let Some(input) = inputs.map(|values| values.into_iter().sum::<i64>()).filter(|input| *input > 0)
+    else {
+        return Reading::missing("报告缓存的请求输入 Token 合计非正，无法计算命中率");
+    };
+    let rate = (cached as f64 / input as f64 * 1000.0).round() / 10.0;
+    if reported.len() == events.len() {
+        Reading::exact_float(rate)
+    } else {
+        Reading::estimate_float(
+            rate,
+            &format!(
+                "按 {} 个报告缓存的请求计算；{} 个请求未报告缓存",
+                reported.len(),
+                events.len() - reported.len()
+            ),
+        )
+    }
+}
+
+/// One summary block over every request matching the current filters, not just
+/// the visible page.
+fn requests_summary(filtered: &[&Event]) -> Value {
+    let input = sum_readings(
+        &filtered
+            .iter()
+            .map(|event| token_reading(event, "input"))
+            .collect::<Vec<_>>(),
+    );
+    let output = sum_readings(
+        &filtered
+            .iter()
+            .map(|event| token_reading(event, "output"))
+            .collect::<Vec<_>>(),
+    );
+    let total = sum_readings(&[input.clone(), output.clone()]);
+    let (recorded, failed, counts) = requests_reading(filtered);
+    json!({
+        "tokens": {
+            "total": total.to_json(),
+            "input": input.to_json(),
+            "output": output.to_json(),
+        },
+        "requests": {
+            "recorded": recorded.to_json(),
+            "failed": failed.to_json(),
+            "counts": counts,
+        },
+        "cache": {"hitRate": cache_hit_rate_reading(filtered).to_json()},
+        "speed": speed_payload(filtered, "所选时间没有请求"),
+        "firstTokenMs": first_token_reading(filtered).to_json(),
+    })
+}
+
+/// Per-model output speed, output tokens and first-token latency over the whole
+/// filtered set.
+fn model_speeds(filtered: &[&Event]) -> Value {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for event in filtered {
+        names.insert(event.model.clone());
+    }
+    let mut rows = Vec::new();
+    for model in names {
+        let events: Vec<&Event> = filtered
+            .iter()
+            .copied()
+            .filter(|event| event.model == model)
+            .collect();
+        let output = sum_readings(
+            &events
+                .iter()
+                .map(|event| token_reading(event, "output"))
+                .collect::<Vec<_>>(),
+        );
+        let speed = speed_payload(&events, "该模型没有请求")
+            .get("value")
+            .cloned()
+            .unwrap_or(Value::Null);
+        rows.push(json!({
+            "model": model,
+            "requests": Reading::exact_int(events.len() as i64).to_json(),
+            "output": output.to_json(),
+            "speed": speed,
+            "firstTokenMs": first_token_reading(&events).to_json(),
+        }));
+    }
+    rows.sort_by(|left, right| {
+        let left_tokens = left.get("output").and_then(reading_value).unwrap_or(0.0);
+        let right_tokens = right.get("output").and_then(reading_value).unwrap_or(0.0);
+        right_tokens
+            .partial_cmp(&left_tokens)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Value::Array(rows)
+}
+
+/// Time buckets for the request chart: hourly for today/24h, daily otherwise.
+/// `all` starts at the earliest matching day so the bucket count stays
+/// proportional to the ledger.
+fn request_buckets(
+    filtered: &[&Event],
+    window: &str,
+    now_ms: f64,
+) -> (Vec<Value>, Vec<String>) {
+    let hourly = window == "today" || window == "24h";
+    let step = if hourly { 3_600_000.0 } else { 86_400_000.0 };
+    let (start, end) = match window_bounds(window, now_ms) {
+        Ok((start, end, _)) => (start, end),
+        Err(_) => (now_ms, now_ms + 1.0),
+    };
+    let start = if window == "all" {
+        let today_start = window_day_keys(1, now_ms)
+            .first()
+            .and_then(|day| day_start_ms(day))
+            .unwrap_or(now_ms);
+        let earliest = filtered.iter().filter_map(|event| event.ms).reduce(f64::min);
+        earliest
+            .and_then(|ms| beijing_day(Some(ms)))
+            .and_then(|day| day_start_ms(&day))
+            .unwrap_or(today_start)
+            .clamp(0.0, today_start)
+    } else {
+        start
+    };
+    let count = (((end - start) / step).ceil() as usize).max(1);
+    let mut groups: Vec<Vec<&Event>> = vec![Vec::new(); count];
+    for event in filtered {
+        if let Some(at) = event.ms.filter(|at| start <= *at && *at < end) {
+            let index = ((at - start) / step) as usize;
+            if let Some(group) = groups.get_mut(index) {
+                group.push(event);
+            }
+        }
+    }
+    let mut models: BTreeSet<String> = BTreeSet::new();
+    for event in filtered {
+        models.insert(event.model.clone());
+    }
+    let mut buckets = Vec::with_capacity(count);
+    for (index, group) in groups.iter().enumerate() {
+        let label = if hourly {
+            beijing_hour(Some(start + index as f64 * step))
+                .unwrap_or_else(|| format!("{index:02}:00"))
+        } else {
+            beijing_day(Some(start + index as f64 * step)).unwrap_or_default()
+        };
+        let mut by_model = Vec::new();
+        for model in &models {
+            let events: Vec<&Event> = group
+                .iter()
+                .copied()
+                .filter(|event| event.model == *model)
+                .collect();
+            if events.is_empty() {
+                continue;
+            }
+            by_model.push(json!({
+                "model": model,
+                "tokens": sum_readings(
+                    &events.iter().map(|event| total_reading(event)).collect::<Vec<_>>()
+                ).to_json(),
+                "requests": Reading::exact_int(events.len() as i64).to_json(),
+                "speed": speed_payload(&events, "该时段没有请求")
+                    .get("value").cloned().unwrap_or(Value::Null),
+            }));
+        }
+        buckets.push(json!({
+            "label": label,
+            "tokens": sum_readings(
+                &group.iter().map(|event| total_reading(event)).collect::<Vec<_>>()
+            ).to_json(),
+            "requests": Reading::exact_int(group.len() as i64).to_json(),
+            "speed": speed_payload(group, "该时段没有请求")
+                .get("value").cloned().unwrap_or(Value::Null),
+            "models": by_model,
+        }));
+    }
+    (buckets, models.into_iter().collect())
 }
 
 fn empty_today(status: &str, note: &str, now_ms: f64) -> Value {
@@ -1658,6 +1901,11 @@ fn request_row(event: &Event, key: String, retries: &[&Event]) -> Value {
         }
         _ => Reading::missing("缺输出 Token 或正耗时，无法计算"),
     };
+    let first_token_reading = match event.first_token_ms {
+        Some(value) if value >= 0 => Reading::exact_int(value),
+        Some(_) => Reading::unknown("首字耗时字段为负，不可解析"),
+        None => Reading::missing("账本没有记录首字耗时，不推算"),
+    };
     let request_id = valid_request_id(event.request_id.as_deref());
     let retry_rows = request_id.as_ref().map(|_| {
         retries
@@ -1692,7 +1940,7 @@ fn request_row(event: &Event, key: String, retries: &[&Event]) -> Value {
         "cacheRead": cache_reading.to_json(),
         "reasoning": reasoning_reading.to_json(),
         "durationMs": duration_reading.to_json(),
-        "firstTokenMs": Reading::missing("账本没有记录首字耗时，不推算").to_json(),
+        "firstTokenMs": first_token_reading.to_json(),
         "speed": speed_reading.to_json(),
         "speedBasis": "whole_request",
         "retries": retry_rows,
@@ -1833,10 +2081,11 @@ pub fn um_requests(
     };
     if status == "missing" || status == "unavailable" {
         let page_coverage = json!({
-            "status": status, "note": note, "ledger_present": read.ledger_present,
+            "status": status, "note": note.clone(), "ledger_present": read.ledger_present,
             "events": read.events.len(), "errors": read.errors,
             "truncated": read.truncated,
         });
+        let missing = Reading::missing(&note);
         return Ok(json!({
             "page": {
                 "rows": [],
@@ -1846,6 +2095,24 @@ pub fn um_requests(
             },
             "range": window,
             "models": [],
+            "summary": {
+                "tokens": {
+                    "total": missing.to_json(),
+                    "input": missing.to_json(),
+                    "output": missing.to_json(),
+                },
+                "requests": {
+                    "recorded": missing.to_json(),
+                    "failed": missing.to_json(),
+                    "counts": {},
+                },
+                "cache": {"hitRate": missing.to_json()},
+                "speed": {"value": missing.to_json(), "basis": "whole_request", "samples": 0},
+                "firstTokenMs": missing.to_json(),
+            },
+            "modelSpeeds": [],
+            "buckets": [],
+            "splitModels": [],
             "coverage": coverage(&read),
             "timezone": "Asia/Shanghai",
             "checked_epoch": (now_ms / 1000.0).floor() as i64,
@@ -1873,6 +2140,7 @@ pub fn um_requests(
         })
         .count();
     let mut rows = Vec::new();
+    let mut filtered: Vec<&Event> = Vec::new();
     for (index, event) in logical.iter().enumerate() {
         let (row_result, row_note, _http) = result_of(event);
         if model.is_some_and(|model| event.model != model) {
@@ -1900,8 +2168,12 @@ pub fn um_requests(
             }
         }
         let key = keys.get(&index).cloned().unwrap_or_default();
+        filtered.push(*event);
         rows.push(request_row(event, key, &attached));
     }
+    let summary = requests_summary(&filtered);
+    let model_speeds = model_speeds(&filtered);
+    let (buckets, split_models) = request_buckets(&filtered, window, now_ms);
     rows.sort_by(|left, right| {
         let left_at = left.get("at").and_then(Value::as_i64).unwrap_or(0);
         let right_at = right.get("at").and_then(Value::as_i64).unwrap_or(0);
@@ -1953,6 +2225,10 @@ pub fn um_requests(
         },
         "range": window,
         "models": models,
+        "summary": summary,
+        "modelSpeeds": model_speeds,
+        "buckets": buckets,
+        "splitModels": split_models,
         "coverage": page_coverage,
         "timezone": "Asia/Shanghai",
         "checked_epoch": (now_ms / 1000.0).floor() as i64,

@@ -1217,6 +1217,16 @@ fn record_usage(
     usage: Option<&Value>,
     output_estimate: u64,
 ) {
+    record_usage_with_first_token(context, status, usage, output_estimate, None);
+}
+
+fn record_usage_with_first_token(
+    context: &ResponsesContext<'_>,
+    status: &str,
+    usage: Option<&Value>,
+    output_estimate: u64,
+    first_token_ms: Option<u64>,
+) {
     context.state.ledger.record(UsageRecord {
         model: context.model,
         stream: context.client_stream,
@@ -1233,6 +1243,7 @@ fn record_usage(
             context.state.config.desktop_instance,
         ),
         attribution: context.attribution,
+        first_token_ms,
     });
 }
 
@@ -1976,7 +1987,13 @@ fn forward_stream_with_inner(
         reader.cancel();
         drop(reader);
         if state.status == "client_disconnected" {
-            record_stream_usage(context, &state.status, &state.usage, state.output_chars);
+            record_stream_usage(
+                context,
+                &state.status,
+                &state.usage,
+                state.output_chars,
+                state.first_token_ms,
+            );
             return ChatResult::Written {
                 close: true,
                 failed: false,
@@ -2001,7 +2018,13 @@ fn forward_stream_with_inner(
                     continue;
                 }
             }
-            record_stream_usage(context, &state.status, &state.usage, state.output_chars);
+            record_stream_usage(
+                context,
+                &state.status,
+                &state.usage,
+                state.output_chars,
+                state.first_token_ms,
+            );
             return ChatResult::Response(precommit_stream_error_response(&state, context));
         }
         if !state.failure_written && state.status != "ok" && state.status != "incomplete" {
@@ -2023,7 +2046,13 @@ fn forward_stream_with_inner(
             let _ = write_sse_event(stream, "response.failed", &payload);
             state.failure_written = true;
         }
-        record_stream_usage(context, &state.status, &state.usage, state.output_chars);
+        record_stream_usage(
+            context,
+            &state.status,
+            &state.usage,
+            state.output_chars,
+            state.first_token_ms,
+        );
         return ChatResult::Written {
             close: true,
             failed: state.status != "ok",
@@ -2086,6 +2115,7 @@ impl ResponsesStreamFailure {
 
 struct ResponsesStreamState {
     committed: bool,
+    first_token_ms: Option<u64>,
     prelude: Vec<u8>,
     status: String,
     usage: Value,
@@ -2099,6 +2129,7 @@ impl ResponsesStreamState {
     fn new(prelude: Vec<u8>) -> Self {
         Self {
             committed: false,
+            first_token_ms: None,
             prelude,
             status: "ok".to_string(),
             usage: Value::Object(Map::new()),
@@ -2207,7 +2238,13 @@ fn commit_responses_stream(
         return false;
     }
     let prelude = std::mem::take(&mut state.prelude);
-    write_chunk(stream, &prelude).is_ok()
+    if write_chunk(stream, &prelude).is_err() {
+        return false;
+    }
+    if state.first_token_ms.is_none() {
+        state.first_token_ms = Some((Instant::now() - context.started_at).as_millis() as u64);
+    }
+    true
 }
 
 fn precommit_stream_error_response(
@@ -2289,6 +2326,7 @@ fn record_stream_usage(
     status: &str,
     usage: &Value,
     output_chars: u64,
+    first_token_ms: Option<u64>,
 ) {
     if status == "ok" {
         context
@@ -2313,11 +2351,12 @@ fn record_stream_usage(
     } else {
         output_chars / 4
     };
-    record_usage(
+    record_usage_with_first_token(
         context,
         status,
         Some(usage).filter(|usage| usage.as_object().is_some_and(|usage| !usage.is_empty())),
         output_estimate,
+        first_token_ms,
     );
 }
 

@@ -196,6 +196,16 @@ fn record_usage(
     usage: Option<&Value>,
     output_estimate: u64,
 ) {
+    record_usage_with_first_token(context, status, usage, output_estimate, None);
+}
+
+fn record_usage_with_first_token(
+    context: &MessagesContext<'_>,
+    status: &str,
+    usage: Option<&Value>,
+    output_estimate: u64,
+    first_token_ms: Option<u64>,
+) {
     context.state.ledger.record(UsageRecord {
         model: context.model,
         stream: context.client_stream,
@@ -212,6 +222,7 @@ fn record_usage(
             context.state.config.desktop_instance,
         ),
         attribution: context.attribution,
+        first_token_ms,
     });
 }
 
@@ -516,16 +527,18 @@ fn record_stream_usage(context: &MessagesContext<'_>, outcome: &MessagesStreamOu
             outcome.exception.map(str::to_string),
         );
     }
-    record_usage(
+    record_usage_with_first_token(
         context,
         outcome.status.reason(),
         outcome.usage.as_ref(),
         outcome.output_chars / 4,
+        outcome.first_token_ms,
     );
 }
 
 struct MessagesSseState {
     committed: bool,
+    first_token_ms: Option<u64>,
     staged: Vec<u8>,
     event_lines: Vec<String>,
     saw_terminal: bool,
@@ -538,6 +551,7 @@ impl MessagesSseState {
     fn new() -> Self {
         Self {
             committed: false,
+            first_token_ms: None,
             staged: Vec::new(),
             event_lines: Vec::new(),
             saw_terminal: false,
@@ -601,6 +615,7 @@ impl AnthropicUsageAccumulator {
 
 struct MessagesStreamOutcome {
     committed: bool,
+    first_token_ms: Option<u64>,
     status: MessagesStreamStatus,
     usage: Option<Value>,
     output_chars: u64,
@@ -709,6 +724,7 @@ fn consume_stream(
     drop(reader);
     MessagesStreamOutcome {
         committed: state.committed,
+        first_token_ms: state.first_token_ms,
         status: state.status,
         usage: state.usage.usage(),
         output_chars: state.usage.output_chars,
@@ -850,7 +866,13 @@ fn flush_prelude(
         return false;
     }
     let staged = std::mem::take(&mut state.staged);
-    write_chunk(stream, &staged).is_ok()
+    if write_chunk(stream, &staged).is_err() {
+        return false;
+    }
+    if state.first_token_ms.is_none() {
+        state.first_token_ms = Some((Instant::now() - context.started_at).as_millis() as u64);
+    }
+    true
 }
 
 fn commit_headers(

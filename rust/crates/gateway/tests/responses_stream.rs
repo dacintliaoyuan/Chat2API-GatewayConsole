@@ -156,6 +156,10 @@ fn chat_stream_events_follow_the_python_shape_and_order() {
     assert_eq!(rows[0]["protocol"], json!("responses"));
     assert_eq!(rows[0]["status"], json!("ok"));
     assert_eq!(rows[0]["stream"], json!(true));
+    assert!(
+        rows[0]["first_token_ms"].as_u64().is_some(),
+        "a stream row records the first token time"
+    );
 }
 
 #[test]

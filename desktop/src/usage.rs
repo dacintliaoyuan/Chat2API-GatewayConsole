@@ -77,15 +77,83 @@ pub struct RequestRow {
     pub input: String,
     pub output: String,
     pub duration: String,
+    pub first_token: String,
     pub detail: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestSummary {
+    pub token_total: String,
+    pub token_input: String,
+    pub token_output: String,
+    pub request_total: String,
+    pub request_failed: String,
+    pub cache_hit_rate: String,
+    pub speed: String,
+    pub speed_note: String,
+    pub first_token: String,
+}
+
+impl Default for RequestSummary {
+    fn default() -> Self {
+        Self {
+            token_total: "—".into(),
+            token_input: "—".into(),
+            token_output: "—".into(),
+            request_total: "—".into(),
+            request_failed: "—".into(),
+            cache_hit_rate: "—".into(),
+            speed: "—".into(),
+            speed_note: String::new(),
+            first_token: "—".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelSpeed {
+    pub model: String,
+    pub requests: String,
+    pub output: String,
+    pub speed: String,
+    pub first_token: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestModelPoint {
+    pub model: String,
+    pub tokens: Option<i64>,
+    pub requests: Option<i64>,
+    pub speed: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestPoint {
+    pub label: String,
+    pub tokens: String,
+    pub requests: String,
+    pub speed: String,
+    pub token_count: Option<i64>,
+    pub request_count: Option<i64>,
+    pub speed_count: Option<f64>,
+    pub models: Vec<RequestModelPoint>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestChart {
+    pub points: Vec<RequestPoint>,
+    pub models: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RequestPage {
     pub rows: Vec<RequestRow>,
     pub earlier: Option<String>,
     pub coverage: Coverage,
     pub message: String,
+    pub summary: RequestSummary,
+    pub model_speeds: Vec<ModelSpeed>,
+    pub chart: RequestChart,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +215,42 @@ fn grouped(value: i64) -> String {
         out.push(digit);
     }
     out
+}
+
+fn float_amount(reading: &Value) -> Option<f64> {
+    reading["value"].as_f64().filter(|value| value.is_finite())
+}
+
+fn reading_prefix(reading: &Value) -> &'static str {
+    match reading["kind"].as_str() {
+        Some("estimate") => "约 ",
+        Some("atLeast") => "≥ ",
+        _ => "",
+    }
+}
+
+/// One decimal for rates such as tokens/s; missing readings stay `—`.
+fn float_display(reading: &Value) -> String {
+    let Some(value) = float_amount(reading) else {
+        return "—".to_string();
+    };
+    format!("{}{value:.1}", reading_prefix(reading))
+}
+
+fn percent_display(reading: &Value) -> String {
+    let Some(value) = float_amount(reading) else {
+        return "—".to_string();
+    };
+    format!("{}{value:.1}%", reading_prefix(reading))
+}
+
+fn first_token_display(reading: &Value) -> String {
+    let value = display(reading);
+    if value == "—" {
+        value
+    } else {
+        format!("{value} ms")
+    }
 }
 
 fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, String) {
@@ -242,6 +346,9 @@ pub fn read_requests(
                 earlier: None,
                 coverage: Coverage::Unavailable,
                 message: format!("无法读取所选请求：{error}"),
+                summary: RequestSummary::default(),
+                model_speeds: Vec::new(),
+                chart: RequestChart::default(),
             };
         }
     };
@@ -256,6 +363,79 @@ pub fn read_requests(
         earlier: page["earlier"].as_str().map(str::to_owned),
         coverage,
         message,
+        summary: request_summary(&value["summary"]),
+        model_speeds: value["modelSpeeds"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(model_speed)
+            .collect(),
+        chart: request_chart(&value),
+    }
+}
+
+fn request_summary(value: &Value) -> RequestSummary {
+    RequestSummary {
+        token_total: amount_display(&value["tokens"]["total"]),
+        token_input: amount_display(&value["tokens"]["input"]),
+        token_output: amount_display(&value["tokens"]["output"]),
+        request_total: amount_display(&value["requests"]["recorded"]),
+        request_failed: amount_display(&value["requests"]["failed"]),
+        cache_hit_rate: percent_display(&value["cache"]["hitRate"]),
+        speed: float_display(&value["speed"]["value"]),
+        speed_note: text(&value["speed"]["coverage"]["note"], ""),
+        first_token: first_token_display(&value["firstTokenMs"]),
+    }
+}
+
+fn model_speed(row: &Value) -> ModelSpeed {
+    ModelSpeed {
+        model: text(&row["model"], "未知模型"),
+        requests: amount_display(&row["requests"]),
+        output: amount_display(&row["output"]),
+        speed: float_display(&row["speed"]),
+        first_token: first_token_display(&row["firstTokenMs"]),
+    }
+}
+
+fn request_chart(value: &Value) -> RequestChart {
+    let points = value["buckets"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|row| RequestPoint {
+            label: text(&row["label"], "—"),
+            tokens: amount_display(&row["tokens"]),
+            requests: amount_display(&row["requests"]),
+            speed: float_display(&row["speed"]),
+            token_count: amount(&row["tokens"]),
+            request_count: amount(&row["requests"]),
+            speed_count: float_amount(&row["speed"]),
+            models: row["models"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .map(|model| RequestModelPoint {
+                    model: text(&model["model"], "未知模型"),
+                    tokens: amount(&model["tokens"]),
+                    requests: amount(&model["requests"]),
+                    speed: float_amount(&model["speed"]),
+                })
+                .collect(),
+        })
+        .collect();
+    RequestChart {
+        points,
+        models: value["splitModels"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|model| text(model, ""))
+            .collect(),
     }
 }
 
@@ -289,6 +469,7 @@ fn request_row(row: &Value) -> RequestRow {
         input: display(&row["input"]),
         output: display(&row["output"]),
         duration,
+        first_token: first_token_display(&row["firstTokenMs"]),
         detail,
     }
 }
@@ -343,12 +524,13 @@ pub fn read_request_logs(
 /// sanitized lines already filtered by [`read_request_logs`].
 pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
     let mut detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
+        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n首字  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
         row.at,
         row.result,
         row.model,
         row.request_id.as_deref().unwrap_or("—"),
         row.duration,
+        row.first_token,
         row.input,
         row.output,
         row.detail

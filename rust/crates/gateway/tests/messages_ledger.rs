@@ -219,6 +219,10 @@ fn a_stream_row_translates_the_anthropic_usage_events() {
     assert_eq!(row["estimated"], json!(false));
     assert_eq!(row["usage_source"], json!("upstream"));
     assert_eq!(row["protocol"], json!("messages"));
+    assert!(
+        row["first_token_ms"].as_u64().is_some(),
+        "a stream row records the first token time"
+    );
     assert_verified_attribution(row);
 }
 

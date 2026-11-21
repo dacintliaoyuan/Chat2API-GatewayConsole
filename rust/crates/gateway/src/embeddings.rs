@@ -65,6 +65,7 @@ pub fn handle_embeddings(
             key_id: None,
             request_id: Some(&request.request_id),
             attribution: "absent",
+            first_token_ms: None,
         });
     }
     if let Some(final_status) = final_failure {
