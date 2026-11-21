@@ -354,9 +354,11 @@ fn load_historical_logs(
                         format!("历史日志 · 本页 {count} 条")
                     };
                     window.set_log_status(text.into());
+                    window.set_log_tone(3);
                 }
                 Err(error) => {
                     nav.older = None;
+                    window.set_older_logs(false);
                     window.set_newer_logs(nav.pages.len() > 1);
                     model.set_vec(Vec::new());
                     window.set_log_status(format!("历史日志读取失败：{error}").into());
