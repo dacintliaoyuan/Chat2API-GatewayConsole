@@ -205,7 +205,12 @@ pub fn read_request_head(
                 // An idle keep-alive connection timed out waiting for the
                 // next request head. That is a clean end of the connection,
                 // not a malformed request: close without a synthetic 400.
-                return Ok(None);
+                // A partial head that timed out is not clean: keep the error
+                // path so the caller answers 400 for the truncated request.
+                if raw.is_empty() {
+                    return Ok(None);
+                }
+                return Err(error);
             }
             Err(error) => return Err(error),
         };

@@ -41,9 +41,9 @@ param(
 #      guard over a this-boot "running" instance instead of silently losing it
 #      to a newer watch build;
 #   3. /ready failed on FailureThreshold consecutive runs;
-#   4. no private chat2api process exists (the round 18 stop-scope identity -
-#      any other chat2api.py never
-#      count as "alive") and nothing else listens on port 8000;
+#   4. both the private chat2api worker and the ingress identities exist (the
+#      round 18 stop-scope identity - any other chat2api.py never counts as
+#      "alive") and the loopback endpoint is owned by the ingress;
 #   5. the last private instance did not end in a graceful /admin/shutdown
 #      that is newer than the desired state (a deliberate stop that bypassed
 #      the runtime, e.g. a direct control call);
@@ -281,6 +281,13 @@ function Invoke-DefaultProcessQuery {
                 # The pair is incomplete: the component start fills the missing
                 # component and leaves the live one alone. A recorded worker port
                 # is only a hint and never blocks recovery.
+                return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
+            }
+            if ($null -eq (Get-GatewayWorkerPort -Descriptor $desc) -and
+                    (Test-GatewayWorkerStartingExpired -Descriptor $desc `
+                        -Processes $workerScope.Private)) {
+                # A worker alive past StartTimeoutSeconds without a port file is
+                # stuck, not starting: the component start will replace it.
                 return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
             }
             $pids = @()
@@ -1000,6 +1007,62 @@ function Invoke-WatchSelfTest {
                 (@($both.Pids) -join ',') -ne '4242,4243') {
             throw ('self-test failed: a live worker and ingress were not verified together (state={0}, pids={1})' -f
                 $both.State, (@($both.Pids) -join ','))
+        }
+        $script:selfTestWorkerScope = @()
+        $script:selfTestIngressScope = @()
+    }
+
+    # P2: a worker process alive past StartTimeoutSeconds without a port file
+    # is stuck, not starting: the watch returns absent so the component start
+    # can replace it.
+    & {
+        function Get-GatewayWorkerPort {
+            param($Descriptor)
+            return $null
+        }
+        function Select-GatewayStopScope {
+            param($Descriptor, $GatewayRoot, [object[]]$Identities = @())
+            $component = ''
+            if (@($Identities).Count -gt 0) {
+                $componentProp = $Identities[0].PSObject.Properties['Component']
+                if ($null -ne $componentProp) {
+                    $component = [string]$componentProp.Value
+                }
+            }
+            if ($component -eq 'ingress') {
+                return [pscustomobject]@{
+                    Private = @($script:selfTestIngressScope); Unconfirmed = @()
+                }
+            }
+            return [pscustomobject]@{
+                Private = @($script:selfTestWorkerScope); Unconfirmed = @()
+            }
+        }
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+            CreationDate = [datetime]::UtcNow.AddSeconds(-30)
+        })
+        $script:selfTestIngressScope = @([pscustomobject]@{
+            ProcessId = 4243; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode ingress --port 8000'
+            CreationDate = [datetime]::UtcNow
+        })
+        $expired = Invoke-DefaultProcessQuery
+        if ($expired.State -ne 'absent') {
+            throw ('self-test failed: a worker past the start budget was not treated as absent (state={0})' -f
+                $expired.State)
+        }
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+            CreationDate = [datetime]::UtcNow
+        })
+        $starting = Invoke-DefaultProcessQuery
+        if ($starting.State -ne 'verified' -or
+                (@($starting.Pids) -join ',') -ne '4242,4243') {
+            throw ('self-test failed: a worker within the start budget was not verified (state={0}, pids={1})' -f
+                $starting.State, (@($starting.Pids) -join ','))
         }
         $script:selfTestWorkerScope = @()
         $script:selfTestIngressScope = @()
