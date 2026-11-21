@@ -988,8 +988,10 @@ fn cache_hit_rate_reading(events: &[&Event]) -> Reading {
         .iter()
         .map(|event| event.input_tokens)
         .collect::<Option<Vec<_>>>();
-    let Some(input) = inputs.map(|values| values.into_iter().sum::<i64>()).filter(|input| *input > 0)
-    else {
+    let input = inputs
+        .map(|values| values.into_iter().sum::<i64>())
+        .filter(|input| *input > 0);
+    let Some(input) = input else {
         return Reading::missing("报告缓存的请求输入 Token 合计非正，无法计算命中率");
     };
     let rate = (cached as f64 / input as f64 * 1000.0).round() / 10.0;
