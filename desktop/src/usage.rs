@@ -342,3 +342,32 @@ pub fn read_request_logs(
         message: message.into(),
     }
 }
+
+/// Detail text for one ledger row. `logs` is `None` while the matching service
+/// log events are still being read; the finished text only ever includes the
+/// sanitized lines already filtered by [`read_request_logs`].
+pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
+    let mut detail = format!(
+        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
+        row.at,
+        row.result,
+        row.model,
+        row.request_id.as_deref().unwrap_or("—"),
+        row.duration,
+        row.input,
+        row.output,
+        row.detail
+    );
+    match logs {
+        Some(logs) => {
+            detail.push_str("\n\n运行日志\n");
+            detail.push_str(&logs.message);
+            if !logs.lines.is_empty() {
+                detail.push('\n');
+                detail.push_str(&logs.lines.join("\n"));
+            }
+        }
+        None => detail.push_str("\n\n正在读取关联运行日志…"),
+    }
+    detail
+}

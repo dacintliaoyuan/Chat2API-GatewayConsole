@@ -146,6 +146,9 @@ export component MainWindow inherits Window {
     in property <string> usage-status;
     in property <int> usage-tone: 3;
     in property <bool> allow-motion: false;
+    // Test seam: lets the interaction tests switch chart modes without pixels.
+    in-out property <bool> usage-show-line: false;
+    in-out property <bool> usage-show-requests: false;
 
     in property <string> log-status: "尚未读取日志";
     in property <int> log-tone: 3;
@@ -175,6 +178,7 @@ export component MainWindow inherits Window {
     in-out property <string> selected-request;
     in property <string> request-detail-title;
     in property <string> request-detail;
+    in-out property <length> request-scroll-y: 0px;
 
     in-out property <string> port-input: "7999";
     in property <string> active-address;
@@ -197,8 +201,26 @@ export component MainWindow inherits Window {
     out property <length> overview-login-content-height: login-card.content-height;
     out property <length> overview-chart-y: usage-chart.y;
     out property <length> overview-chart-height: usage-chart.height;
+    out property <length> usage-plot-x: usage-chart.plot-x;
+    out property <length> usage-plot-y: usage-chart.plot-y;
+    out property <length> usage-plot-width: usage-chart.plot-width;
+    out property <length> usage-plot-height: usage-chart.plot-height;
+    out property <int> usage-pinned-index: usage-chart.pinned-index;
+    out property <int> usage-active-index: usage-chart.active-index;
+    out property <bool> usage-can-unpin: usage-chart.can-unpin;
+    out property <string> usage-selection-label: usage-chart.selection-label;
+    out property <string> usage-selection-value: usage-chart.selection-value;
+    out property <[string]> usage-axis-ticks: usage-chart.axis-ticks;
+    out property <length> usage-unpin-x: usage-chart.unpin-x;
+    out property <length> usage-unpin-y: usage-chart.unpin-y;
+    out property <length> usage-unpin-width: usage-chart.unpin-width;
+    out property <length> usage-unpin-height: usage-chart.unpin-height;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
+    out property <length> request-list-width: request-list-pane.width;
+    out property <length> request-list-x: request-list-panel.absolute-position.x;
+    out property <length> request-list-y: request-list-panel.absolute-position.y;
+    out property <length> request-list-height: request-list-panel.height;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -369,6 +391,8 @@ export component MainWindow inherits Window {
                         status-text: root.usage-status;
                         status-tone: Theme.status(root.usage-tone);
                         allow-motion: root.allow-motion;
+                        show-line <=> root.usage-show-line;
+                        show-requests <=> root.usage-show-requests;
                         period-changed(index) => { root.usage-range-changed(index); }
                     }
                 }
@@ -378,7 +402,7 @@ export component MainWindow inherits Window {
                 visible: root.page == 1;
                 vertical-stretch: 1;
                 spacing: 12px;
-                VerticalLayout {
+                request-list-pane := VerticalLayout {
                     horizontal-stretch: 1;
                     visible: !root.compact || root.selected-request.is-empty;
                     spacing: 8px;
@@ -404,9 +428,10 @@ export component MainWindow inherits Window {
                         Button { text: "查询"; clicked => { root.query-requests(0); } }
                     }
                     Hint { text: root.request-status; color: Theme.status(root.request-tone); }
-                    Panel {
+                    request-list-panel := Panel {
                         vertical-stretch: 1;
                         ListView {
+                            content-y <=> root.request-scroll-y;
                             for item in root.requests : Selectable {
                                 label: item.at + " " + item.model + " " + item.outcome;
                                 height: 50px;
@@ -431,10 +456,8 @@ export component MainWindow inherits Window {
                         Button { text: "较早"; enabled: root.older-requests; clicked => { root.query-requests(1); } }
                     }
                 }
-                TextDetails {
-                    visible: !root.selected-request.is-empty;
-                    width: root.selected-request.is-empty ? 0px
-                        : root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
+                if !root.selected-request.is-empty : TextDetails {
+                    width: root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
                     title: root.request-detail-title;
                     body: root.request-detail;
                     closed => { root.selected-request = ""; }
