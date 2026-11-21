@@ -13,7 +13,7 @@
 
 mod tray;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
@@ -24,7 +24,7 @@ use chrono::TimeZone;
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel};
 use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
-    AuthRead, AuthState, HttpAuthAdmin, LoadOutcome,
+    AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
 use um_desktop::gateway::{
@@ -118,6 +118,10 @@ impl AccountSurface for MainWindow {
         self.set_account_tone(status_tone(tone));
     }
 
+    fn set_overview_pulse(&self, value: bool) {
+        self.set_account_pulse(value);
+    }
+
     fn set_login_status(&self, value: &str) {
         self.set_login_status(value.into());
     }
@@ -138,8 +142,12 @@ fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved
     window.set_password_visible(false);
     window.set_credential_status("".into());
     window.set_credential_tone(3);
+    window.set_account_input_invalid(false);
+    window.set_account_input_error("".into());
+    window.set_password_input_invalid(false);
+    window.set_password_input_error("".into());
     window.set_show_intro(false);
-    window.set_page(2);
+    window.invoke_navigate_to(2);
     window.set_account_form_visible(true);
 }
 
@@ -229,14 +237,18 @@ fn apply_overview(window: &MainWindow, overview: &Overview, account: &AccountVie
     window.set_gateway_value(overview.gateway.value.clone().into());
     window.set_gateway_detail(overview.gateway.detail.clone().into());
     window.set_gateway_tone(status_tone(overview.gateway.tone));
+    // A completed probe is a settled state; only the first read pulses.
+    window.set_gateway_pulse(false);
     window.set_supervision_value(overview.supervision.value.clone().into());
     window.set_supervision_detail(overview.supervision.detail.clone().into());
     window.set_supervision_tone(status_tone(overview.supervision.tone));
     window.set_upstream_value(overview.upstream.value.clone().into());
     window.set_upstream_detail(overview.upstream.detail.clone().into());
     window.set_upstream_tone(status_tone(overview.upstream.tone));
+    window.set_upstream_pulse(false);
     apply_account(window, account);
     window.set_status_line(overview::status_line(overview).into());
+    window.set_status_tone(if overview.failures.is_empty() { 0 } else { 2 });
     window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
 }
 
@@ -571,6 +583,7 @@ fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &Sha
     let status = Arc::clone(status);
     let weak = window.as_weak();
     window.set_status_line("正在停止本实例网关…".into());
+    window.set_status_tone(status_tone(Tone::Warn));
     std::thread::spawn(move || {
         let stopped = {
             let mut guard = supervisor.lock().expect("gateway supervisor poisoned");
@@ -588,6 +601,7 @@ fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &Sha
                     if let Some(window) = weak.upgrade() {
                         show_now(&window);
                         window.set_status_line(format!("网关未停止：{error}").into());
+                        window.set_status_tone(status_tone(Tone::Bad));
                     }
                 });
                 return;
@@ -923,13 +937,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let weak_navigate = window.as_weak();
-    let requests_opened = Cell::new(false);
     window.on_navigate(move |page| {
         if let Some(window) = weak_navigate.upgrade() {
             window.set_page(page);
             if page == 3 {
                 REFRESH_LOGS.store(true, Ordering::SeqCst);
-            } else if page == 1 && !requests_opened.replace(true) {
+            } else if page == 1 {
+                // Re-entering the request page re-reads the ledger; the
+                // generation guard in `load_requests` drops stale results.
                 window.invoke_query_requests(0);
             }
         }
@@ -1053,8 +1068,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match form.validate() {
                 Ok(credentials) => credentials,
                 Err(error) => {
-                    window.set_credential_status(format!("无法保存：{error}").into());
-                    window.set_credential_tone(status_tone(Tone::Bad));
+                    let account_error = error == FormError::AccountRequired;
+                    window.set_account_input_invalid(account_error);
+                    window.set_account_input_error(if account_error {
+                        error.message().into()
+                    } else {
+                        "".into()
+                    });
+                    window.set_password_input_invalid(!account_error);
+                    window.set_password_input_error(if account_error {
+                        "".into()
+                    } else {
+                        error.message().into()
+                    });
+                    window.set_credential_status("".into());
+                    window.set_credential_tone(3);
                     return;
                 }
             }
@@ -1065,6 +1093,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         };
         window.set_account_form_visible(false);
+        window.set_account_input_invalid(false);
+        window.set_account_input_error("".into());
+        window.set_password_input_invalid(false);
+        window.set_password_input_error("".into());
         window.set_account_busy(true);
         window.set_credential_status("正在保存账号密码并应用到本实例网关…".into());
         window.set_credential_tone(status_tone(Tone::Warn));
@@ -1296,11 +1328,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let port = match config::validate_port(&text) {
             Ok(port) => port,
             Err(error) => {
-                window.set_settings_status(format!("端口无效：{error}").into());
-                window.set_settings_tone(status_tone(Tone::Bad));
+                window.set_port_input_invalid(true);
+                window.set_port_input_error(format!("端口无效：{error}").into());
+                window.set_settings_status("".into());
                 return;
             }
         };
+        window.set_port_input_invalid(false);
+        window.set_port_input_error("".into());
         window.set_port_busy(true);
         window.set_settings_status(format!("正在检查端口 {port}…").into());
         window.set_settings_tone(status_tone(Tone::Warn));

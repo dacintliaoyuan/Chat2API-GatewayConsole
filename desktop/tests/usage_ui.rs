@@ -228,13 +228,13 @@ fn closing_request_detail_keeps_filters_page_and_scroll_position() {
     window.set_request_result(2);
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
-    window.set_request_scroll_y(-144.0);
+    window.set_request_scroll_y(-138.0);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 
     let closed_width = window.get_request_list_width();
     window.set_selected_request("key-3".into());
     window.set_request_detail("请求详情".into());
-    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     click_request_row(&window, 0);
     let open_width = window.get_request_list_width();
     assert!(closed_width > 100.0);
@@ -244,12 +244,16 @@ fn closing_request_detail_keeps_filters_page_and_scroll_position() {
     );
 
     press(&window, Key::Escape);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert_eq!(window.get_selected_request().as_str(), "");
     assert_eq!(window.get_request_keyword().as_str(), "fixture");
     assert_eq!(window.get_request_period(), 1);
     assert_eq!(window.get_request_result(), 2);
     assert_eq!(window.get_requests().row_count(), 20);
-    assert_eq!(window.get_request_scroll_y(), -144.0);
+    assert!(
+        (window.get_request_scroll_y() + 138.0).abs() < 1.0,
+        "closing the detail must keep the scroll position"
+    );
     assert!(
         (window.get_request_list_width() - closed_width).abs() < 1.0,
         "closing the detail must return the full list width"

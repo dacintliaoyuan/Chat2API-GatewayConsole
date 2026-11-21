@@ -1,8 +1,8 @@
 use um_desktop::account::{
     account_view, apply_account, clear, credentials_path, first_login, first_login_needed,
     intro_visible, load_from, manual_reason_label, save_to, tray_tooltip, AccountForm,
-    AccountSurface, AuthAdmin, AuthRead, AuthState, AuthStatus, Credentials, HttpAuthAdmin,
-    LoadOutcome, PasswordInput,
+    AccountSurface, AuthAdmin, AuthRead, AuthState, AuthStatus, Credentials, FormError,
+    HttpAuthAdmin, LoadOutcome, PasswordInput,
 };
 use um_desktop::gateway::ControlToken;
 use um_desktop::overview::Tone;
@@ -167,9 +167,9 @@ fn toggling_the_password_visibility_flips_the_input_type() {
 #[test]
 fn the_account_form_rejects_empty_fields_and_trims_the_account() {
     let mut form = AccountForm::new(None);
-    assert!(form.validate().is_err());
+    assert_eq!(form.validate(), Err(FormError::AccountRequired));
     form.set_account("  someone@um.edu.mo  ");
-    assert!(form.validate().is_err(), "password is still empty");
+    assert_eq!(form.validate(), Err(FormError::PasswordRequired));
     form.set_password(" secret ");
     let credentials = form.validate().expect("valid form");
     assert_eq!(credentials.account, "someone@um.edu.mo");
@@ -419,6 +419,7 @@ struct RecordingSurface {
     overview_label: std::cell::RefCell<String>,
     overview_detail: std::cell::RefCell<String>,
     overview_tone: std::cell::Cell<Option<Tone>>,
+    overview_pulse: std::cell::Cell<bool>,
     login_status: std::cell::RefCell<String>,
     credential_status: std::cell::RefCell<String>,
 }
@@ -464,6 +465,10 @@ impl AccountSurface for RecordingSurface {
         self.overview_tone.set(Some(tone));
     }
 
+    fn set_overview_pulse(&self, value: bool) {
+        self.overview_pulse.set(value);
+    }
+
     fn set_login_status(&self, value: &str) {
         *self.login_status.borrow_mut() = value.to_string();
     }
@@ -487,6 +492,7 @@ fn the_account_card_shows_the_saved_account_and_the_gateway_state() {
     assert_eq!(view.overview_tone, Tone::Good);
     assert!(view.can_clear);
     assert!(!view.can_continue_login);
+    assert!(!view.pulse, "a settled login must not pulse");
     assert!(!format!("{view:?}").contains("super-secret"));
 }
 
@@ -516,12 +522,14 @@ fn not_logged_in_stays_not_logged_in_in_the_overview_and_offers_login() {
     );
     assert_eq!(logging_in.state_value, "登录中");
     assert_eq!(logging_in.overview_label, "登录中");
+    assert!(logging_in.pulse, "a login round keeps the status dot breathing");
     assert!(!logging_in.can_continue_login);
 
     let failed = account_view(&saved, Some(&AuthRead::Status(status(AuthState::Failed))));
     assert_eq!(failed.state_value, "登录失败");
     assert_eq!(failed.state_tone, Tone::Bad);
     assert_eq!(failed.overview_label, "登录失败");
+    assert!(!failed.pulse, "a settled failure must not pulse");
     assert!(failed.can_continue_login);
 }
 

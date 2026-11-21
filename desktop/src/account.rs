@@ -209,18 +209,35 @@ impl AccountForm {
         }
     }
 
-    pub fn validate(&self) -> Result<Credentials, String> {
+    pub fn validate(&self) -> Result<Credentials, FormError> {
         let account = self.account.trim().to_string();
         if account.is_empty() {
-            return Err("请输入 UM 账号".to_string());
+            return Err(FormError::AccountRequired);
         }
         if self.password.is_empty() {
-            return Err("请输入 UM 密码".to_string());
+            return Err(FormError::PasswordRequired);
         }
         Ok(Credentials {
             account,
             password: self.password.clone(),
         })
+    }
+}
+
+/// The two empty-field errors the form can report, so the shell can mark the
+/// matching field invalid and place the hint directly below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormError {
+    AccountRequired,
+    PasswordRequired,
+}
+
+impl FormError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::AccountRequired => "请输入 UM 账号",
+            Self::PasswordRequired => "请输入 UM 密码",
+        }
     }
 }
 
@@ -525,6 +542,9 @@ pub struct AccountView {
     pub overview_label: String,
     pub overview_detail: String,
     pub overview_tone: Tone,
+    /// True while the account row is still reading or in a login round; the
+    /// shell passes this to the status dot instead of the page matching labels.
+    pub pulse: bool,
 }
 
 /// The window fields the account card and the overview row own.
@@ -540,6 +560,7 @@ pub trait AccountSurface {
     fn set_overview_label(&self, value: &str);
     fn set_overview_detail(&self, value: &str);
     fn set_overview_tone(&self, tone: Tone);
+    fn set_overview_pulse(&self, value: bool);
     fn set_login_status(&self, value: &str);
     fn set_credential_status(&self, value: &str);
 }
@@ -557,6 +578,7 @@ pub fn apply_account(surface: &dyn AccountSurface, view: &AccountView) {
     surface.set_overview_label(&view.overview_label);
     surface.set_overview_detail(&view.overview_detail);
     surface.set_overview_tone(view.overview_tone);
+    surface.set_overview_pulse(view.pulse);
     if view.clears_old_failure {
         surface.set_login_status("");
         surface.set_credential_status("");
@@ -630,6 +652,13 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         }
     };
     let can_continue_login = can_continue && matches!(saved, LoadOutcome::Loaded(_));
+    // The status dot pulses only while a read or a login round is in flight;
+    // the shell consumes this flag instead of matching display text.
+    let pulse = match auth {
+        None => true,
+        Some(AuthRead::Unavailable(_)) => false,
+        Some(AuthRead::Status(status)) => matches!(status.state, AuthState::LoggingIn),
+    };
     let (overview_label, overview_detail) = match saved {
         LoadOutcome::Unusable(_) => (
             state_value.clone(),
@@ -650,6 +679,7 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         overview_label,
         overview_detail,
         overview_tone: state_tone,
+        pulse,
     }
 }
 

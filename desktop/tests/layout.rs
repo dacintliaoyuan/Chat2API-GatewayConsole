@@ -24,7 +24,8 @@ fn window_at(width: f32, height: f32) -> MainWindow {
         .window()
         .set_size(slint::LogicalSize::new(width, height));
     window.show().expect("show MainWindow");
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    // Let the page and chart layout animations settle before reading seams.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     window
 }
 
@@ -36,6 +37,22 @@ fn press(window: &MainWindow, key: Key) {
     window
         .window()
         .dispatch_event(WindowEvent::KeyReleased { text });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
+fn click(window: &MainWindow, x: f32, y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 }
 
@@ -278,8 +295,9 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
         move |level, keyword| *applied.borrow_mut() = Some((level, keyword))
     });
 
-    // At the minimum width the level menu sits next to the date filter.
-    let x = window.get_log_level_x() + window.get_log_level_width() / 2.0;
+    // At the minimum width the level filter stays a 5-item segmented control;
+    // click the second item ("信息").
+    let x = window.get_log_level_x() + window.get_log_level_width() * 0.3;
     let y = window.get_log_level_y() + window.get_log_level_height() / 2.0;
     let position = slint::LogicalPosition::new(x, y);
     window.window().dispatch_event(WindowEvent::PointerPressed {
@@ -290,8 +308,7 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
         position,
         button: PointerEventButton::Left,
     });
-    press(&window, Key::DownArrow);
-    press(&window, Key::Return);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(*applied.borrow(), Some((1, "timeout".into())));
 
     window.window().set_size(slint::LogicalSize::new(1060.0, 720.0));
@@ -314,7 +331,7 @@ fn closing_the_log_detail_gives_its_height_back_to_the_list() {
     assert_eq!(window.get_log_details_height(), 0.0);
 
     window.set_open_log_id("row-1".into());
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     let open_list = window.get_log_list_height();
     assert!(
         window.get_log_details_height() > 0.0,
@@ -326,7 +343,7 @@ fn closing_the_log_detail_gives_its_height_back_to_the_list() {
     );
 
     window.set_open_log_id("".into());
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     assert_eq!(window.get_log_details_height(), 0.0);
     assert!(
         (window.get_log_list_height() - closed_list).abs() < 1.0,
@@ -358,4 +375,68 @@ fn account_form_tab_order_reaches_toggle_and_buttons() {
     press(&window, Key::Escape);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert!(!window.get_account_form_visible(), "Escape cancels the form");
+}
+
+#[test]
+fn clearing_credentials_requires_a_second_click() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_account_can_clear(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_account_clear_visible());
+    assert!(!window.get_clear_confirm_visible());
+
+    let cleared = Rc::new(std::cell::Cell::new(false));
+    window.on_clear_credentials({
+        let cleared = Rc::clone(&cleared);
+        move || cleared.set(true)
+    });
+    click(
+        &window,
+        window.get_clear_button_x() + window.get_clear_button_width() / 2.0,
+        window.get_clear_button_y() + window.get_clear_button_height() / 2.0,
+    );
+    assert!(!cleared.get(), "the first click only arms the confirmation");
+    assert!(window.get_clear_confirm_visible());
+    assert!(!window.get_account_clear_visible());
+
+    click(
+        &window,
+        window.get_clear_confirm_x() + window.get_clear_confirm_width() / 2.0,
+        window.get_clear_confirm_y() + window.get_clear_confirm_height() / 2.0,
+    );
+    assert!(cleared.get(), "the second click clears the credentials");
+}
+
+#[test]
+fn the_status_row_tone_follows_the_shell() {
+    let window = window_at(1060.0, 720.0);
+    assert_eq!(window.get_status_dot_tone(), 0);
+    window.set_status_tone(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_status_dot_tone(), 2);
+}
+
+#[test]
+fn the_page_title_fades_with_the_page_host() {
+    let window = window_at(1060.0, 720.0);
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    assert_eq!(window.get_page(), 0);
+    window.invoke_navigate_to(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    assert!(
+        (window.get_page_title_opacity() - window.get_page_host_opacity()).abs() < 0.01,
+        "the title and the page share one opacity"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(window.get_page(), 1);
+    assert!((window.get_page_title_opacity() - 1.0).abs() < 0.01);
 }

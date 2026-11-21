@@ -28,7 +28,9 @@ export component UsageChart inherits Panel {
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
-    private property <int> active: root.pinned >= 0 ? root.pinned : plot.hovered-index;
+    private property <int> key-index: -1;
+    private property <int> active: root.pinned >= 0 ? root.pinned
+        : root.key-index >= 0 ? root.key-index : plot.hovered-index;
     private property <bool> has-data: root.points.length > 0;
     private property <bool> has-selection: root.active >= 0 && root.active < root.points.length;
     private property <string> metric: root.show-requests ? "请求数" : "Token";
@@ -56,9 +58,15 @@ export component UsageChart inherits Panel {
 
     preferred-height: root.width < 670px ? 408px : 368px;
     vertical-stretch: 0;
+    // The chart card is a keyboard stop: Tab reaches it, the ring is the same
+    // neutral edge step as the other focusable surfaces.
+    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    animate preferred-height { duration: Theme.settle; easing: ease-out; }
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
 
-    changed period => { root.pinned = -1; }
+    changed period => { root.pinned = -1; root.key-index = -1; }
     changed points => {
+        root.key-index = -1;
         if (root.pinned >= root.points.length
             || (root.pinned >= 0 && root.points[root.pinned].detail-label != root.pinned-label)) {
             root.pinned = -1;
@@ -67,15 +75,48 @@ export component UsageChart inherits Panel {
     changed show-requests => { metric-control.current-index = root.show-requests ? 1 : 0; }
     changed show-line => { type-control.current-index = root.show-line ? 1 : 0; }
 
-    FocusScope {
+    chart-focus := FocusScope {
         focus-on-click: false;
-        focus-on-tab-navigation: false;
+        accessible-role: groupbox;
+        accessible-label: "用量趋势图";
         key-pressed(event) => {
             if (event.text == Key.Escape && root.pinned >= 0) {
                 root.pinned = -1;
                 return accept;
             }
+            if (root.points.length == 0) { return reject; }
+            if (event.text == Key.Home) {
+                root.key-index = 0;
+                return accept;
+            }
+            if (event.text == Key.End) {
+                root.key-index = root.points.length - 1;
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.key-index = root.key-index <= 0 ? 0 : root.key-index - 1;
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.key-index = root.key-index < 0 ? 0
+                    : root.key-index + 1 < root.points.length ? root.key-index + 1
+                    : root.points.length - 1;
+                return accept;
+            }
+            if (event.text == Key.Return && root.active >= 0 && root.active < root.points.length) {
+                root.pinned = root.active;
+                root.pinned-label = root.points[root.active].detail-label;
+                return accept;
+            }
             return reject;
+        }
+
+        // Clicking the card background moves keyboard focus here; the plot's own
+        // pointer handling stays on top of this transparent target.
+        chart-pointer := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => { chart-focus.focus(); }
         }
 
         VerticalLayout {
@@ -212,7 +253,8 @@ export component UsageChart inherits Panel {
                         label: "取消固定";
                         icon: "close";
                         icon-only: true;
-                        width: 30px;
+                        width: Theme.icon-button;
+                        height: Theme.icon-button;
                         clicked => { root.pinned = -1; }
                     }
                 }
