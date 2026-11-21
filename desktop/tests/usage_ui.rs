@@ -197,6 +197,12 @@ fn changing_range_through_the_segmented_control_reloads_the_chart() {
     let x = chart.get_usage_period_x() + chart.get_usage_period_width() / 2.0;
     click(&chart, x, chart.get_usage_period_y() + 20.0);
 
+    // The selection block animates for 160 ms; the chart data reload starts
+    // only after that, so the block and the plot never disagree.
+    assert_eq!(chart.get_usage_period(), 1);
+    assert_eq!(selected.get(), None);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(160));
+
     assert_eq!(chart.get_usage_period(), 1);
     assert_eq!(selected.get(), Some(1));
     assert!(!chart.get_usage_can_unpin());
