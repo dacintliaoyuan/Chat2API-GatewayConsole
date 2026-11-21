@@ -188,6 +188,57 @@ component ClickableCard inherits Card {
     accessible-action-default => { root.activated(); }
 }
 
+// A clickable address chip: the whole chip is one hit target, the pointer and the
+// keyboard activate the same callback, and the trailing copy icon names the action.
+component CopyChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> copied: false;
+    out property <string> icon: root.copied ? "check" : "copy";
+    callback clicked();
+    height: 24px;
+    border-radius: 5px;
+    background: pointer.has-hover || focus.has-focus ? Theme.surface-2 : Theme.soft(3);
+    border-width: 1px;
+    border-color: pointer.has-hover || focus.has-focus ? Theme.edge-strong : Theme.edge;
+    animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 11px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        AppIcon {
+            size: 13px;
+            kind: root.icon;
+            tint: root.copied ? Theme.good-text : Theme.muted;
+            cross-axis-self-alignment: center;
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+    accessible-role: button;
+    accessible-label: "复制 " + root.label;
+    accessible-action-default => { root.clicked(); }
+    if !root.label.is-empty : Tooltip { text: @markdown("复制 \{root.label}"); }
+}
+
 export component MainWindow inherits Window {
     title: "本机控制台";
     preferred-width: 1060px;
@@ -360,6 +411,16 @@ export component MainWindow inherits Window {
     in-out property <bool> port-input-invalid;
     in-out property <string> port-input-error;
     in property <string> active-address;
+    // The copy entries carry the scheme so the copied text is the full API URL.
+    private property <string> base-url: "http://" + root.active-address;
+    // The shell reports one clipboard write: `copy-ok` or the reason in
+    // `copy-error`. The page that started the copy owns the target, so only the
+    // clicked entry turns into a check.
+    in-out property <bool> copy-ok;
+    in-out property <string> copy-error;
+    private property <int> copy-target: 0;
+    private property <bool> base-copied;
+    private property <bool> v1-copied;
     in property <bool> port-busy;
     in property <string> settings-status;
     in property <int> settings-tone: 3;
@@ -379,6 +440,20 @@ export component MainWindow inherits Window {
     out property <length> overview-login-content-height: login-card.content-height;
     out property <length> overview-chart-y: usage-chart.y;
     out property <length> overview-chart-height: usage-chart.height;
+    out property <length> overview-address-x: overview-address.absolute-position.x;
+    out property <length> overview-address-y: overview-address.absolute-position.y;
+    out property <length> overview-address-width: overview-address.width;
+    out property <length> overview-address-height: overview-address.height;
+    out property <length> overview-v1-x: overview-v1.absolute-position.x;
+    out property <length> overview-v1-y: overview-v1.absolute-position.y;
+    out property <length> overview-v1-width: overview-v1.width;
+    out property <length> overview-v1-height: overview-v1.height;
+    out property <string> overview-address-icon: overview-address.icon;
+    out property <string> overview-v1-icon: overview-v1.icon;
+    out property <string> copy-status: !root.copy-error.is-empty ? "复制失败：" + root.copy-error
+        : root.copy-ok ? "已复制到剪贴板" : "";
+    out property <int> copy-tone: !root.copy-error.is-empty ? 2 : root.copy-ok ? 0 : 3;
+    out property <bool> copy-status-visible: copy-status-hint.visible;
     out property <length> usage-plot-x: usage-chart.plot-x;
     out property <length> usage-plot-y: usage-chart.plot-y;
     out property <length> usage-plot-width: usage-chart.plot-width;
@@ -404,6 +479,16 @@ export component MainWindow inherits Window {
     out property <length> technical-card-height: technical-card.height;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
+    out property <length> settings-base-copy-x: settings-base-copy.absolute-position.x;
+    out property <length> settings-base-copy-y: settings-base-copy.absolute-position.y;
+    out property <length> settings-base-copy-width: settings-base-copy.width;
+    out property <length> settings-base-copy-height: settings-base-copy.height;
+    out property <length> settings-v1-copy-x: settings-v1-copy.absolute-position.x;
+    out property <length> settings-v1-copy-y: settings-v1-copy.absolute-position.y;
+    out property <length> settings-v1-copy-width: settings-v1-copy.width;
+    out property <length> settings-v1-copy-height: settings-v1-copy.height;
+    out property <string> settings-base-icon: settings-base-copy.icon;
+    out property <string> settings-v1-icon: settings-v1-copy.icon;
     out property <length> request-list-width: request-list-pane.width;
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
@@ -514,6 +599,7 @@ export component MainWindow inherits Window {
     callback query-requests(int);
     callback open-request(string);
     callback usage-range-changed(int);
+    callback copy-text(string);
     callback theme-mode-changed(int);
     callback theme-dark-changed(bool);
     callback quit-requested();
@@ -558,6 +644,30 @@ export component MainWindow inherits Window {
         // frame between the old page disappearing and the new one appearing.
         root.page-opacity = 0.35;
         page-out-timer.start();
+    }
+    // Clear the previous result before asking the shell, so copying the same URL
+    // twice still starts a fresh two-second feedback window.
+    function request-copy(url: string, target: int) {
+        root.copy-ok = false;
+        root.copy-error = "";
+        root.base-copied = false;
+        root.v1-copied = false;
+        root.copy-target = target;
+        root.copy-text(url);
+    }
+    changed copy-ok => {
+        if (root.copy-ok) {
+            root.base-copied = root.copy-target == 1;
+            root.v1-copied = root.copy-target == 2;
+            copy-status-timer.start();
+        }
+    }
+    changed copy-error => {
+        if (!root.copy-error.is-empty) {
+            root.base-copied = false;
+            root.v1-copied = false;
+            copy-status-timer.start();
+        }
     }
     // Fade the old page down, swap while it is dimmed, then fade the new page
     // back in. The title and the page host share page-opacity, so they move
@@ -662,6 +772,17 @@ export component MainWindow inherits Window {
             if (root.refresh-rotation >= 360deg) {
                 root.refreshing = false;
             }
+        }
+    }
+    // The check and the copy status share one two-second window.
+    copy-status-timer := Timer {
+        interval: 2s;
+        running: false;
+        triggered => {
+            root.copy-ok = false;
+            root.copy-error = "";
+            root.base-copied = false;
+            root.v1-copied = false;
         }
     }
     // The refresh acknowledgement stays visible for 1.2 s, then the button
@@ -837,13 +958,23 @@ export component MainWindow inherits Window {
                     opacity: root.page-opacity;
                     animate opacity { duration: Theme.glide; easing: ease-out; }
                 }
-                Tag {
-                    label: root.active-address;
-                    tone: 3;
+                overview-address := CopyChip {
+                    label: root.base-url;
+                    copied: root.base-copied;
                     visible: !root.active-address.is-empty;
                     cross-axis-self-alignment: center;
                     opacity: root.page-opacity;
                     animate opacity { duration: Theme.glide; easing: ease-out; }
+                    clicked => { root.request-copy(root.base-url, 1); }
+                }
+                overview-v1 := CopyChip {
+                    label: "/v1";
+                    copied: root.v1-copied;
+                    visible: !root.active-address.is-empty;
+                    cross-axis-self-alignment: center;
+                    opacity: root.page-opacity;
+                    animate opacity { duration: Theme.glide; easing: ease-out; }
+                    clicked => { root.request-copy(root.base-url + "/v1", 2); }
                 }
             }
 
@@ -1397,7 +1528,7 @@ export component MainWindow inherits Window {
                     Card {
                         VerticalLayout {
                             spacing: 9px;
-                            SectionLabel { text: "模型 API 地址"; }
+                            SectionLabel { text: "网关"; }
                             Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
@@ -1416,6 +1547,39 @@ export component MainWindow inherits Window {
                             }
                             if !root.port-input-error.is-empty : Hint { text: root.port-input-error; color: Theme.bad-text; }
                             if !root.settings-status.is-empty : Hint { text: root.settings-status; color: Theme.status_ink(root.settings-tone); }
+                            Divider { }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Hint { text: "模型 API 地址"; vertical-alignment: center; wrap: no-wrap; }
+                                DataText {
+                                    text: root.base-url;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                settings-base-copy := ActionButton {
+                                    width: Theme.icon-button;
+                                    height: Theme.icon-button;
+                                    label: "复制模型 API 地址";
+                                    icon: root.base-copied ? "check" : "copy";
+                                    icon-only: true;
+                                    quiet: true;
+                                    tooltip: "复制模型 API 地址";
+                                    clicked => { root.request-copy(root.base-url, 1); }
+                                }
+                                settings-v1-copy := ActionButton {
+                                    width: Theme.icon-button;
+                                    height: Theme.icon-button;
+                                    label: "复制 /v1 地址";
+                                    icon: root.v1-copied ? "check" : "copy";
+                                    icon-only: true;
+                                    quiet: true;
+                                    tooltip: "复制 /v1 地址";
+                                    clicked => { root.request-copy(root.base-url + "/v1", 2); }
+                                }
+                            }
                         }
                     }
                     technical-card := ClickableCard {
@@ -1522,6 +1686,14 @@ export component MainWindow inherits Window {
                 spacing: 8px;
                 status-dot := StatusDot { tone: root.status-tone; y: (parent.height - self.height) / 2; }
                 Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
+                copy-status-hint := Hint {
+                    visible: !root.copy-status.is-empty;
+                    text: root.copy-status;
+                    color: Theme.status_ink(root.copy-tone);
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
                 DataText { text: "更新于 " + root.last-update; vertical-alignment: center; }
             }
         }

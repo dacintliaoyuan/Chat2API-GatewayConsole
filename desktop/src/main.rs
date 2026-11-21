@@ -29,6 +29,7 @@ use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
     AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
 };
+use um_desktop::clipboard;
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
@@ -1219,6 +1220,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.on_refresh_overview(|| {
         OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
         USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let weak_copy = window.as_weak();
+    window.on_copy_text(move |text| {
+        let Some(window) = weak_copy.upgrade() else {
+            return;
+        };
+        match clipboard::write_text(text.as_str()) {
+            Ok(()) => {
+                window.set_copy_ok(true);
+                window.set_copy_error("".into());
+            }
+            Err(reason) => {
+                window.set_copy_ok(false);
+                window.set_copy_error(reason.into());
+            }
+        }
     });
 
     // Ctrl+R dispatches to the page-specific refresh callback in the UI.
