@@ -236,6 +236,7 @@ component CopyChip inherits Rectangle {
     accessible-role: button;
     accessible-label: "复制 " + root.label;
     accessible-action-default => { root.clicked(); }
+    if !root.label.is-empty : Tooltip { text: @markdown("复制 \{root.label}"); }
 }
 
 export component MainWindow inherits Window {
@@ -406,8 +407,8 @@ export component MainWindow inherits Window {
     in-out property <bool> copy-ok;
     in-out property <string> copy-error;
     private property <int> copy-target: 0;
-    in-out property <bool> base-copied;
-    in-out property <bool> v1-copied;
+    private property <bool> base-copied;
+    private property <bool> v1-copied;
     in property <bool> port-busy;
     in property <string> settings-status;
     in property <int> settings-tone: 3;
