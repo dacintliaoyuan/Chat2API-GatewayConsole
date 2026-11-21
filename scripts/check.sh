@@ -36,6 +36,8 @@ run python -m ruff check .
 run python scripts/check_share_names.py
 run python scripts/check_retired_features.py
 run python scripts/check_line_endings.py
+run python scripts/check_process_kills.py
+run python scripts/check_desktop_ui.py
 run python scripts/check_docs_references.py
 run node web/scripts/backend-contract/check-generated.mjs
 run git -c core.whitespace=cr-at-eol diff --cached --check

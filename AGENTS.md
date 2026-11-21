@@ -25,6 +25,8 @@
 | 旧 Windows 分享链（已退役） | Git 历史；当前云端见 [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 分享链旧/新名字与边界 | [docs/share-chain-map.md](docs/share-chain-map.md) |
 | 本机/云端进程监督边界 | [ADR 0013](docs/adr/0013-process-supervision-boundary.md) |
+| 桌面 App 构建/预览/安全重启 | [docs/agents/desktop-preview.md](docs/agents/desktop-preview.md)；[desktop/README.md](desktop/README.md) |
+| 当前前端 worktree 路径 | `git worktree list`；`integration/desktop-122` 在 `.worktrees/122-acceptance`（`.worktrees` 是旧目录，不要用） |
 | 提交前检查 | [scripts/check.sh](scripts/check.sh)；首次运行 `bash scripts/install-hooks.sh` |
 | Review 判断规则 | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
 | 操作 issue | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
