@@ -230,8 +230,11 @@ function Invoke-DefaultProcessQuery {
     #
     # #133 A2: in component mode the watch watches the WORKER only. The ingress
     # is started by the component start and must not keep the pair "alive" while
-    # the worker is gone. The worker's real port is the WorkerPortFile value; an
-    # occupied worker port with no worker process is an unconfirmed identity.
+    # the worker is gone. A recorded worker port is only a hint: with no worker
+    # identity process it is stale (the worker crashed and the port may have been
+    # reused by an unrelated process), so it is ignored instead of becoming a
+    # permanent "unconfirmed" that blocks every recovery. The component start
+    # deletes the file before launching a fresh worker.
     try {
         $desc = (Get-GatewayServiceDescriptors)[$script:ServiceKey]
         $startPath = $null
@@ -254,29 +257,9 @@ function Invoke-DefaultProcessQuery {
                     Error = 'identity_unconfirmed'
                 }
             }
-            $port = Get-GatewayWorkerPort -Descriptor $desc
-            if ($null -ne $port) {
-                # A Tailscale or LAN listener on another address does not
-                # occupy the worker's loopback socket.
-                $listeners = Get-GatewayListenerSnapshot -Port $port
-                if (@($listeners.Unconfirmed).Count -gt 0) {
-                    return [pscustomobject]@{
-                        State = 'unconfirmed'
-                        Pids = @()
-                        Error = 'worker_port_{0}_listener_unconfirmed' -f $port
-                    }
-                }
-                if (@($listeners.Overlapping).Count -gt 0) {
-                    return [pscustomobject]@{
-                        State = 'unconfirmed'
-                        Pids = @($listeners.Overlapping |
-                            ForEach-Object { [int]$_.OwningProcess })
-                        Error = 'worker_port_{0}_held_by_non_worker_process' -f $port
-                    }
-                }
-            }
-            # Worker missing and its port free: absent even when the ingress
-            # is still running. The component start fills the worker and leaves
+            # Worker missing: absent even when the ingress is still running and
+            # even when a stale WorkerPortFile points at a port now owned by an
+            # unrelated process. The component start fills the worker and leaves
             # the ingress alone.
             return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
         }
@@ -893,13 +876,13 @@ function Invoke-WatchSelfTest {
     & {
         function Select-GatewayStopScope {
             param($Descriptor, $GatewayRoot, [object[]]$Identities = @())
-            [pscustomobject]@{ Private = @(); Unconfirmed = @() }
+            [pscustomobject]@{ Private = @($script:selfTestWorkerScope); Unconfirmed = @() }
         }
 
         # #133 A2: the split worker publishes its real port in WorkerPortFile;
-        # the self-test fixes that port so the listener-address decision table
-        # below exercises the same port source as production without reading a
-        # real data/chat2api-worker.port.
+        # the self-test fixes that port so the stale-record and listener-address
+        # decision table below exercises the same port source as production
+        # without reading a real data/chat2api-worker.port.
         function Get-GatewayWorkerPort {
             param($Descriptor)
             return 5678
@@ -911,22 +894,48 @@ function Invoke-WatchSelfTest {
             [pscustomobject]@{ LocalAddress = $fixtureAddress; OwningProcess = 5678 }
         }
 
+        $descriptor = (Get-GatewayServiceDescriptors)['chat2api']
+        $script:selfTestWorkerScope = @()
         foreach ($fixture in @(
             @{ Address = '100.64.0.1'; Expected = 'absent' }
             @{ Address = 'fd00::1'; Expected = 'absent' }
-            @{ Address = '127.0.0.1'; Expected = 'unconfirmed' }
-            @{ Address = '0.0.0.0'; Expected = 'unconfirmed' }
-            @{ Address = '::'; Expected = 'unconfirmed' }
-            @{ Address = '::ffff:127.0.0.1'; Expected = 'unconfirmed' }
-            @{ Address = 'unreadable'; Expected = 'unconfirmed' }
+            @{ Address = '127.0.0.1'; Expected = 'absent' }
+            @{ Address = '0.0.0.0'; Expected = 'absent' }
+            @{ Address = '::'; Expected = 'absent' }
+            @{ Address = '::ffff:127.0.0.1'; Expected = 'absent' }
+            @{ Address = 'unreadable'; Expected = 'absent' }
         )) {
+            # No worker identity process: the recorded port is stale even
+            # when an unrelated process (loopback, wildcard or tailnet) now
+            # listens on it. It must never block recovery as unconfirmed.
             $fixtureAddress = $fixture.Address
             $result = Invoke-DefaultProcessQuery
             if ($result.State -ne $fixture.Expected) {
-                throw ('self-test failed: listener address {0} expected {1}, got {2}' -f
+                throw ('self-test failed: stale worker port with listener {0} expected {1}, got {2}' -f
                     $fixtureAddress, $fixture.Expected, $result.State)
             }
+            if ($null -ne (Get-GatewayWorkerRuntimePort -Descriptor $descriptor)) {
+                throw ('self-test failed: stale worker port with listener {0} was treated as the worker port' -f
+                    $fixtureAddress)
+            }
         }
+
+        # A live worker identity process keeps the pair verified, and its
+        # tailnet-only listener on the recorded port is not a worker socket.
+        $script:selfTestWorkerScope = @([pscustomobject]@{
+            ProcessId = 4242; Name = 'um-gateway-candidate.exe'
+            CommandLine = 'um-gateway-candidate.exe --mode worker --port 0'
+        })
+        $fixtureAddress = '100.64.0.1'
+        $verified = Invoke-DefaultProcessQuery
+        if ($verified.State -ne 'verified' -or [int]$verified.Pids[0] -ne 4242) {
+            throw ('self-test failed: a live worker process was not verified (state={0})' -f
+                $verified.State)
+        }
+        if ($null -ne (Get-GatewayWorkerRuntimePort -Descriptor $descriptor)) {
+            throw 'self-test failed: a tailnet-only listener was treated as the worker runtime port'
+        }
+        $script:selfTestWorkerScope = @()
     }
 
     $script:selfTestProcessState = 'verified'

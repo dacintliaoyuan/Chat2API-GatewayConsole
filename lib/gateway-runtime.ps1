@@ -118,6 +118,9 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # current_dir()/chat2api/token.json and current_dir()/chat2api/.edge-profile.
         StartWorkingDirectory = '.'
         StartTimeoutSeconds = 20
+        # #133 A2: bounded wait for the worker to exit after its graceful
+        # shutdown POST, before the verified force-stop fallback runs.
+        StopTimeoutSeconds = 5
         StopStrategy = 'GracefulHttp'
         StopWhenUnhealthy = $true
         StopProcessName = 'python.exe'
@@ -1125,6 +1128,64 @@ function Get-GatewayWorkerPort {
     return $port
 }
 
+function Remove-GatewayWorkerPortFile {
+    # #133 A2/H3: a worker that was force-stopped never removes its record, and
+    # the next worker publishes a fresh port. Removing the stale file keeps the
+    # ingress from forwarding to whatever now owns that port.
+    param([Parameter(Mandatory = $true)]$Descriptor)
+    $path = Get-GatewayWorkerPortFilePath -Descriptor $Descriptor
+    if (-not $path) { return $false }
+    try {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Get-GatewayWorkerProcessIds {
+    # #133 A2/H3: verified worker identity PIDs. $null means "cannot be
+    # confirmed" (fail closed); an empty array means no worker process exists.
+    param([Parameter(Mandatory = $true)]$Descriptor)
+    $identity = Get-GatewayComponentIdentity -Descriptor $Descriptor -Name 'worker'
+    if ($null -eq $identity) { return $null }
+    try {
+        $scope = Select-GatewayStopScope -Descriptor $Descriptor `
+            -GatewayRoot (Get-GatewayRoot) -Identities @($identity)
+    } catch {
+        return $null
+    }
+    if (@($scope.Unconfirmed).Count -gt 0) { return $null }
+    return @($scope.Private | ForEach-Object { [int]$_.ProcessId })
+}
+
+function Get-GatewayWorkerRuntimePort {
+    # #133 A2/H3: the recorded port is usable only while a verified worker
+    # identity process owns its loopback listener. A leftover WorkerPortFile
+    # (the worker crashed and an unrelated process reused the port) is ignored:
+    # health probes and shutdown requests must never target that process.
+    param([Parameter(Mandatory = $true)]$Descriptor)
+    $port = Get-GatewayWorkerPort -Descriptor $Descriptor
+    if ($null -eq $port) { return $null }
+    $workerPids = Get-GatewayWorkerProcessIds -Descriptor $Descriptor
+    if ($null -eq $workerPids -or @($workerPids).Count -eq 0) { return $null }
+    try {
+        $snapshot = Get-GatewayListenerSnapshot -Port $port
+    } catch {
+        return $null
+    }
+    if (@($snapshot.Unconfirmed).Count -gt 0) { return $null }
+    $listenerPids = @($snapshot.Overlapping |
+        ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
+    if ($listenerPids.Count -eq 0) { return $null }
+    foreach ($listenerPid in $listenerPids) {
+        if ($listenerPid -notin $workerPids) { return $null }
+    }
+    return $port
+}
+
 function Get-GatewayComponentIdentity {
     param(
         [Parameter(Mandatory = $true)]$Descriptor,
@@ -1149,7 +1210,10 @@ function Get-GatewayComponentHealthUrl {
     if ($null -eq $healthProp -or -not $healthProp.Value) { return $null }
     $template = [string]$healthProp.Value
     if ($template -match '\{worker-port\}') {
-        $port = Get-GatewayWorkerPort -Descriptor $Descriptor
+        # A stale WorkerPortFile (no worker identity process, or its port now
+        # owned by another process) yields no URL: the health check fails
+        # instead of probing an unrelated process.
+        $port = Get-GatewayWorkerRuntimePort -Descriptor $Descriptor
         if ($null -eq $port) { return $null }
         return $template.Replace('{worker-port}', [string]$port)
     }
@@ -1190,6 +1254,83 @@ function Test-GatewayProcessMatchesIdentity {
     }
 }
 
+function Get-GatewayWorkerInspection {
+    # #133 A2/H3: the worker identity process is the authority for the
+    # recorded port. No worker process means the record is stale, even if an
+    # unrelated process now listens on that port: the state is Absent (the next
+    # start deletes the file), never Conflict/Present for a foreign listener.
+    param(
+        [Parameter(Mandatory = $true)]$Descriptor,
+        [Parameter(Mandatory = $true)]$Identity
+    )
+    try {
+        $scope = Select-GatewayStopScope -Descriptor $Descriptor `
+            -GatewayRoot (Get-GatewayRoot) -Identities @($Identity)
+    } catch {
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Conflict'; ProcessIds = @()
+            Detail = '进程信息无法读取：worker'
+        }
+    }
+    if (@($scope.Unconfirmed).Count -gt 0) {
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Conflict'
+            ProcessIds = @($scope.Unconfirmed | ForEach-Object { [int]$_.ProcessId })
+            Detail = '进程归属无法确认：worker'
+        }
+    }
+    $workerPids = @($scope.Private | ForEach-Object { [int]$_.ProcessId })
+    if ($workerPids.Count -eq 0) {
+        # The worker is gone; WorkerPortFile is a leftover from its previous
+        # (non-graceful) exit. Ignore it and let the start replace it.
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Absent'; ProcessIds = @(); Detail = ''
+        }
+    }
+    $port = Get-GatewayWorkerPort -Descriptor $Descriptor
+    if ($null -eq $port) {
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Residual'; ProcessIds = @($workerPids)
+            Detail = '发现组件残留进程：worker'
+        }
+    }
+    try {
+        $snapshot = Get-GatewayListenerSnapshot -Port $port
+    } catch {
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Conflict'; ProcessIds = @()
+            Detail = '监听信息无法读取：worker'
+        }
+    }
+    if (@($snapshot.Unconfirmed).Count -gt 0) {
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Conflict'; ProcessIds = @()
+            Detail = '监听地址或进程归属无法确认：worker'
+        }
+    }
+    $listenerPids = @($snapshot.Overlapping |
+        ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
+    if ($listenerPids.Count -eq 0) {
+        # The worker process is alive but has not (re)bound the recorded port.
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Residual'; ProcessIds = @($workerPids)
+            Detail = '发现组件残留进程：worker'
+        }
+    }
+    $foreignPids = @($listenerPids | Where-Object { $_ -notin $workerPids })
+    if ($foreignPids.Count -gt 0) {
+        # The recorded port belongs to something else while the worker process
+        # is alive but not listening there: the record is stale for this worker.
+        return [pscustomobject]@{
+            Name = 'worker'; State = 'Residual'; ProcessIds = @($workerPids)
+            Detail = '发现组件残留进程：worker'
+        }
+    }
+    return [pscustomobject]@{
+        Name = 'worker'; State = 'Present'; ProcessIds = @($listenerPids); Detail = ''
+    }
+}
+
 function Get-GatewayComponentInspection {
     param(
         [Parameter(Mandatory = $true)]$Descriptor,
@@ -1202,12 +1343,10 @@ function Get-GatewayComponentInspection {
             Detail = ('缺少组件身份：' + $ComponentName)
         }
     }
-    $port = $null
     if ($ComponentName -eq 'worker') {
-        $port = Get-GatewayWorkerPort -Descriptor $Descriptor
-    } else {
-        $port = [int]$Descriptor.Port
+        return (Get-GatewayWorkerInspection -Descriptor $Descriptor -Identity $identity)
     }
+    $port = [int]$Descriptor.Port
     $owners = @()
     if ($null -ne $port) {
         try {
@@ -1307,25 +1446,40 @@ function Get-GatewayServiceInspection {
     # Both components absent means this is not a live split pair. A legacy
     # single-process instance (the Python rollback or the transition shape) may
     # still own 8000; the legacy branch below recognizes it instead of reporting
-    # Conflict merely because the descriptor now declares components. A Conflict
-    # state alone (an unverified owner on 8000) also goes through the legacy
-    # branch, which reports the same Conflict from its own ownership check.
+    # Conflict merely because the descriptor now declares components. An ingress
+    # Conflict alone (an unverified owner on 8000) also goes through the legacy
+    # branch, which reports the same Conflict from its own ownership check. A
+    # WORKER Conflict is different: it positively proves the split shape (a worker
+    # identity process exists but its listener/ownership is unconfirmed), so it
+    # must never fall back to the legacy branch and be mistaken for a residual
+    # single-process instance.
     $splitPresent = $false
     if ($null -ne $worker -and $null -ne $ingress) {
-        $splitPresent = ($worker.State -in @('Present', 'Residual')) -or
+        $splitPresent = ($worker.State -in @('Present', 'Residual', 'Conflict')) -or
             ($ingress.State -in @('Present', 'Residual'))
     }
     if ($splitPresent) {
         $conflict = @($worker, $ingress | Where-Object { $_.State -eq 'Conflict' })
         if ($conflict.Count -gt 0) {
-            $conflictPids = @($conflict | ForEach-Object { $_.ProcessIds } |
-                Where-Object { $null -ne $_ })
+            # An unreadable command line can be claimed by both component
+            # identities; report each PID once.
+            $conflictPids = @()
+            foreach ($processId in @($conflict | ForEach-Object { $_.ProcessIds })) {
+                if ($null -ne $processId -and [int]$processId -notin $conflictPids) {
+                    $conflictPids += [int]$processId
+                }
+            }
             return [pscustomobject]@{
                 Key = $Key; State = 'Conflict'; Healthy = $false
                 ProcessIds = $conflictPids
                 Detail = (($conflict | ForEach-Object { $_.Detail }) -join '；')
             }
         }
+        # #133 A2: judge the two components separately. Both healthy is the
+        # only Running state; any component Present/Residual but not all healthy
+        # is Degraded. Stopped is reserved for "both components Absent" and is
+        # handled by the legacy branch below (where a single-process instance
+        # may still own 8000).
         $workerHealthy = $false
         if ($worker.State -in @('Present', 'Residual')) {
             $workerComponent = @(Get-GatewayStartComponents -Descriptor $desc) |
@@ -1356,33 +1510,16 @@ function Get-GatewayServiceInspection {
                 ProcessIds = $pids; Detail = '运行中'
             }
         }
-        if ($workerHealthy -or $ingressHealthy) {
-            $unready = @()
-            if (-not $workerHealthy) {
-                $unready += if ($worker.State -eq 'Absent') { '缺少 worker' } else { 'worker 未就绪' }
-            }
-            if (-not $ingressHealthy) {
-                $unready += if ($ingress.State -eq 'Absent') { '缺少 ingress' } else { 'ingress 未就绪' }
-            }
-            return [pscustomobject]@{
-                Key = $Key; State = 'Degraded'; Healthy = $false
-                ProcessIds = $pids; Detail = ($unready -join '；')
-            }
-        }
         $unready = @()
-        if ($worker.State -eq 'Absent') { $unready += '缺少 worker' }
-        if ($ingress.State -eq 'Absent') { $unready += '缺少 ingress' }
-        $residual = @($worker, $ingress | Where-Object { $_.State -eq 'Residual' })
-        if ($residual.Count -gt 0) {
-            return [pscustomobject]@{
-                Key = $Key; State = 'Residual'; Healthy = $false
-                ProcessIds = $pids; Detail = (($unready + '发现组件残留进程') -join '；')
-            }
+        if (-not $workerHealthy) {
+            $unready += if ($worker.State -eq 'Absent') { '缺少 worker' } else { 'worker 未就绪' }
+        }
+        if (-not $ingressHealthy) {
+            $unready += if ($ingress.State -eq 'Absent') { '缺少 ingress' } else { 'ingress 未就绪' }
         }
         return [pscustomobject]@{
-            Key = $Key; State = 'Stopped'; Healthy = $false
-            ProcessIds = $pids
-            Detail = if ($unready.Count -gt 0) { ($unready -join '；') } else { '已停止' }
+            Key = $Key; State = 'Degraded'; Healthy = $false
+            ProcessIds = $pids; Detail = ($unready -join '；')
         }
     }
 
@@ -2161,7 +2298,25 @@ function Start-GatewayComponents {
 
     $started = @()
     $skipped = @()
+    $workerWaitSeconds = 0
     if ($null -eq $Launcher) {
+        # #133 A2/J2: collect every component's Conflict BEFORE launching
+        # anything. A conflict discovered only in the loop (e.g. the ingress,
+        # after the worker was already started) used to leave an orphan worker.
+        $preflight = @{}
+        foreach ($component in $Components) {
+            $name = [string]$component.Name
+            $preflightInspection = Get-GatewayComponentInspection `
+                -Descriptor $Descriptor -ComponentName $name
+            if ($preflightInspection.State -eq 'Conflict') {
+                return [pscustomobject]@{
+                    Started = @($started); Skipped = @($skipped)
+                    Blocked = $true; Detail = [string]$preflightInspection.Detail
+                    WorkerWaitSeconds = 0
+                }
+            }
+            $preflight[$name] = $preflightInspection
+        }
         # A private process of another shape (the Python rollback or the
         # legacy production instance) is residual next to a split start: stop
         # only identities that no component claims. A component that is Present
@@ -2169,10 +2324,9 @@ function Start-GatewayComponents {
         # here twice.
         $presentNames = @()
         foreach ($component in $Components) {
-            $presentInspection = Get-GatewayComponentInspection `
-                -Descriptor $Descriptor -ComponentName ([string]$component.Name)
-            if ($presentInspection.State -in @('Present', 'Residual')) {
-                $presentNames += [string]$component.Name
+            $name = [string]$component.Name
+            if ($preflight[$name].State -in @('Present', 'Residual')) {
+                $presentNames += $name
             }
         }
         $residualIdentities = @()
@@ -2192,6 +2346,7 @@ function Start-GatewayComponents {
                     Started = @($started); Skipped = @($skipped)
                     Blocked = $true
                     Detail = '受管残留进程清理失败：' + [string]$residualCleanup.Detail
+                    WorkerWaitSeconds = 0
                 }
             }
         }
@@ -2214,6 +2369,7 @@ function Start-GatewayComponents {
                 return [pscustomobject]@{
                     Started = @($started); Skipped = @($skipped)
                     Blocked = $true; Detail = [string]$componentInspection.Detail
+                    WorkerWaitSeconds = $workerWaitSeconds
                 }
             }
             if ($componentInspection.State -eq 'Present') {
@@ -2232,9 +2388,17 @@ function Start-GatewayComponents {
                         Started = @($started); Skipped = @($skipped)
                         Blocked = $true
                         Detail = '受管残留进程清理失败：' + [string]$cleanup.Detail
+                        WorkerWaitSeconds = $workerWaitSeconds
                     }
                 }
             }
+        }
+        if ($name -eq 'worker') {
+            # #133 A2/H3: a new worker publishes a fresh port. A record left
+            # by the previous (non-graceful) worker is stale and must not
+            # survive into the start, or the ingress could forward to whatever
+            # now owns that port.
+            [void](Remove-GatewayWorkerPortFile -Descriptor $Descriptor)
         }
         $arguments = Expand-GatewayComponentArguments `
             -Arguments @($component.StartArguments) -Values $values
@@ -2250,20 +2414,63 @@ function Start-GatewayComponents {
             # Wait for the worker before starting the ingress. A failed worker
             # does not prevent the ingress launch below: the ingress can queue
             # while the worker recovers, and the outer poll reports pending.
+            # #133 A2/J3: the wait is reported so the caller can subtract it
+            # from the same StartTimeoutSeconds budget instead of granting a
+            # second full timeout.
             $timeoutSeconds = [Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds)
             for ($elapsed = 0; $elapsed -lt $timeoutSeconds; $elapsed++) {
                 if (Test-GatewayComponentHealth -Descriptor $Descriptor `
                         -Component $component -HttpChecker $HttpChecker) {
+                    $workerWaitSeconds = $elapsed
                     break
                 }
                 if ($null -ne $Sleeper) { & $Sleeper 1 } else { Start-Sleep -Seconds 1 }
+                $workerWaitSeconds = $elapsed + 1
             }
         }
     }
     return [pscustomobject]@{
         Started = @($started); Skipped = @($skipped)
         Blocked = $false; Detail = ''
+        WorkerWaitSeconds = $workerWaitSeconds
     }
+}
+
+function ConvertTo-GatewayArgumentLine {
+    # #133 A2/H2: build the Windows command line for the observer's
+    # ProcessStartInfo.Arguments. The A2 --worker-port-file and
+    # --desired-state-file values are absolute paths and may contain spaces;
+    # joining them bare made the child split them into separate arguments.
+    # Arguments without whitespace or quotes stay byte-identical (the fixed CLI
+    # line is unchanged); the rest are double-quoted and backslashes before a
+    # quote (and trailing backslashes) are doubled per the Windows
+    # CommandLineToArgvW rules so the receiving parser recovers the value.
+    param([object[]]$Arguments = @())
+    $parts = @()
+    foreach ($argument in $Arguments) {
+        $value = [string]$argument
+        if ($value -eq '') {
+            $parts += '""'
+            continue
+        }
+        if ($value -notmatch '[\s"]') {
+            $parts += $value
+            continue
+        }
+        # A caller may already pass one quoted token (the historical observer
+        # fixture shape). Wrapping it again would turn the quotes into literal
+        # path characters; keep the single quoted token as-is.
+        if ($value.Length -ge 2 -and $value.StartsWith('"') -and
+                $value.EndsWith('"') -and
+                $value.Substring(1, $value.Length - 2) -notmatch '"') {
+            $parts += $value
+            continue
+        }
+        $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
+        $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+        $parts += ('"' + $escaped + '"')
+    }
+    return ($parts -join ' ')
 }
 
 function Start-GatewayObservedProcess {
@@ -2280,7 +2487,7 @@ function Start-GatewayObservedProcess {
     $previous = [Environment]::GetEnvironmentVariable($envName, 'Process')
     $definition = @{
         executable = $Executable
-        arguments = $Arguments -join ' '
+        arguments = (ConvertTo-GatewayArgumentLine -Arguments @($Arguments))
         working_directory = $WorkingDirectory
         record_directory = Get-GatewayExitRecordDirectory
         component = $Component
@@ -2327,6 +2534,7 @@ function Start-GatewayService {
     $components = @(Get-GatewayStartComponents -Descriptor $desc)
     $componentMode = Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath
 
+    $inspection = $null
     if ($null -eq $HttpChecker -and $null -eq $Launcher) {
         $inspection = Get-GatewayServiceInspection -Key $Key
         if ($inspection.State -eq 'Conflict') {
@@ -2364,14 +2572,20 @@ function Start-GatewayService {
         }
     }
 
-    # Idempotent: don't restart if already healthy.
-    if (Test-GatewayServiceHealth -Key $Key -HttpChecker $HttpChecker) {
+    # Idempotent: don't restart if already healthy. In component mode the
+    # inspection is the authority: the ingress /health proxies the worker and can
+    # answer 200 from a stale WorkerPortFile, so a Degraded inspection must
+    # reach the component start (which fills the missing worker) instead of
+    # returning AlreadyRunning.
+    if (($null -eq $inspection -or -not $componentMode) -and
+            (Test-GatewayServiceHealth -Key $Key -HttpChecker $HttpChecker)) {
         [void](Set-GatewayDesiredStartOutcome -Key $Key -Outcome 'succeeded')
         return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
             Key = $Key; Status = 'AlreadyRunning'; Action = 'None'
         }) -Watch $watch)
     }
 
+    $workerWaitSeconds = 0
     if ($componentMode) {
         # #133 A2: start worker then ingress, skipping whatever is already
         # healthy. A blocked residual cleanup surfaces as StartBlocked.
@@ -2386,6 +2600,9 @@ function Start-GatewayService {
                 Key = $Key; Status = 'StartBlocked'; Action = 'None'
                 Detail = $detail
             }) -Watch $watch)
+        }
+        if ($componentStart.PSObject.Properties['WorkerWaitSeconds']) {
+            $workerWaitSeconds = [Math]::Max(0, [int]$componentStart.WorkerWaitSeconds)
         }
     } elseif ($null -ne $Launcher) {
         & $Launcher $Key $startPath $desc
@@ -2424,10 +2641,20 @@ function Start-GatewayService {
     }
 
     # Poll up to the service-specific timeout. External launchers can need
-    # materially longer than two seconds on a cold start.
+    # materially longer than two seconds on a cold start. #133 A2/J3: the worker
+    # wait already consumed part of the same budget; do not grant a second full
+    # timeout on top of it.
     $healthy = $false
     $timeoutSeconds = [Math]::Max(1, [int]$desc.StartTimeoutSeconds)
-    for ($elapsed = 0; $elapsed -lt $timeoutSeconds; $elapsed++) {
+    if ($componentMode) {
+        $timeoutSeconds = [Math]::Max(0, $timeoutSeconds - $workerWaitSeconds)
+    }
+    if ($componentMode -and $timeoutSeconds -le 0) {
+        # The budget is exhausted; one last check still reports a service that
+        # became healthy during the final worker wait.
+        $healthy = Test-GatewayServiceHealth -Key $Key -HttpChecker $HttpChecker
+    }
+    for ($elapsed = 0; -not $healthy -and $elapsed -lt $timeoutSeconds; $elapsed++) {
         if ($null -ne $Sleeper) {
             & $Sleeper 1
         } else {
@@ -2488,7 +2715,7 @@ function Stop-GatewayService {
     $componentMode = Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath
 
     $inspection = $null
-    if ($null -eq $HttpChecker -and $null -eq $Stopper -and -not $componentMode) {
+    if ($null -eq $HttpChecker -and $null -eq $Stopper) {
         $inspection = Get-GatewayServiceInspection -Key $Key
         if ($inspection.State -eq 'Conflict') {
             return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
@@ -2518,7 +2745,13 @@ function Stop-GatewayService {
     # alive; the scoped stop is still the verified cleanup, so it never falls
     # back to AlreadyStopped from health alone.
     $residualPending = ($null -ne $inspection -and $inspection.State -eq 'Residual')
-    if ($componentMode) { $residualPending = $true }
+    if ($componentMode) {
+        # #133 A2: a component pair is Degraded when exactly one component is
+        # missing; the scoped stop is still the verified cleanup of whatever is
+        # alive, so it must not fall back to AlreadyStopped from health alone.
+        $residualPending = ($null -eq $inspection -or
+            $inspection.State -in @('Residual', 'Degraded'))
+    }
     if (-not $wasHealthy -and -not $stopWhenUnhealthy -and -not $residualPending) {
         return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
             Key = $Key; Status = 'AlreadyStopped'; Action = 'None'
@@ -2553,7 +2786,9 @@ function Stop-GatewayService {
         if ($gracefulRequested) {
             if ($null -ne $Sleeper) { & $Sleeper 3 } else { Start-Sleep -Seconds 3 }
         }
-        $workerPort = Get-GatewayWorkerPort -Descriptor $desc
+        # #133 A2/H3: never POST a shutdown to a stale port; only the port a
+        # verified worker identity process owns is addressed.
+        $workerPort = Get-GatewayWorkerRuntimePort -Descriptor $desc
         if ($null -ne $workerPort) {
             try {
                 $previousProgressPreference = $ProgressPreference
@@ -2568,10 +2803,25 @@ function Stop-GatewayService {
                 }
             } catch { }
         }
+        # #133 A2/J4: give the worker a bounded chance to exit after its
+        # graceful shutdown POST before the verified force-stop fallback runs.
+        $stopTimeoutSeconds = 5
+        $stopTimeoutProp = $desc.PSObject.Properties['StopTimeoutSeconds']
+        if ($null -ne $stopTimeoutProp) {
+            $stopTimeoutSeconds = [Math]::Max(1, [int]$stopTimeoutProp.Value)
+        }
+        for ($elapsed = 0; $elapsed -lt $stopTimeoutSeconds; $elapsed++) {
+            $workerPids = Get-GatewayWorkerProcessIds -Descriptor $desc
+            if ($null -ne $workerPids -and @($workerPids).Count -eq 0) { break }
+            if ($null -ne $Sleeper) { & $Sleeper 1 } else { Start-Sleep -Seconds 1 }
+        }
         $scoped = Stop-GatewayScopedProcesses -Key $Key -Descriptor $desc
         if ($scoped.Status -eq 'StopRefused') {
             return (Add-GatewayWatchToResult -Result $scoped -Watch $watch)
         }
+        # A force-stopped worker never removes its own record; remove it here
+        # so the next start/ingress cannot reuse a dead port.
+        [void](Remove-GatewayWorkerPortFile -Descriptor $desc)
     } else {
         switch ($desc.StopStrategy) {
             'GracefulHttp' {

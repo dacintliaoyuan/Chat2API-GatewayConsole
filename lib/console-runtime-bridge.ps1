@@ -235,13 +235,15 @@ function Invoke-ConsoleServiceReady {
             return (New-ConsoleServiceReadyResult -Key $Key -Status 'AlreadyRunning' `
                 -Detail '复用已就绪实例' -ProcessIds @($inspection.ProcessIds))
         }
+        # #133 A2/J1: in component mode a Degraded/Residual state is repaired
+        # per component. Start-GatewayComponents cleans only the residual
+        # component identities and launches only the missing ones; a whole-pair
+        # Stop-GatewayService here would also tear down a healthy ingress.
+        $startPath = $null
+        try { $startPath = Resolve-GatewayStartPath -Key $Key } catch { }
+        $componentMode = Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath
         if ($inspection.State -eq 'Degraded') {
-            # #133 A2: a split 8000 pair is Degraded when exactly one
-            # component is ready. Start only the missing component instead of
-            # reporting a dead end (the runtime keeps a healthy component).
-            $startPath = $null
-            try { $startPath = Resolve-GatewayStartPath -Key $Key } catch { }
-            if (Test-GatewayComponentMode -Descriptor $desc -StartPath $startPath) {
+            if ($componentMode) {
                 $start = Start-GatewayService -Key $Key -HttpChecker $HttpChecker `
                     -Sleeper $Sleeper
                 if ($start.Status -eq 'Started') {
@@ -304,7 +306,11 @@ function Invoke-ConsoleServiceReady {
         }
 
         $terminated = @()
-        if (@($scope.Private).Count -gt 0) {
+        # #133 A2/J1: a component-mode Residual is cleaned per identity by the
+        # component start itself. Only a single-process shape (the Python
+        # rollback or the legacy production instance) goes through the
+        # whole-pair stop here.
+        if (@($scope.Private).Count -gt 0 -and -not $componentMode) {
             $cleanup = Stop-GatewayService -Key $Key -KeepDesiredState -Sleeper $Sleeper
             if ($cleanup.PSObject.Properties['TerminatedProcessIds']) {
                 $terminated = @($cleanup.TerminatedProcessIds)
