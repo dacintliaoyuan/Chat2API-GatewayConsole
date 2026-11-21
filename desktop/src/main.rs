@@ -967,11 +967,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = &skip_path else { return };
         let mut config = skip_config.lock().expect("desktop config poisoned");
         config.intro_dismissed = true;
-        if !matches!(config::load_from(path), ConfigLoadOutcome::Invalid(_)) {
-            if let Err(error) = config::save_to(path, &config) {
-                window.set_settings_status(format!("无法保存首次登录偏好：{error}").into());
-                window.set_settings_tone(status_tone(Tone::Bad));
-            }
+        if let ConfigLoadOutcome::Invalid(reason) = config::load_from(path) {
+            window.set_settings_status(
+                format!("无法保存首次登录偏好：配置文件无效：{reason}").into(),
+            );
+            window.set_settings_tone(status_tone(Tone::Bad));
+            return;
+        }
+        if let Err(error) = config::save_to(path, &config) {
+            window.set_settings_status(format!("无法保存首次登录偏好：{error}").into());
+            window.set_settings_tone(status_tone(Tone::Bad));
         }
     });
 

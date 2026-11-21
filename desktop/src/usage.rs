@@ -165,7 +165,7 @@ fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, Strin
 pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
     let value = match desktop_trend(ledger, range.key(), now_ms as f64) {
         Ok(value) => value,
-        Err(_) => {
+        Err(error) => {
             return UsageView {
                 buckets: Vec::new(),
                 token_total: "—".into(),
@@ -173,7 +173,7 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
                 token_ticks: Vec::new(),
                 request_ticks: Vec::new(),
                 coverage: Coverage::Unavailable,
-                message: "无法读取选定时间的用量".into(),
+                message: format!("无法读取选定时间的用量：{error}"),
             };
         }
     };
@@ -241,12 +241,12 @@ pub fn read_requests(
         now_ms as f64,
     ) {
         Ok(value) => value,
-        Err(_) => {
+        Err(error) => {
             return RequestPage {
                 rows: Vec::new(),
                 earlier: None,
                 coverage: Coverage::Unavailable,
-                message: "无法读取所选请求，请返回最新一页重试。".into(),
+                message: format!("无法读取所选请求：{error}"),
             };
         }
     };
