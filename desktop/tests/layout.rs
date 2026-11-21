@@ -746,6 +746,38 @@ fn auto_refresh_refreshes_only_the_overview_on_the_selected_interval() {
 }
 
 #[test]
+fn manual_refresh_restarts_the_auto_refresh_countdown() {
+    let window = window_at(1060.0, 720.0);
+    let overviews = Rc::new(Cell::new(0));
+    window.on_refresh_overview({
+        let overviews = Rc::clone(&overviews);
+        move || overviews.set(overviews.get() + 1)
+    });
+    window.set_auto_refresh(5);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4750));
+    assert_eq!(overviews.get(), 1, "the first five seconds tick once");
+
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert!(window.get_refreshing());
+    finish_refresh();
+    assert_eq!(overviews.get(), 2, "the manual refresh refreshes once");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4999));
+    assert_eq!(
+        overviews.get(),
+        2,
+        "a manual refresh restarts the five-second countdown"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    assert_eq!(overviews.get(), 3);
+}
+
+#[test]
 fn hiding_the_window_pauses_auto_refresh_and_showing_refreshes_immediately() {
     let window = window_at(1060.0, 720.0);
     let overviews = Rc::new(Cell::new(0));

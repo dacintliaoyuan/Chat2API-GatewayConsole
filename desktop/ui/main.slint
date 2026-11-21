@@ -623,10 +623,15 @@ export component MainWindow inherits Window {
     changed refreshing => {
         if (root.refreshing) {
             root.refresh-rotation = 0deg;
+            auto-refresh-timer.stop();
             refresh-timer.restart();
         } else {
             refresh-timer.stop();
             root.refresh-rotation = 0deg;
+            // The manual refresh restarts the auto-refresh countdown.
+            if (root.auto-refresh > 0 && !root.refresh-paused) {
+                auto-refresh-timer.restart();
+            }
         }
     }
     changed refresh-paused => {
