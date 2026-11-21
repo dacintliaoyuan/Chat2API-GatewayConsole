@@ -230,6 +230,11 @@ export component MainWindow inherits Window {
     out property <bool> password-toggle-focused: password-toggle.has-focus;
     out property <bool> save-button-focused: save-account.has-focus;
     out property <bool> cancel-button-focused: cancel-account.has-focus;
+    out property <bool> login-card-visible: login-card.visible;
+    out property <bool> skip-login-visible: skip-login-button.visible;
+    out property <bool> configure-account-visible: configure-account-button.visible;
+    out property <bool> account-saved-detail-visible: account-saved-detail.visible;
+    out property <bool> account-clear-visible: clear-account.visible;
 
     callback navigate(int);
     callback configure-account();
@@ -363,7 +368,7 @@ export component MainWindow inherits Window {
                             Hint { text: root.login-status; color: Theme.status(root.login-tone); visible: !root.login-status.is-empty; }
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
-                                Button {
+                                configure-account-button := Button {
                                     visible: !root.account-can-clear || root.account-can-continue || !root.account-saved-detail.is-empty;
                                     text: root.account-can-continue ? "继续登录" : "配置账号";
                                     enabled: !root.account-busy;
@@ -373,7 +378,7 @@ export component MainWindow inherits Window {
                                         else { root.configure-account(); }
                                     }
                                 }
-                                Button {
+                                skip-login-button := Button {
                                     visible: root.show-intro; text: "稍后登录";
                                     clicked => { root.skip-login(); }
                                 }
@@ -554,6 +559,7 @@ export component MainWindow inherits Window {
                             spacing: 9px;
                             Heading { text: "UM 账号"; }
                             Hint { text: root.account-saved; }
+                            account-saved-detail := Hint { visible: !root.account-saved-detail.is-empty; text: root.account-saved-detail; }
                             Text { text: root.account-label; color: Theme.status(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
                             Hint { visible: !root.account-detail.is-empty; text: root.account-detail; }
                             HorizontalLayout {
@@ -567,6 +573,15 @@ export component MainWindow inherits Window {
                                     visible: root.account-can-continue && !root.account-form-visible;
                                     enabled: !root.account-busy; primary: true; text: "继续登录";
                                     clicked => { root.continue-login(); }
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                clear-account := Button {
+                                    visible: root.account-can-clear && !root.account-form-visible;
+                                    enabled: !root.account-busy;
+                                    text: "清除已保存的账号密码";
+                                    clicked => { root.clear-credentials(); }
                                 }
                             }
                             Hint { visible: !root.credential-status.is-empty; text: root.credential-status; color: Theme.status(root.credential-tone); }
@@ -636,13 +651,8 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 visible: root.show-technical; spacing: 8px;
                                 Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status(root.supervision-tone); }
-                                Hint { text: root.account-saved-detail; visible: !root.account-saved-detail.is-empty; }
                                 Hint { text: "配置文件  " + root.config-path; }
                                 Hint { text: "实例数据  " + root.instance-path; }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    Button { text: "清除已保存的账号密码"; enabled: root.account-can-clear && !root.account-busy; clicked => { root.clear-credentials(); } }
-                                }
                             }
                         }
                     }

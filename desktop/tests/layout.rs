@@ -167,6 +167,53 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
 }
 
 #[test]
+fn first_open_offers_skip_and_keeps_the_configure_entry_after_skipping() {
+    let window = window_at(1060.0, 720.0);
+    window.set_show_intro(true);
+    window.set_account_label("尚未登录".into());
+    window.set_account_detail("".into());
+    window.set_account_saved("未配置账号".into());
+    window.set_account_saved_detail("".into());
+    window.set_account_can_clear(false);
+    window.set_account_can_continue(false);
+    window.set_login_status("".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(window.get_login_card_visible());
+    assert!(window.get_skip_login_visible());
+    assert!(window.get_configure_account_visible());
+
+    window.on_skip_login({
+        let window = window.as_weak();
+        move || {
+            if let Some(window) = window.upgrade() {
+                window.set_show_intro(false);
+            }
+        }
+    });
+    window.invoke_skip_login();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(window.get_login_card_visible());
+    assert!(!window.get_skip_login_visible());
+    assert!(
+        window.get_configure_account_visible(),
+        "跳过后总览仍保留「配置账号」入口"
+    );
+}
+
+#[test]
+fn the_um_account_card_shows_the_saved_detail_and_clear_action() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_account_can_clear(true);
+    window.set_account_saved_detail("凭据缺少密码".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_account_saved_detail_visible());
+    assert!(window.get_account_clear_visible());
+}
+
+#[test]
 fn account_form_can_be_completed_with_the_keyboard() {
     let window = window_at(1060.0, 720.0);
     let saved = Rc::new(RefCell::new(None::<(String, String)>));

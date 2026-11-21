@@ -23,8 +23,8 @@ use std::time::Duration;
 use chrono::TimeZone;
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use um_desktop::account::{
-    self, account_view, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState, HttpAuthAdmin,
-    LoadOutcome,
+    self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
+    AuthRead, AuthState, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
 use um_desktop::gateway::{
@@ -84,16 +84,41 @@ fn clock(at: Option<i64>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn apply_account(window: &MainWindow, view: &AccountView) {
-    window.set_account_saved(view.saved_account.clone().into());
-    window.set_account_saved_detail(view.saved_detail.clone().into());
-    window.set_account_can_clear(view.can_clear);
-    window.set_account_can_continue(view.can_continue_login);
-    window.set_account_label(view.overview_label.clone().into());
-    window.set_account_detail(view.overview_detail.clone().into());
-    window.set_account_tone(status_tone(view.overview_tone));
-    if view.state_tone == Tone::Good || view.state_value.starts_with("正在") {
-        window.set_login_status("".into());
+impl AccountSurface for MainWindow {
+    fn set_saved_account(&self, value: &str) {
+        self.set_account_saved(value.into());
+    }
+
+    fn set_saved_detail(&self, value: &str) {
+        self.set_account_saved_detail(value.into());
+    }
+
+    fn set_can_clear(&self, value: bool) {
+        self.set_account_can_clear(value);
+    }
+
+    fn set_can_continue_login(&self, value: bool) {
+        self.set_account_can_continue(value);
+    }
+
+    fn set_overview_label(&self, value: &str) {
+        self.set_account_label(value.into());
+    }
+
+    fn set_overview_detail(&self, value: &str) {
+        self.set_account_detail(value.into());
+    }
+
+    fn set_overview_tone(&self, tone: Tone) {
+        self.set_account_tone(status_tone(tone));
+    }
+
+    fn set_login_status(&self, value: &str) {
+        self.set_login_status(value.into());
+    }
+
+    fn set_credential_status(&self, value: &str) {
+        self.set_credential_status(value.into());
     }
 }
 
@@ -659,7 +684,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => account::load_from(path),
         None => LoadOutcome::Unusable("LOCALAPPDATA 未设置，无法定位凭据文件".to_string()),
     };
-    window.set_show_intro(!loaded_config.intro_dismissed && matches!(saved_credentials, LoadOutcome::Missing));
+    window.set_show_intro(account::intro_visible(
+        loaded_config.intro_dismissed,
+        &saved_credentials,
+    ));
     let saved_state = Arc::new(Mutex::new(saved_credentials.clone()));
     let auth_state: Arc<Mutex<Option<AuthRead>>> = Arc::new(Mutex::new(None));
     let account_form = Rc::new(RefCell::new(AccountForm::new(None)));

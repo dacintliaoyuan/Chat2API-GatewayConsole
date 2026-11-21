@@ -110,6 +110,8 @@ class BrowserPage:
         if field is None:
             if op == "field":
                 return "missing"
+            if op == "value":
+                return None
             raise ValueError("login field absent")
         try:
             if op == "fill":
@@ -119,6 +121,8 @@ class BrowserPage:
                     return "filled"
                 return field.evaluate("""el => el.matches(':-webkit-autofill')
                     ? 'protected' : 'missing'""")
+            if op == "value":
+                return field.input_value(timeout=5000).strip() or None
             raise ValueError("unknown operation")
         finally:
             field.dispose()

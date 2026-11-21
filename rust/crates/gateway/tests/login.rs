@@ -49,6 +49,7 @@ struct FakePage {
     fill_calls: AtomicUsize,
     filled_values: Mutex<Vec<String>>,
     account_prefilled: AtomicBool,
+    account_value: Mutex<Option<String>>,
     password_prefilled: AtomicBool,
     autofill_protected: AtomicBool,
     password_cleared: AtomicBool,
@@ -76,6 +77,7 @@ impl FakePage {
             fill_calls: AtomicUsize::new(0),
             filled_values: Mutex::new(Vec::new()),
             account_prefilled: AtomicBool::new(false),
+            account_value: Mutex::new(None),
             password_prefilled: AtomicBool::new(false),
             autofill_protected: AtomicBool::new(false),
             password_cleared: AtomicBool::new(false),
@@ -106,6 +108,10 @@ impl FakePage {
 
     fn set_duo_manual(&self, manual: bool) {
         self.duo_manual.store(manual, Ordering::SeqCst);
+    }
+
+    fn set_account_value(&self, value: &str) {
+        *self.account_value.lock().expect("account value") = Some(value.to_string());
     }
 
     fn drop_calls(&self) -> usize {
@@ -210,6 +216,13 @@ impl LoginPage for FakePage {
         } else {
             CredentialField::Missing
         }
+    }
+
+    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
+        if selectors.contains(&"input[name=\"UserName\"]") {
+            return self.account_value.lock().expect("account value").clone();
+        }
+        None
     }
 
     fn one_visible(&self, _selectors: &[&str]) -> Option<VisibleTarget> {
@@ -1049,6 +1062,55 @@ fn configured_pair_replaces_a_preexisting_browser_account_instead_of_mixing_sour
         *page.filled_values.lock().unwrap(),
         vec!["fixture-account", " fixture-password "]
     );
+}
+
+#[test]
+fn a_prefilled_umpass_account_that_differs_from_the_saved_account_stops_for_manual_confirmation() {
+    let temp = TempDir::new("um-rust-login-account-mismatch-");
+    let page = empty_form_page();
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.set_account_value("someone-else@um.edu.mo");
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        configure_form_pair,
+    );
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| {
+        s["state"] == json!("failed")
+            && s["login"]["manual_reason"] == json!("umpass_account_mismatch")
+    });
+    assert_eq!(status["error"], json!("umpass_account_mismatch"));
+    assert_eq!(page.submit_clicks(), 0, "账号不一致时不得提交旧凭据");
+    assert_eq!(page.fill_calls(), 0, "账号不一致时不得覆盖页面账号");
+}
+
+#[test]
+fn a_prefilled_same_account_with_a_missing_password_is_filled_and_submitted_once() {
+    let temp = TempDir::new("um-rust-login-same-account-missing-password-");
+    let page = empty_form_page();
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.set_account_value("FIXTURE-ACCOUNT");
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        configure_form_pair,
+    );
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] != json!("logging_in"));
+    assert_eq!(status["state"], json!("valid"));
+    assert_eq!(
+        *page.filled_values.lock().unwrap(),
+        vec!["fixture-account", " fixture-password "]
+    );
+    assert_eq!(page.submit_clicks(), 1, "补填后只自动提交一次");
 }
 
 #[test]
