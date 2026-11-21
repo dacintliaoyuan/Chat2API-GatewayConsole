@@ -245,13 +245,20 @@ function Invoke-DefaultProcessQuery {
             }
         }
         $port = [int]$desc.Port
-        $listening = @(
-            [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
-            Where-Object { $_.Port -eq $port })
-        if ($listening.Count -gt 0) {
+        # A Tailscale or LAN listener on another address does not occupy
+        # the gateway's 127.0.0.1 socket. Use the runtime's bind-scope rules.
+        $listeners = Get-GatewayListenerSnapshot -Port $port
+        if (@($listeners.Unconfirmed).Count -gt 0) {
             return [pscustomobject]@{
                 State = 'unconfirmed'
                 Pids = @()
+                Error = 'port_{0}_listener_unconfirmed' -f $port
+            }
+        }
+        if (@($listeners.Overlapping).Count -gt 0) {
+            return [pscustomobject]@{
+                State = 'unconfirmed'
+                Pids = @($listeners.Overlapping | ForEach-Object { [int]$_.OwningProcess })
                 Error = 'port_{0}_held_by_non_private_process' -f $port
             }
         }
@@ -811,6 +818,36 @@ function Invoke-WatchSelfTest {
         [void]$script:selfTestProbeResults.Add($result)
         return $result
     }
+    & {
+        function Select-GatewayStopScope {
+            param($Descriptor, $GatewayRoot)
+            [pscustomobject]@{ Private = @(); Unconfirmed = @() }
+        }
+
+        function Get-NetTCPConnection {
+            [CmdletBinding()]
+            param([int]$LocalPort, [string]$State)
+            [pscustomobject]@{ LocalAddress = $fixtureAddress; OwningProcess = 5678 }
+        }
+
+        foreach ($fixture in @(
+            @{ Address = '100.64.0.1'; Expected = 'absent' }
+            @{ Address = 'fd00::1'; Expected = 'absent' }
+            @{ Address = '127.0.0.1'; Expected = 'unconfirmed' }
+            @{ Address = '0.0.0.0'; Expected = 'unconfirmed' }
+            @{ Address = '::'; Expected = 'unconfirmed' }
+            @{ Address = '::ffff:127.0.0.1'; Expected = 'unconfirmed' }
+            @{ Address = 'unreadable'; Expected = 'unconfirmed' }
+        )) {
+            $fixtureAddress = $fixture.Address
+            $result = Invoke-DefaultProcessQuery
+            if ($result.State -ne $fixture.Expected) {
+                throw ('self-test failed: listener address {0} expected {1}, got {2}' -f
+                    $fixtureAddress, $fixture.Expected, $result.State)
+            }
+        }
+    }
+
     $script:selfTestProcessState = 'verified'
     $script:selfTestProcessPid = 4242
     $script:ProcessQuery = {
