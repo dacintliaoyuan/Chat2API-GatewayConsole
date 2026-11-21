@@ -222,10 +222,22 @@ export component UsageChart inherits Panel {
     out property <length> refresh-width: refresh-button.width;
     out property <length> refresh-height: refresh-button.height;
     out property <bool> refresh-enabled: refresh-button.enabled;
+    out property <length> content-height: content.preferred-height;
+    out property <length> metric-x: metric-control.absolute-position.x;
+    out property <length> metric-y: metric-control.absolute-position.y;
+    out property <length> metric-width: metric-control.width;
+    out property <length> metric-height: metric-control.height;
+    out property <length> controls-y: controls.absolute-position.y;
+    out property <length> controls-height: controls.height;
+    out property <length> selection-y: selection.absolute-position.y;
+    out property <length> selection-height: selection.height;
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
     private property <int> key-index: -1;
+    // The header fits one row at the default width; below 650 px it splits
+    // into two rows instead of overflowing the card.
+    private property <bool> narrow: root.width < 650px;
     // The selection block animates for 160 ms; the data swap waits for it so
     // the chart and the block never disagree about which range is selected.
     private property <int> pending-period: -1;
@@ -341,80 +353,160 @@ export component UsageChart inherits Panel {
             clicked => { chart-focus.focus(); }
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 16px;
             spacing: 10px;
 
-            HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    spacing: 3px;
-                    Heading { text: "用量趋势"; }
-                    Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+            // The title anchors the card; the metric switch, refresh action,
+            // update label and total share the right edge. Grouping the metric
+            // switch with the total it drives mirrors the Magpie overview, and
+            // leaving the range and chart type on their own row keeps the
+            // controls on one line at the default width instead of wrapping a
+            // blank band into the card. The wide header is a plain layout so its
+            // preferred height stays measurable; below 650 px it collapses and
+            // the conditional narrow header takes over.
+            header := Rectangle {
+                height: root.width < 500px ? 128px : root.width < 650px ? 86px : 44px;
+                wide-header := HorizontalLayout {
+                    visible: !root.narrow;
+                    height: root.narrow ? 0px : parent.height;
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 3px;
+                        Heading { text: "用量趋势"; }
+                        Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    right-header := HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        refresh-button := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新";
+                            icon: "refresh";
+                            icon-rotation: root.refresh-rotation;
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "刷新总览";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh(); }
+                        }
+                        metric-control := Segmented {
+                            width: 188px;
+                            options: [{ text: "Token" }, { text: "请求数" }];
+                            label: "用量指标";
+                            current-index: root.show-requests ? 1 : 0;
+                            selected(index) => { root.show-requests = index == 1; }
+                        }
+                        DataText {
+                            text: "更新于 " + root.updated-at;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 2px;
+                            Hint { text: root.show-requests ? "请求总数" : "Token 总量"; horizontal-alignment: right; }
+                            DataText {
+                                text: root.show-requests ? root.request-total : root.token-total;
+                                font-size: 21px;
+                                font-weight: 650;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
                 }
-                Rectangle { horizontal-stretch: 1; }
-                refresh-button := ActionButton {
-                    width: Theme.icon-button;
-                    height: Theme.icon-button;
-                    label: "刷新";
-                    icon: "refresh";
-                    icon-rotation: root.refresh-rotation;
-                    icon-only: true;
-                    quiet: true;
-                    tooltip: "刷新总览";
-                    enabled: !root.refreshing;
-                    clicked => { root.refresh(); }
-                }
-                DataText {
-                    text: "更新于 " + root.updated-at;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                }
-                VerticalLayout {
-                    alignment: end;
-                    spacing: 2px;
-                    Hint { text: root.show-requests ? "请求总数" : "Token 总量"; horizontal-alignment: right; }
-                    DataText {
-                        text: root.show-requests ? root.request-total : root.token-total;
-                        font-size: 21px;
-                        font-weight: 650;
-                        horizontal-alignment: right;
+                if root.narrow : VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            spacing: 3px;
+                            Heading { text: "用量趋势"; }
+                            Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 2px;
+                            Hint { text: root.show-requests ? "请求总数" : "Token 总量"; horizontal-alignment: right; }
+                            DataText {
+                                text: root.show-requests ? root.request-total : root.token-total;
+                                font-size: 21px;
+                                font-weight: 650;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新";
+                            icon: "refresh";
+                            icon-rotation: root.refresh-rotation;
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "刷新总览";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh(); }
+                        }
+                        Segmented {
+                            width: 188px;
+                            options: [{ text: "Token" }, { text: "请求数" }];
+                            label: "用量指标";
+                            current-index: root.show-requests ? 1 : 0;
+                            selected(index) => { root.show-requests = index == 1; }
+                        }
+                        DataText {
+                            text: "更新于 " + root.updated-at;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
 
-            FlexboxLayout {
-                flex-wrap: wrap;
-                spacing: 8px;
-                period-control := Segmented {
-                    width: 300px;
-                    options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
-                    label: "用量时间范围";
-                    current-index <=> root.period;
-                    selected(index) => {
-                        root.pending-period = index;
-                        period-sync-timer.start();
+            controls := Rectangle {
+                // The same explicit height keeps the wrapping rows from
+                // inflating the card's preferred height; below 650 px the
+                // range and display groups split into two rows.
+                height: root.width < 650px ? 76px : 34px;
+                FlexboxLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    flex-wrap: wrap;
+                    alignment: space-between;
+                    spacing: 8px;
+                    period-control := Segmented {
+                        width: 300px;
+                        options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
+                        label: "用量时间范围";
+                        current-index <=> root.period;
+                        selected(index) => {
+                            root.pending-period = index;
+                            period-sync-timer.start();
+                        }
                     }
-                }
-                metric-control := Segmented {
-                    width: 188px;
-                    options: [{ text: "Token" }, { text: "请求数" }];
-                    label: "用量指标";
-                    current-index: root.show-requests ? 1 : 0;
-                    selected(index) => { root.show-requests = index == 1; }
-                }
-                type-control := Segmented {
-                    width: 192px;
-                    options: [{ text: "柱状图" }, { text: "折线图" }];
-                    label: "图表类型";
-                    current-index: root.show-line ? 1 : 0;
-                    selected(index) => { root.show-line = index == 1; }
-                }
-                auto-refresh-control := Segmented {
-                    width: 180px;
-                    options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
-                    label: "总览自动刷新";
-                    current-index <=> root.auto-refresh-index;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        type-control := Segmented {
+                            width: 192px;
+                            options: [{ text: "柱状图" }, { text: "折线图" }];
+                            label: "图表类型";
+                            current-index: root.show-line ? 1 : 0;
+                            selected(index) => { root.show-line = index == 1; }
+                        }
+                        auto-refresh-control := Segmented {
+                            width: 180px;
+                            options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                            label: "总览自动刷新";
+                            current-index <=> root.auto-refresh-index;
+                        }
+                    }
                 }
             }
 
@@ -473,7 +565,7 @@ export component UsageChart inherits Panel {
                 }
             }
 
-            Rectangle {
+            selection := Rectangle {
                 visible: root.has-data;
                 height: root.has-data ? 58px : 0px;
 

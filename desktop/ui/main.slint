@@ -192,6 +192,33 @@ component ClickableCard inherits Card {
     accessible-action-default => { root.activated(); }
 }
 
+// One settings row: the label is the left column and the controls sit at the
+// right edge of the card, so every settings card shares one row rhythm.
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <length> label-column: 96px;
+    out property <length> label-x: row-label.absolute-position.x;
+    out property <length> label-px: row-label.width;
+    height: 40px;
+    width: 100%;
+    background: transparent;
+    row-content := HorizontalLayout {
+        padding-top: 3px;
+        padding-bottom: 3px;
+        spacing: 12px;
+        row-label := Text {
+            width: root.label-column;
+            text: root.label;
+            color: Theme.ink;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        @children
+    }
+}
+
 // A clickable address chip: the whole chip is one hit target, the pointer and the
 // keyboard activate the same callback, and the trailing copy icon names the action.
 component CopyChip inherits Rectangle {
@@ -442,7 +469,8 @@ export component MainWindow inherits Window {
     in property <int> settings-tone: 3;
     in property <string> config-path;
     in property <string> instance-path;
-    private property <bool> show-technical;
+    // Test seam: the layout tests expand the instance card without a pointer.
+    in-out property <bool> show-technical;
     in property <bool> tray-available: true;
 
     // Test seam: geometry and focus facts the keyboard/layout tests assert on.
@@ -456,6 +484,23 @@ export component MainWindow inherits Window {
     out property <length> overview-login-content-height: login-card.content-height;
     out property <length> overview-chart-y: usage-chart.y;
     out property <length> overview-chart-height: usage-chart.height;
+    out property <length> overview-chart-x: usage-chart.absolute-position.x;
+    out property <length> overview-chart-width: usage-chart.width;
+    out property <length> overview-chart-absolute-y: usage-chart.absolute-position.y;
+    out property <length> overview-chart-content-height: usage-chart.content-height;
+    out property <length> overview-title-y: page-title.absolute-position.y;
+    out property <length> overview-title-height: page-title.height;
+    out property <length> overview-state-gateway-width: state-gateway.width;
+    out property <length> overview-state-login-width: state-login.width;
+    out property <length> overview-state-upstream-width: state-upstream.width;
+    out property <length> usage-metric-x: usage-chart.metric-x;
+    out property <length> usage-metric-y: usage-chart.metric-y;
+    out property <length> usage-metric-width: usage-chart.metric-width;
+    out property <length> usage-metric-height: usage-chart.metric-height;
+    out property <length> usage-controls-y: usage-chart.controls-y;
+    out property <length> usage-controls-height: usage-chart.controls-height;
+    out property <length> usage-selection-y: usage-chart.selection-y;
+    out property <length> usage-selection-height: usage-chart.selection-height;
     out property <length> overview-address-x: overview-address.absolute-position.x;
     out property <length> overview-address-y: overview-address.absolute-position.y;
     out property <length> overview-address-width: overview-address.width;
@@ -493,6 +538,68 @@ export component MainWindow inherits Window {
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
     out property <length> technical-card-height: technical-card.height;
+    // Test seams: the settings cards share one column and one row rhythm, so the
+    // geometry tests can assert the card edges and the label/control alignment.
+    out property <length> appearance-card-x: appearance-card.absolute-position.x;
+    out property <length> appearance-card-y: appearance-card.absolute-position.y;
+    out property <length> appearance-card-width: appearance-card.width;
+    out property <length> appearance-card-height: appearance-card.height;
+    out property <length> appearance-title-y: appearance-title.absolute-position.y;
+    out property <length> appearance-title-width: appearance-title.width;
+    out property <length> appearance-title-height: appearance-title.height;
+    out property <length> appearance-hint-y: appearance-hint.absolute-position.y;
+    out property <length> appearance-hint-width: appearance-hint.width;
+    out property <length> appearance-hint-height: appearance-hint.height;
+    out property <length> appearance-row-x: appearance-row.absolute-position.x;
+    out property <length> appearance-row-y: appearance-row.absolute-position.y;
+    out property <length> appearance-row-width: appearance-row.width;
+    out property <length> appearance-row-height: appearance-row.height;
+    out property <length> appearance-row-label-x: appearance-row.label-x;
+    out property <length> appearance-row-label-width: appearance-row.label-px;
+    out property <length> account-card-x: account-card.absolute-position.x;
+    out property <length> account-card-y: account-card.absolute-position.y;
+    out property <length> account-card-width: account-card.width;
+    out property <length> account-card-height: account-card.height;
+    out property <length> account-title-y: account-title.absolute-position.y;
+    out property <length> account-title-height: account-title.height;
+    out property <length> account-state-x: account-state.absolute-position.x;
+    out property <length> account-state-y: account-state.absolute-position.y;
+    out property <length> account-state-width: account-state.width;
+    out property <length> account-state-height: account-state.height;
+    out property <length> account-saved-y: account-saved-hint.absolute-position.y;
+    out property <length> account-saved-height: account-saved-hint.height;
+    out property <length> account-actions-x: account-actions.absolute-position.x;
+    out property <length> account-actions-y: account-actions.absolute-position.y;
+    out property <length> account-actions-height: account-actions.height;
+    out property <length> gateway-card-x: gateway-card.absolute-position.x;
+    out property <length> gateway-card-y: gateway-card.absolute-position.y;
+    out property <length> gateway-card-width: gateway-card.width;
+    out property <length> gateway-card-height: gateway-card.height;
+    out property <length> gateway-title-y: gateway-title.absolute-position.y;
+    out property <length> gateway-title-height: gateway-title.height;
+    out property <length> gateway-hint-y: gateway-hint.absolute-position.y;
+    out property <length> gateway-hint-height: gateway-hint.height;
+    out property <length> port-row-y: port-row.absolute-position.y;
+    out property <length> port-row-height: port-row.height;
+    out property <length> port-row-label-x: port-row.label-x;
+    out property <length> port-row-label-width: port-row.label-px;
+    out property <length> gateway-address-row-y: gateway-address-row.absolute-position.y;
+    out property <length> gateway-address-label-x: gateway-address-row.label-x;
+    out property <length> gateway-address-label-width: gateway-address-row.label-px;
+    out property <length> instance-supervision-y: instance-supervision.absolute-position.y;
+    out property <length> instance-supervision-height: instance-supervision.height;
+    out property <length> instance-config-y: instance-config.absolute-position.y;
+    out property <length> instance-config-height: instance-config.height;
+    out property <length> instance-data-y: instance-data.absolute-position.y;
+    out property <length> instance-data-height: instance-data.height;
+    out property <length> instance-label-x: instance-supervision.label-x;
+    out property <length> instance-label-width: instance-supervision.label-px;
+    out property <length> instance-supervision-value-x: instance-supervision-value.absolute-position.x;
+    out property <length> instance-supervision-value-width: instance-supervision-value.width;
+    out property <length> instance-config-value-x: instance-config-value.absolute-position.x;
+    out property <length> instance-config-value-width: instance-config-value.width;
+    out property <length> instance-data-value-x: instance-data-value.absolute-position.x;
+    out property <length> instance-data-value-width: instance-data-value.width;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
     out property <length> port-input-x: port-input.absolute-position.x;
@@ -1014,6 +1121,9 @@ export component MainWindow inherits Window {
             spacing: 12px;
             HorizontalLayout {
                 spacing: 8px;
+                // The title sets the row height; the chips opt into the same
+                // vertical center instead of sitting on the baseline.
+                cross-axis-alignment: center;
                 page-title := Heading {
                     text: root.page-titles[root.page];
                     font-size: 22px;
@@ -1064,46 +1174,55 @@ export component MainWindow inherits Window {
                     // the page, never inside a card.
                     padding-right: 8px;
                     state-card := Card {
-                        if root.compact : VerticalLayout {
-                            spacing: 12px;
-                            StateCell {
-                                horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
-                                detail: root.gateway-detail; tone: root.gateway-tone;
-                                pulse: root.gateway-pulse;
+                        // Three equal stretches divide the card content in a
+                        // row, so no blank strip sits on the right. The compact
+                        // stack is a conditional element, while the wide row
+                        // stays a plain layout so its cell widths stay
+                        // measurable; collapsing its height to zero and keeping
+                        // no gap between the two orientations keeps it out of
+                        // the compact card.
+                        VerticalLayout {
+                            spacing: 0px;
+                            wide-state := HorizontalLayout {
+                                visible: !root.compact;
+                                height: root.compact ? 0px : self.preferred-height;
+                                spacing: 14px;
+                                state-gateway := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "网关"; value: root.gateway-value;
+                                    detail: root.gateway-detail; tone: root.gateway-tone;
+                                    pulse: root.gateway-pulse;
+                                }
+                                state-login := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "UM 登录"; value: root.account-label;
+                                    detail: root.account-state-detail(); tone: root.account-tone;
+                                    pulse: root.account-pulse;
+                                }
+                                state-upstream := StateCell {
+                                    horizontal-stretch: 1;
+                                    label: "上游"; value: root.upstream-value;
+                                    detail: root.upstream-detail; tone: root.upstream-tone;
+                                    pulse: root.upstream-pulse;
+                                }
                             }
-                            StateCell {
-                                horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
-                                detail: root.account-state-detail(); tone: root.account-tone;
-                                pulse: root.account-pulse;
-                            }
-                            StateCell {
-                                horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
-                                detail: root.upstream-detail; tone: root.upstream-tone;
-                                pulse: root.upstream-pulse;
-                            }
-                        }
-                        if !root.compact : HorizontalLayout {
-                            spacing: 14px;
-                            // The card content is the window minus the rail, the page
-                            // padding and the card inset; three equal cells leave the
-                            // same gutter on every width.
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "网关"; value: root.gateway-value;
-                                detail: root.gateway-detail; tone: root.gateway-tone;
-                                pulse: root.gateway-pulse;
-                            }
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "UM 登录"; value: root.account-label;
-                                detail: root.account-state-detail(); tone: root.account-tone;
-                                pulse: root.account-pulse;
-                            }
-                            StateCell {
-                                width: (root.width - 304px) / 3;
-                                label: "上游"; value: root.upstream-value;
-                                detail: root.upstream-detail; tone: root.upstream-tone;
-                                pulse: root.upstream-pulse;
+                            if root.compact : VerticalLayout {
+                                spacing: 12px;
+                                StateCell {
+                                    horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
+                                    detail: root.gateway-detail; tone: root.gateway-tone;
+                                    pulse: root.gateway-pulse;
+                                }
+                                StateCell {
+                                    horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;
+                                    detail: root.account-state-detail(); tone: root.account-tone;
+                                    pulse: root.account-pulse;
+                                }
+                                StateCell {
+                                    horizontal-stretch: 1; label: "上游"; value: root.upstream-value;
+                                    detail: root.upstream-detail; tone: root.upstream-tone;
+                                    pulse: root.upstream-pulse;
+                                }
                             }
                         }
                     }
@@ -1471,24 +1590,19 @@ export component MainWindow inherits Window {
                         Hint { text: root.settings-updated-at-label; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                     }
-                    Card {
+                    appearance-card := Card {
+                        inset: 16px;
+                        gap: 12px;
                         VerticalLayout {
                             alignment: start;
-                            spacing: 9px;
-                            SectionLabel { text: "外观"; }
-                            Hint { text: "跟随系统时会随 Windows 应用主题切换，手动选择会覆盖系统设置。"; }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: start;
-                                Text {
-                                    text: "主题";
-                                    height: Theme.control-height;
-                                    vertical-alignment: center;
-                                    color: Theme.ink;
-                                    font-size: 12px;
-                                }
+                            spacing: 12px;
+                            appearance-title := SectionLabel { text: "外观"; }
+                            appearance-hint := Hint { text: "跟随系统时会随 Windows 应用主题切换，手动选择会覆盖系统设置。"; }
+                            appearance-row := SettingRow {
+                                label: "主题";
+                                Rectangle { horizontal-stretch: 1; }
                                 theme-mode-control := Segmented {
-                                    width: 300px;
+                                    width: root.compact ? 260px : 300px;
                                     label: "主题";
                                     options: [
                                         { text: "跟随系统" },
@@ -1501,20 +1615,29 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    Card {
+                    account-card := Card {
+                        inset: 16px;
+                        gap: 12px;
                         VerticalLayout {
                             alignment: start;
-                            spacing: 9px;
-                            SectionLabel { text: "UM 账号"; }
-                            Hint { text: root.account-saved; }
+                            spacing: 12px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                account-title := SectionLabel { text: "UM 账号"; horizontal-stretch: 1; vertical-alignment: center; }
+                                account-state := Tag {
+                                    label: root.account-label;
+                                    tone: root.account-tone;
+                                    cross-axis-self-alignment: center;
+                                }
+                            }
+                            account-saved-hint := Hint { text: root.account-saved; }
                             account-saved-detail := Hint {
                                 visible: !root.account-saved-detail.is-empty;
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.account-saved-detail;
                             }
-                            Text { text: root.account-label; color: Theme.status_ink(root.account-tone); font-size: 15px; font-weight: 650; wrap: word-wrap; }
                             if !root.account-detail.is-empty : Hint { text: root.account-detail; }
-                            HorizontalLayout {
+                            account-actions := HorizontalLayout {
                                 height: root.account-form-visible ? 0px : self.preferred-height;
                                 spacing: 8px; alignment: start;
                                 edit-account := FocusAction {
@@ -1623,14 +1746,17 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    Card {
+                    gateway-card := Card {
+                        inset: 16px;
+                        gap: 12px;
                         VerticalLayout {
-                            spacing: 9px;
-                            SectionLabel { text: "网关"; }
-                            Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
-                            HorizontalLayout {
-                                spacing: 8px; alignment: start;
-                                Hint { text: "网关端口"; height: Theme.control-height; vertical-alignment: center; }
+                            spacing: 12px;
+                            gateway-title := SectionLabel { text: "网关"; }
+                            gateway-hint := Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
+                            Divider { }
+                            port-row := SettingRow {
+                                label: "网关端口";
+                                Rectangle { horizontal-stretch: 1; }
                                 port-input := MaterialField {
                                     width: 148px;
                                     placeholder: "端口";
@@ -1656,13 +1782,12 @@ export component MainWindow inherits Window {
                                 color: Theme.status_ink(root.settings-tone);
                             }
                             Divider { }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: center;
-                                Hint { text: "模型 API 地址"; vertical-alignment: center; wrap: no-wrap; }
+                            gateway-address-row := SettingRow {
+                                label: "模型 API 地址";
                                 gateway-address := DataText {
                                     text: root.base-url;
                                     horizontal-stretch: 1;
+                                    horizontal-alignment: right;
                                     vertical-alignment: center;
                                     overflow: elide;
                                     wrap: no-wrap;
@@ -1692,10 +1817,12 @@ export component MainWindow inherits Window {
                     }
                     technical-card := ClickableCard {
                         card-label: "实例管理";
+                        inset: 16px;
+                        gap: 12px;
                         checked: root.show-technical;
                         activated => { root.show-technical = !root.show-technical; }
                         VerticalLayout {
-                            spacing: 9px;
+                            spacing: 12px;
                             HorizontalLayout {
                                 spacing: 8px;
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
@@ -1725,10 +1852,41 @@ export component MainWindow inherits Window {
                                 clip: true;
                                 animate preferred-height { duration: Theme.settle; easing: ease-out; }
                                 details-content := VerticalLayout {
-                                    spacing: 8px;
-                                    Hint { text: "网关监督  " + root.supervision-value + "  " + root.supervision-detail; color: Theme.status_ink(root.supervision-tone); }
-                                    Hint { text: "配置文件  " + root.config-path; }
-                                    Hint { text: "实例数据  " + root.instance-path; }
+                                    spacing: 12px;
+                                    instance-supervision := SettingRow {
+                                        label: "网关监督";
+                                        instance-supervision-value := Hint {
+                                            text: root.supervision-value + (root.supervision-detail.is-empty ? "" : "  " + root.supervision-detail);
+                                            color: Theme.status_ink(root.supervision-tone);
+                                            horizontal-stretch: 1;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                    }
+                                    instance-config := SettingRow {
+                                        label: "配置文件";
+                                        instance-config-value := DataText {
+                                            text: root.config-path;
+                                            horizontal-stretch: 1;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                    }
+                                    instance-data := SettingRow {
+                                        label: "实例数据";
+                                        instance-data-value := DataText {
+                                            text: root.instance-path;
+                                            horizontal-stretch: 1;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                    }
                                 }
                             }
                         }
