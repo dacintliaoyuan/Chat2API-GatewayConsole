@@ -11,6 +11,15 @@
 - 网络超时、5xx 或连接中断不等于认证过期。保存的 token 也可能在声明到期前被上游撤销；只有明确的认证拒绝才触发重新认证。
 - 会话被撤销、SSO 失效、密码过期、验证码或 Duo 要求仍可能需要本人操作。保存成功不能保证上游永久接受会话。
 
+## 运行时证据
+
+本机 8000 的登录现场按驱动区分：
+
+- `chat2api/.edge-profile/DevToolsActivePort`：只有原生 CDP 驱动启动浏览器时写；文件时间就是原生轮次开始时间。Playwright 驱动走 pipe，不写这个文件。
+- `chat2api/.edge-profile/login-browser.lock`：每轮登录的 profile 占用，内容含 `pid`、`process_started_epoch`、`acquired_epoch`；两个驱动共用。
+- `data/login-history.jsonl`：每轮记录，含 `driver`（`native` / `playwright`）与拒绝时命中的 `detail`（页面 selector）。
+- `data/login-playwright-python`：Playwright opt-in；文件存在时本机 8000 走 Playwright，移走并重启后走原生。
+
 ## 回归方法
 
 真实 Edge 回归使用独立临时 profile、loopback HTTP 夹具和虚构持久 Cookie，不访问 UM、不使用真实登录数据：

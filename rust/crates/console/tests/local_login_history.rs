@@ -58,12 +58,14 @@ fn write_history(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
         "round": 2,
         "state": "completed",
         "trigger_source": "explicit",
+        "driver": "playwright",
         "visible": true,
         "started_epoch": 2000.0,
         "ended_epoch": 2060.0,
         "submit_count": 1,
         "outcome": "restored",
         "reason": null,
+        "detail": "#errorText",
         "upstream_status": 200,
         "evidence_verdict": "valid",
     }));
@@ -117,6 +119,8 @@ fn the_read_face_returns_retained_rounds_newest_first_with_bounded_reasons() {
     assert_eq!(rounds[0]["outcome"], Value::Null);
     assert_eq!(rounds[1]["runId"], json!("run-a"));
     assert_eq!(rounds[1]["outcome"], json!("restored"));
+    assert_eq!(rounds[1]["driver"], json!("playwright"));
+    assert_eq!(rounds[1]["detail"], json!("#errorText"));
     assert_eq!(rounds[1]["visible"], json!(true));
     assert_eq!(rounds[1]["upstreamStatus"], json!(200));
     assert_eq!(rounds[2]["runId"], json!("run-a"));

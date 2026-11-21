@@ -98,6 +98,34 @@ fn a_completed_round_records_trigger_visibility_submit_and_result() {
 }
 
 #[test]
+fn a_rejected_round_records_the_driver_and_the_matched_page_evidence() {
+    let temp = TempDir::new("um-rust-login-history-driver-");
+    let path = history_file(&temp);
+    let history =
+        LoginHistory::open_with_driver(Some(path.clone()), Some("playwright".to_string()));
+    history.begin_at(1, Some(ReauthTrigger::BusinessRequest), false, 1_000.0);
+    history.note_detail(1, Some("#errorText"));
+    history.finish_at(
+        1,
+        "rejected",
+        Some("upstream_credential_rejected"),
+        Some(401),
+        Some("rejected"),
+        1_060.0,
+    );
+
+    let records = read_records(&path).expect("read history");
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.driver.as_deref(), Some("playwright"));
+    assert_eq!(record.detail.as_deref(), Some("#errorText"));
+    assert_eq!(
+        record.reason.as_deref(),
+        Some("upstream_credential_rejected")
+    );
+}
+
+#[test]
 fn an_abandoned_round_is_incomplete_and_keeps_its_progress() {
     let temp = TempDir::new("um-rust-login-history-incomplete-");
     let path = history_file(&temp);

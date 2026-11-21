@@ -33,3 +33,25 @@ jobs:
       - name: Cloud console gate
         working-directory: web
         run: npm run check:cloud-console
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust workspace tests
+        run: bash scripts/check-rust.sh
+
+  edge-regression:
+    # The real-Edge tests are #[ignore]d: they drive an installed Edge on an
+    # isolated profile and a loopback fixture, never real UM data.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Real Edge login regression
+        run: bash scripts/check-rust.sh --edge

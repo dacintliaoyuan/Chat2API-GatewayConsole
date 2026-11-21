@@ -107,6 +107,14 @@ pub trait LoginPage: Send {
     fn goto(&self, url: &str) -> Result<(), String>;
     fn any_visible(&self, selectors: &[&str]) -> bool;
     fn any_visible_text(&self, selectors: &[&str]) -> bool;
+    /// The first selector that currently shows text, if any; the login-round
+    /// history records it as the rejection evidence.
+    fn first_visible(&self, selectors: &[&'static str]) -> Option<&'static str> {
+        selectors
+            .iter()
+            .copied()
+            .find(|selector| self.any_visible_text(&[*selector]))
+    }
     fn credential_field(&self, selectors: &[&str]) -> CredentialField;
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
@@ -142,6 +150,10 @@ pub trait LoginBrowserFactory: Send + Sync {
     fn resolve_browser(&self) -> Result<PathBuf, BrowserUnavailable>;
     fn launch(&self, request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>, LoginFailure>;
     fn cleanup_profile(&self, profile_dir: &Path);
+    /// Which driver this factory runs; the login-round history records it.
+    fn driver_name(&self) -> &'static str {
+        "native"
+    }
 }
 
 /// The production factory: Edge on Windows, the first Chromium-family binary
@@ -649,9 +661,7 @@ impl LoginPage for RealPage {
         // marker is the real autofill-protected case.
         for attempt in 0..5 {
             match self.evaluate(&expression) {
-                Ok(Value::String(state)) if state == "filled" => {
-                    return CredentialField::Filled
-                }
+                Ok(Value::String(state)) if state == "filled" => return CredentialField::Filled,
                 Ok(Value::String(state)) if state == "protected" => {
                     if attempt == 4 {
                         return CredentialField::ProtectedAutofill;

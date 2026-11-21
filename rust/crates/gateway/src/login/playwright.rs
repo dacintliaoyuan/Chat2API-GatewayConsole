@@ -24,6 +24,10 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) struct PlaywrightFactory(pub PathBuf);
 
 impl LoginBrowserFactory for PlaywrightFactory {
+    fn driver_name(&self) -> &'static str {
+        "playwright"
+    }
+
     fn resolve_browser(&self) -> Result<PathBuf, BrowserUnavailable> {
         find_browser()
     }
@@ -218,7 +222,10 @@ impl LoginPage for PlaywrightPage {
     }
 
     fn catalog_access(&self, base_url: &str, candidate: &str, budget: Duration) -> bool {
-        self.call("catalog_access", json!([base_url, candidate, budget.as_millis()])) == Ok(Value::Bool(true))
+        self.call(
+            "catalog_access",
+            json!([base_url, candidate, budget.as_millis()]),
+        ) == Ok(Value::Bool(true))
     }
 
     fn reload(&self) -> Result<(), String> {

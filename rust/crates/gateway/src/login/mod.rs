@@ -44,8 +44,8 @@ pub use self::token::{TokenDocument, TokenStore as TokenStoreSeam};
 pub(crate) fn production_browser_factory(config: &GatewayConfig) -> Arc<dyn LoginBrowserFactory> {
     #[cfg(windows)]
     if !config.candidate && config.role == crate::config::Role::Local {
-        if let Some(python) = std::env::var_os("CHAT2API_LOGIN_PLAYWRIGHT_PYTHON")
-            .filter(|python| !python.is_empty())
+        if let Some(python) =
+            std::env::var_os("CHAT2API_LOGIN_PLAYWRIGHT_PYTHON").filter(|python| !python.is_empty())
         {
             return Arc::new(playwright::PlaywrightFactory(python.into()));
         }
@@ -59,8 +59,7 @@ const PROTECTED_AUTOFILL_REASON: &str = "umpass_autofill_protected";
 const PROTECTED_AUTOFILL_HINT: &str = "Edge 已预填，请在 UMPASS 页面点击登录";
 const MISSING_FIELDS_HINT: &str = "UMPASS 表单未就绪，请在 Edge 窗口中完成登录";
 const AMBIGUOUS_SUBMIT_HINT: &str = "UMPASS 页面有多个提交按钮，请在 Edge 窗口中手动登录";
-const UNRECOGNIZED_SUBMIT_HINT: &str =
-    "UMPASS 页面未识别到唯一提交按钮，请在 Edge 窗口中手动登录";
+const UNRECOGNIZED_SUBMIT_HINT: &str = "UMPASS 页面未识别到唯一提交按钮，请在 Edge 窗口中手动登录";
 const SUBMITTED_HINT: &str = "已自动提交 UMPASS 登录，正在等待结果";
 const UNTRUSTED_ORIGIN_HINT: &str = "UMPASS 页面来源不可信，已停止自动提交";
 const REJECTED_HINT: &str = "上游拒绝了当前账号密码，请人工处理";
@@ -564,7 +563,10 @@ impl LoginService {
             ..Recovery::default()
         };
         let auth_state_file = AuthStateFile::open(config.auth_state_file.clone());
-        let history = history::LoginHistory::open(config.login_history_file.clone());
+        let history = history::LoginHistory::open_with_driver(
+            config.login_history_file.clone(),
+            Some(factory.driver_name().to_string()),
+        );
         let service = Self {
             inner: Arc::new(LoginInner {
                 config,
@@ -772,7 +774,10 @@ impl LoginService {
     pub fn note_probe(&self, verdict: &str, reason: Option<&str>, upstream_status: Option<u16>) {
         let mut state = self.inner.state.lock().expect("login state poisoned");
         if self.inner.config.role == Role::Local
-            && state.login.as_ref().and_then(|login| login.phase.as_deref())
+            && state
+                .login
+                .as_ref()
+                .and_then(|login| login.phase.as_deref())
                 == Some("verifying_login")
         {
             // 巡检查的是已发布的凭据，进行中的轮次需要保留候选凭据的核验证据。
@@ -1833,7 +1838,13 @@ fn drive_login(
             }
             if let Some((status, early)) = inner.credentials.bearer_rejection(Some(token)) {
                 if rejected_tokens.insert(token.clone()) {
-                    note_login_evidence(inner, round, "rejected", Some("upstream_rejected"), Some(status));
+                    note_login_evidence(
+                        inner,
+                        round,
+                        "rejected",
+                        Some("upstream_rejected"),
+                        Some(status),
+                    );
                     if early {
                         inner.history.note_early_rejection(round, status);
                     }
@@ -1911,7 +1922,14 @@ fn drive_login(
                             verdict.reason,
                             verdict.upstream_status,
                         );
-                        note_progress(inner, round, "verifying_login", Some(&page.url()), None, None);
+                        note_progress(
+                            inner,
+                            round,
+                            "verifying_login",
+                            Some(&page.url()),
+                            None,
+                            None,
+                        );
                         if first_check_for_candidate && inner.config.role == Role::Local {
                             let budget = deadline
                                 .saturating_duration_since(Instant::now())
@@ -1926,8 +1944,8 @@ fn drive_login(
                         if recheck_headless {
                             // 暂时断连复用现有恢复退避，期间继续观察取消和页面变化。
                             let delay = REAUTH_RECOVERY_BACKOFF[verification_retries];
-                            verification_retries = (verification_retries + 1)
-                                .min(REAUTH_RECOVERY_BACKOFF.len() - 1);
+                            verification_retries =
+                                (verification_retries + 1).min(REAUTH_RECOVERY_BACKOFF.len() - 1);
                             next_verification = Instant::now() + delay;
                         }
                     }
@@ -2087,7 +2105,8 @@ fn drive_login(
             // A rejection is only acted on once a UMPASS form was recognized in
             // this round (automatically submitted or completed by the operator).
             // A page that only prompts for credentials must stay a form wait.
-            let rejection_visible = umpass_credential_rejected(page);
+            let rejection = umpass_credential_rejected(page);
+            let rejection_visible = rejection.is_some();
             let manual_rejection = auto_submissions == 0
                 && saw_umpass_form
                 && rejection_visible
@@ -2105,6 +2124,9 @@ fn drive_login(
                         submit_count: auto_submissions,
                     },
                 );
+                if let Some(selector) = rejection {
+                    inner.history.note_detail(round, Some(selector));
+                }
                 return LoginOutcome::Rejected {
                     reason: "upstream_credential_rejected".to_string(),
                 };
@@ -2154,9 +2176,7 @@ fn drive_login(
                         };
                     }
                     let protected_autofill = fields.contains(&CredentialField::ProtectedAutofill);
-                    if inner.config.um_account.is_empty()
-                        || inner.config.um_password.is_empty()
-                    {
+                    if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
                         let (reason, form, detail) = if protected_autofill {
                             (
                                 PROTECTED_AUTOFILL_REASON,
@@ -2235,7 +2255,7 @@ fn drive_login(
                 if let Some(outcome) = check_login_window(page, visible) {
                     return outcome;
                 }
-                if umpass_credential_rejected(page) {
+                if let Some(selector) = umpass_credential_rejected(page) {
                     note_form(
                         inner,
                         round,
@@ -2248,6 +2268,7 @@ fn drive_login(
                             submit_count: auto_submissions,
                         },
                     );
+                    inner.history.note_detail(round, Some(selector));
                     return LoginOutcome::Rejected {
                         reason: "upstream_credential_rejected".to_string(),
                     };
@@ -2259,8 +2280,7 @@ fn drive_login(
                     (FORM_SUBMIT_UNRECOGNIZED, UNRECOGNIZED_SUBMIT_HINT)
                 };
                 let settled = stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
-                if settled.elapsed() >= inner.config.stage_settle_timeout
-                    && manual_reason.is_none()
+                if settled.elapsed() >= inner.config.stage_settle_timeout && manual_reason.is_none()
                 {
                     manual_reason = Some("umpass_submit_unrecognized".to_string());
                     note_form(
@@ -2489,12 +2509,7 @@ fn note_form(
     inner.condvar.notify_all();
 }
 
-fn note_submission(
-    inner: &Arc<LoginInner>,
-    round: u64,
-    origin: Option<&str>,
-    submit_count: usize,
-) {
+fn note_submission(inner: &Arc<LoginInner>, round: u64, origin: Option<&str>, submit_count: usize) {
     note_form(
         inner,
         round,
@@ -2509,15 +2524,15 @@ fn note_submission(
     );
 }
 
-fn umpass_credential_rejected(page: &dyn LoginPage) -> bool {
+fn umpass_credential_rejected(page: &dyn LoginPage) -> Option<&'static str> {
     let host = url_host(&page.url());
     if !UMPASS_SSO_HOSTS
         .iter()
         .any(|allowed| host_matches(&host, allowed))
     {
-        return false;
+        return None;
     }
-    page.any_visible_text(&UMPASS_ERROR_SELECTORS)
+    page.first_visible(&UMPASS_ERROR_SELECTORS)
 }
 
 enum ClickOutcome {
@@ -2582,9 +2597,9 @@ fn url_host(url: &str) -> String {
 
 fn trusted_umpass_credential_origin(url: &str) -> bool {
     let origin = url_origin(url);
-    UMPASS_SSO_HOSTS.iter().any(|host| {
-        origin == format!("https://{host}") || origin == format!("https://{host}:443")
-    })
+    UMPASS_SSO_HOSTS
+        .iter()
+        .any(|host| origin == format!("https://{host}") || origin == format!("https://{host}:443"))
 }
 
 fn host_matches(host: &str, allowed: &str) -> bool {

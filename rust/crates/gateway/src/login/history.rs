@@ -70,12 +70,16 @@ pub struct LoginRoundRecord {
     /// `running`, `completed` or `incomplete`.
     pub state: String,
     pub trigger_source: Option<String>,
+    /// Which driver executed the round: `native` or `playwright`.
+    pub driver: Option<String>,
     pub visible: bool,
     pub started_epoch: f64,
     pub ended_epoch: Option<f64>,
     pub submit_count: usize,
     pub outcome: Option<String>,
     pub reason: Option<String>,
+    /// The rejection evidence this round observed: the matched page selector.
+    pub detail: Option<String>,
     /// The last upstream HTTP status this round actually obtained.
     pub upstream_status: Option<u16>,
     /// The last credential-probe verdict this round observed.
@@ -91,12 +95,14 @@ impl LoginRoundRecord {
             "round": self.round,
             "state": self.state,
             "trigger_source": self.trigger_source,
+            "driver": self.driver,
             "visible": self.visible,
             "started_epoch": self.started_epoch,
             "ended_epoch": self.ended_epoch,
             "submit_count": self.submit_count,
             "outcome": self.outcome,
             "reason": self.reason,
+            "detail": self.detail,
             "upstream_status": self.upstream_status,
             "evidence_verdict": self.evidence_verdict,
             "rejected_before_expiry_status": self.rejected_before_expiry_status,
@@ -117,6 +123,10 @@ impl LoginRoundRecord {
                 .get("trigger_source")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            driver: object
+                .get("driver")
+                .and_then(Value::as_str)
+                .map(sanitize_reason),
             visible: object
                 .get("visible")
                 .and_then(Value::as_bool)
@@ -133,6 +143,10 @@ impl LoginRoundRecord {
                 .map(str::to_string),
             reason: object
                 .get("reason")
+                .and_then(Value::as_str)
+                .map(sanitize_reason),
+            detail: object
+                .get("detail")
                 .and_then(Value::as_str)
                 .map(sanitize_reason),
             upstream_status: object
@@ -155,6 +169,8 @@ impl LoginRoundRecord {
 /// One writer for the local 8000 gateway.
 pub struct LoginHistory {
     path: Option<PathBuf>,
+    /// The driver label every round of this process records.
+    driver: Option<String>,
     run_id: String,
     limits: HistoryLimits,
     active: Mutex<Option<LoginRoundRecord>>,
@@ -181,20 +197,36 @@ impl Default for HistoryLimits {
 
 impl LoginHistory {
     pub fn open(path: Option<PathBuf>) -> Self {
-        Self::open_at(path, epoch_now())
+        Self::open_with_driver(path, None)
+    }
+
+    /// Open with the driver label every round records; production passes the
+    /// factory's name so a rejected round names the driver that ran it.
+    pub fn open_with_driver(path: Option<PathBuf>, driver: Option<String>) -> Self {
+        Self::open_with_driver_at(path, driver, epoch_now())
     }
 
     /// Open and mark every round left `running` by an earlier process as
     /// `incomplete`, preserving its recorded progress.
     pub fn open_at(path: Option<PathBuf>, now: f64) -> Self {
-        Self::open_with_limits(path, HistoryLimits::default(), now)
+        Self::open_with_driver_at(path, None, now)
     }
 
     /// The explicit-limits constructor: production uses [`HistoryLimits::default`];
     /// tests use smaller bounds without changing the retention behavior.
     pub fn open_with_limits(path: Option<PathBuf>, limits: HistoryLimits, now: f64) -> Self {
+        Self::open_with_driver_limits(path, None, limits, now)
+    }
+
+    fn open_with_driver_limits(
+        path: Option<PathBuf>,
+        driver: Option<String>,
+        limits: HistoryLimits,
+        now: f64,
+    ) -> Self {
         let history = Self {
             path,
+            driver,
             run_id: new_run_id(),
             limits,
             active: Mutex::new(None),
@@ -203,6 +235,10 @@ impl LoginHistory {
         history.mark_previous_incomplete_at(now);
         history.prune_at(now);
         history
+    }
+
+    fn open_with_driver_at(path: Option<PathBuf>, driver: Option<String>, now: f64) -> Self {
+        Self::open_with_driver_limits(path, driver, HistoryLimits::default(), now)
     }
 
     pub fn run_id(&self) -> &str {
@@ -229,12 +265,14 @@ impl LoginHistory {
             round,
             state: "running".to_string(),
             trigger_source: trigger.map(|trigger| trigger.as_str().to_string()),
+            driver: self.driver.clone(),
             visible,
             started_epoch,
             ended_epoch: None,
             submit_count: 0,
             outcome: None,
             reason: None,
+            detail: None,
             upstream_status: None,
             evidence_verdict: None,
             rejected_before_expiry_status: None,
@@ -266,6 +304,21 @@ impl LoginHistory {
                 return false;
             }
             record.visible = true;
+            true
+        }) else {
+            return;
+        };
+        self.append(&record, epoch_now());
+    }
+
+    /// Record the rejection evidence without adding a round.
+    pub fn note_detail(&self, round: u64, detail: Option<&str>) {
+        let Some(record) = self.update_active(round, |record| {
+            let detail = detail.map(sanitize_reason);
+            if record.detail == detail {
+                return false;
+            }
+            record.detail = detail;
             true
         }) else {
             return;
