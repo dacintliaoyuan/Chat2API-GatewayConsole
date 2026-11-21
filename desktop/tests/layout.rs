@@ -207,6 +207,31 @@ fn theme_mode_switches_dark_and_follows_the_system_theme() {
 }
 
 #[test]
+fn system_theme_changes_notify_the_shell() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    window.on_theme_dark_changed({
+        let seen = Rc::clone(&seen);
+        move |dark| seen.borrow_mut().push(dark)
+    });
+
+    window.set_theme_mode(0);
+    // The shell reads the derived value once after show; that read is what keeps
+    // the binding live for later system changes.
+    assert!(!window.get_theme_dark());
+    window.set_system_dark(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.set_system_dark(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        *seen.borrow(),
+        vec![true, false],
+        "跟随系统时，系统主题变化必须通知外壳（DWM 标题栏依赖该回调）"
+    );
+}
+
+#[test]
 fn appearance_segments_report_the_selected_theme_mode() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
