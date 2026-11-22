@@ -417,7 +417,9 @@ pub fn records_from(payload: &Value) -> RecordsView {
         Some(_) => return RecordsView::failure("数据格式无效：rows 不是数组"),
         None => {
             let coverage = object.get("coverage");
-            if coverage.and_then(|coverage| coverage.get("status")).and_then(Value::as_str)
+            if coverage
+                .and_then(|coverage| coverage.get("status"))
+                .and_then(Value::as_str)
                 == Some("unavailable")
             {
                 let reason = coverage
@@ -469,7 +471,8 @@ fn record_row(row: &Value) -> Option<RecordRow> {
     let object = row.as_object()?;
     let at = object.get("at").and_then(Value::as_i64);
     let finished = object.get("finishedAt").and_then(Value::as_i64);
-    let (state, state_tone) = state_label(object.get("state").and_then(Value::as_str).unwrap_or(""));
+    let (state, state_tone) =
+        state_label(object.get("state").and_then(Value::as_str).unwrap_or(""));
     let took = match (at, finished) {
         (Some(at), Some(finished)) if finished >= at => elapsed(finished - at),
         _ => "—".to_string(),
