@@ -370,7 +370,7 @@ export component RequestAnalytics inherits Panel {
                 spacing: 8px;
                 height: 34px;
                 Hint {
-                    text: root.has-selection ? root.selection-label : "悬停查看数值";
+                    text: root.has-selection ? root.selection-label : "悬停查看数值 · ← → 切换时段";
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                     overflow: elide;
@@ -388,12 +388,6 @@ export component RequestAnalytics inherits Panel {
                     height: Theme.icon-button;
                     clicked => { root.pinned = -1; }
                 }
-            }
-            Hint {
-                text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
-                height: 18px;
-                vertical-alignment: center;
-                wrap: no-wrap;
             }
         }
 
