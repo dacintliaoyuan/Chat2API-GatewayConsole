@@ -12,6 +12,7 @@
 //! `/admin/auth/status`.
 
 mod tray;
+mod window_icon;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -2017,6 +2018,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.show()?;
+    // The window class icon is not the executable icon; apply the local console
+    // cover once the event loop has created the native window.
+    slint::Timer::single_shot(Duration::from_millis(250), window_icon::apply);
     // The caption belongs to DWM, not Slint; follow the one derived value after
     // the native window exists and keep following it when the system theme flips.
     window.on_theme_dark_changed(|dark| {
