@@ -1358,8 +1358,19 @@ pub fn maintenance() -> Value {
 /// The admin model catalog. The upstream `/api/models` read and its cache stay the
 /// only source; virtual effort variants are folded back into `efforts` so the App
 /// shows one row per base model.
-pub fn model_catalog(proxy: &ProxyState) -> Result<Value, GatewayError> {
-    let (payload, _marker) = proxy.models(false)?;
+///
+/// `fresh=1` is the settings page's strict refresh: the read goes to the upstream
+/// and fails with `models_unavailable` instead of serving the previous cache. The
+/// plain read keeps the cache fallback, so the App can tell a strict refresh
+/// failure from an ordinary read.
+pub fn model_catalog(proxy: &ProxyState, raw_target: &str) -> Result<Value, GatewayError> {
+    let query = query_pairs(raw_target)?;
+    let fresh = match query_first(&query, "fresh") {
+        None | Some("0") | Some("false") => false,
+        Some("1") | Some("true") => true,
+        Some(_) => return Err(GatewayError::invalid_request("fresh must be 1 or 0")),
+    };
+    let (payload, _marker) = proxy.models(fresh)?;
     let mut models = Vec::new();
     if let Some(items) = payload.get("data").and_then(Value::as_array) {
         for item in items {
@@ -1394,6 +1405,7 @@ pub fn model_catalog(proxy: &ProxyState) -> Result<Value, GatewayError> {
     Ok(json!({
         "models": models,
         "source": "um",
+        "fresh": fresh,
         "checked_epoch": epoch_now(),
         "note": "目录来自上游 /api/models 与网关缓存；缺失上下文或思考档位保持 null，不猜值",
     }))

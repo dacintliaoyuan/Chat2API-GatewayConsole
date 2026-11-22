@@ -14,6 +14,7 @@ pub mod gateway;
 pub mod instance;
 pub mod logs;
 pub mod logstream;
+pub mod models;
 pub mod overview;
 pub mod shell;
 pub mod tail;
