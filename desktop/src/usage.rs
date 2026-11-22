@@ -79,6 +79,38 @@ pub struct RequestRow {
     pub duration: String,
     pub first_token: String,
     pub detail: String,
+    /// Numeric HTTP status such as `200`; `None` when the response ended
+    /// before a status or the ledger did not record one.
+    pub http_status: Option<String>,
+    /// The error code the gateway wrote (for example `upstream_unavailable`).
+    /// Kept separate from the human-readable message.
+    pub error_code: Option<String>,
+    /// The human-readable error message. Never filled from the code.
+    pub error_message: Option<String>,
+    pub cache_read: ReadingView,
+    pub reasoning: ReadingView,
+    /// Why the first-token reading is unavailable; `None` when it is present.
+    pub first_token_note: Option<String>,
+    pub speed: ReadingView,
+    pub speed_basis: String,
+    /// `None` when the ledger has no request ID and physical retries cannot be
+    /// attached; `Some(empty)` when it recorded the request but no retries.
+    pub retries: Option<Vec<RetryStep>>,
+}
+
+/// One physical retry step attached to a logical request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetryStep {
+    pub at: String,
+    pub note: String,
+}
+
+/// A ledger reading as the detail panel shows it: the formatted amount, or the
+/// ledger's reason why no amount exists. Missing values stay distinct from zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReadingView {
+    pub value: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -393,6 +425,97 @@ fn first_token_display(reading: &Value) -> String {
     }
 }
 
+fn reading_note(reading: &Value) -> Option<String> {
+    reading["note"]
+        .as_str()
+        .map(sanitize_text)
+        .filter(|note| !note.is_empty())
+}
+
+fn reading_view(reading: &Value) -> ReadingView {
+    ReadingView {
+        value: amount(reading).map(|value| format!("{}{value}", reading_prefix(reading))),
+        note: reading_note(reading),
+    }
+}
+
+fn rate_view(reading: &Value) -> ReadingView {
+    ReadingView {
+        value: float_amount(reading).map(|value| format!("{}{value:.1}", reading_prefix(reading))),
+        note: reading_note(reading),
+    }
+}
+
+fn speed_basis_label(basis: &str) -> String {
+    match basis {
+        "whole_request" => "整次平均，含等待".into(),
+        "generation" => "生成阶段实测".into(),
+        _ => "口径未知".into(),
+    }
+}
+
+/// A detail line for a reading. Missing values say 不可用 and keep the ledger's
+/// reason; a present value carries its unit and the "already counted in" suffix.
+fn reading_line(label: &str, reading: &ReadingView, unit: &str, suffix: &str) -> String {
+    match &reading.value {
+        Some(value) => format!("{label}  {value}{unit}{suffix}"),
+        None => match &reading.note {
+            Some(note) => format!("{label}  不可用（{note}）"),
+            None => format!("{label}  不可用"),
+        },
+    }
+}
+
+fn http_status_line(row: &RequestRow) -> String {
+    match &row.http_status {
+        Some(status) => format!("HTTP 状态  {status}"),
+        None => "HTTP 状态  不可用（连接在响应前结束或没有记录）".to_string(),
+    }
+}
+
+fn error_lines(row: &RequestRow) -> String {
+    match (&row.error_code, &row.error_message) {
+        (Some(code), Some(message)) => format!("错误代码  {code}\n错误信息  {message}"),
+        (Some(code), None) => {
+            format!("错误代码  {code}\n错误信息  不可用（账本没有记录错误信息）")
+        }
+        (None, Some(message)) => {
+            format!("错误代码  不可用（账本没有记录错误代码）\n错误信息  {message}")
+        }
+        (None, None) if row.result == "成功" => "错误  无".to_string(),
+        (None, None) => {
+            "错误代码  不可用（账本没有记录错误代码）\n错误信息  不可用（账本没有记录错误信息）"
+                .to_string()
+        }
+    }
+}
+
+fn first_token_line(row: &RequestRow) -> String {
+    if row.first_token != "—" {
+        return format!("首字耗时  {}", row.first_token);
+    }
+    match &row.first_token_note {
+        Some(note) => format!("首字耗时  不可用（{note}）"),
+        None => "首字耗时  不可用".to_string(),
+    }
+}
+
+fn retry_lines(row: &RequestRow) -> String {
+    match &row.retries {
+        None => "重试步骤  不可用（缺少 request_id，无法关联物理重试）".to_string(),
+        Some(steps) if steps.is_empty() => "重试步骤  没有记录到重试".to_string(),
+        Some(steps) => {
+            let mut lines = vec!["重试步骤".to_string()];
+            lines.extend(
+                steps
+                    .iter()
+                    .map(|step| format!("- {}  {}", step.at, step.note)),
+            );
+            lines.join("\n")
+        }
+    }
+}
+
 fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, String) {
     match value["status"].as_str() {
         Some("ok") if empty => (Coverage::Empty, empty_message.to_string()),
@@ -662,6 +785,12 @@ fn request_row(row: &Value) -> RequestRow {
         Some(count) => format!("{note}\n已关联的物理重试 {count} 次"),
         None => note,
     };
+    let first_token = first_token_display(&row["firstTokenMs"]);
+    let first_token_note = if first_token == "—" {
+        reading_note(&row["firstTokenMs"])
+    } else {
+        None
+    };
     RequestRow {
         key: text(&row["key"], ""),
         request_id: row["requestId"].as_str().map(str::to_string),
@@ -671,8 +800,31 @@ fn request_row(row: &Value) -> RequestRow {
         input: display(&row["input"]),
         output: display(&row["output"]),
         duration,
-        first_token: first_token_display(&row["firstTokenMs"]),
+        first_token,
         detail,
+        http_status: row["httpStatus"].as_i64().map(|status| status.to_string()),
+        error_code: row["error"]["code"]
+            .as_str()
+            .map(sanitize_text)
+            .filter(|code| !code.is_empty()),
+        error_message: row["error"]["message"]
+            .as_str()
+            .map(sanitize_text)
+            .filter(|message| !message.is_empty()),
+        cache_read: reading_view(&row["cacheRead"]),
+        reasoning: reading_view(&row["reasoning"]),
+        first_token_note,
+        speed: rate_view(&row["speed"]),
+        speed_basis: speed_basis_label(row["speedBasis"].as_str().unwrap_or("")),
+        retries: row["retries"].as_array().map(|steps| {
+            steps
+                .iter()
+                .map(|step| RetryStep {
+                    at: format_at(step["at"].as_i64()),
+                    note: text(&step["note"], ""),
+                })
+                .collect()
+        }),
     }
 }
 
@@ -726,16 +878,23 @@ pub fn read_request_logs(
 /// sanitized lines already filtered by [`read_request_logs`].
 pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
     let mut detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n首字  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
+        "{}  {}\n模型  {}\n请求 ID  {}\n{}\n{}\n{}\n{}\n耗时  {}\n{}\n{}\n{}\n输入  {} Token  ·  输出  {} Token\n\n结果说明\n{}\n\n{}",
         row.at,
         row.result,
         row.model,
         row.request_id.as_deref().unwrap_or("—"),
+        http_status_line(row),
+        error_lines(row),
+        reading_line("缓存读取", &row.cache_read, " Token", "（已含在输入中）"),
+        reading_line("思考 Token", &row.reasoning, "", "（已计入输出）"),
         row.duration,
-        row.first_token,
+        first_token_line(row),
+        reading_line("速度", &row.speed, " Token/秒", ""),
+        format!("速度口径  {}", row.speed_basis),
         row.input,
         row.output,
-        row.detail
+        row.detail,
+        retry_lines(row)
     );
     match logs {
         Some(logs) => {

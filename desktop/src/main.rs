@@ -44,6 +44,8 @@ use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
 use um_desktop::maintenance;
+use um_desktop::models;
+use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::ui::*;
@@ -56,6 +58,7 @@ static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
+static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -1088,6 +1091,239 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
     let upstream_faults_path = paths.upstream_faults.clone();
+    // The settings page's UM model catalog. Every read is strict (`fresh=1`):
+    // it runs when the gateway first becomes running, after a restart or port
+    // change, and on every manual refresh. A failed read keeps the previous rows
+    // and marks them stale; a legal empty catalog clears the rows.
+    let catalog_state: Arc<Mutex<Option<models::CatalogView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&catalog_state);
+        std::thread::spawn(move || {
+            let reader = models::HttpCatalogReader::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut was_running = false;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = MODELS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let refresh = epoch != last_epoch;
+                let started = running && (!was_running || last_port != Some(port));
+                if !refresh && !started {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                was_running = running;
+                let previous = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let view = if !running {
+                    models::catalog_failure(
+                        format!("本实例网关未就绪：{}", gateway.state.detail()),
+                        previous.as_ref(),
+                    )
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => models::refresh_catalog(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                            previous.as_ref(),
+                        ),
+                        Err(error) => models::catalog_failure(error, previous.as_ref()),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_catalog(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+    let weak_models = window.as_weak();
+    window.on_refresh_um_models(move || {
+        if let Some(window) = weak_models.upgrade() {
+            window.set_um_model_loading(true);
+            window.set_um_model_status("正在刷新 UM 模型目录…".into());
+            window.set_um_model_tone(3);
+        }
+        MODELS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_models = window.as_weak();
+    let open_catalog = Arc::clone(&catalog_state);
+    window.on_open_model(move |id| {
+        let Some(window) = weak_models.upgrade() else {
+            return;
+        };
+        let state = open_catalog
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        models::open_model(&window, state.as_ref(), id.as_str());
+    });
+
+    // Context probes (#154): the gateway owns the queue and the per-model
+    // results, so the App polls its admin face and only keeps the batch it
+    // submitted. The poll keeps the previous rows on a failed read; the status
+    // carries the reason. Submit and stop are immediate loopback actions.
+    let probe_batch: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+    let probe_client = Arc::new(models::HttpProbeClient::new());
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let catalog_state = Arc::clone(&catalog_state);
+        let batch_state = Arc::clone(&probe_batch);
+        std::thread::spawn(move || {
+            let client = models::HttpProbeClient::new();
+            let mut last_view: Option<models::ProbeView> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                if !matches!(gateway.state, GatewayState::Running { .. }) {
+                    std::thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+                let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
+                let catalog = catalog_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let batch = batch_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let read = match load_control_token(&token_path) {
+                    Ok(token) => client.read_probes(&base, &token),
+                    Err(error) => Err(error),
+                };
+                let view = match read {
+                    Ok(payload) => {
+                        match models::parse_probe_snapshot(
+                            &payload,
+                            batch.as_deref(),
+                            catalog.as_ref(),
+                        ) {
+                            Ok(view) => {
+                                last_view = Some(view.clone());
+                                view
+                            }
+                            Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                        }
+                    }
+                    Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                };
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_probe(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        });
+    }
+    let weak_probe = window.as_weak();
+    window.on_toggle_probe_model(move |id| {
+        if let Some(window) = weak_probe.upgrade() {
+            models::toggle_probe_model(&window, id.as_str());
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_catalog = Arc::clone(&catalog_state);
+    window.on_select_all_probes(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            let catalog = probe_catalog
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            models::select_all_probes(&window, catalog.as_ref());
+        }
+    });
+    let weak_probe = window.as_weak();
+    window.on_clear_probe_selection(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            models::clear_probe_selection(&window);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_run = Arc::clone(&probe_client);
+    let probe_port_run = Arc::clone(&current_port);
+    let probe_token_run = paths.control_token.clone();
+    let probe_batch_run = Arc::clone(&probe_batch);
+    window.on_run_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        if window.get_probe_loading() || window.get_probe_running() {
+            return;
+        }
+        let base = format!("http://127.0.0.1:{}", probe_port_run.load(Ordering::SeqCst));
+        let token = match load_control_token(&probe_token_run) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("上下文探测启动失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let selected: Vec<String> = window
+            .get_probe_selected()
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        window.set_probe_loading(true);
+        window.set_probe_status("正在提交上下文探测…".into());
+        window.set_probe_tone(status_tone(Tone::Neutral));
+        let result = models::run_context_probe(&window, &*probe_client_run, &base, &token);
+        window.set_probe_loading(false);
+        if result.is_ok() {
+            *probe_batch_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(selected);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_stop = Arc::clone(&probe_client);
+    let probe_port_stop = Arc::clone(&current_port);
+    let probe_token_stop = paths.control_token.clone();
+    window.on_stop_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        let base = format!(
+            "http://127.0.0.1:{}",
+            probe_port_stop.load(Ordering::SeqCst)
+        );
+        let token = match load_control_token(&probe_token_stop) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("停止失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let _ = models::stop_context_probe(&window, &*probe_client_stop, &base, &token);
+    });
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);

@@ -1087,7 +1087,7 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
-            match crate::admin::model_catalog(&state.proxy) {
+            match crate::admin::model_catalog(&state.proxy, request.raw_target()) {
                 Ok(payload) => Response::json(200, &payload),
                 Err(error) => error.response(),
             }

@@ -5,10 +5,14 @@
 
 use std::rc::Rc;
 
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 
 use crate::account::{AccountSurface, VerifySurface};
 use crate::maintenance::{MaintenanceSurface, MenuRow, RecordsView};
+use crate::models::{
+    CatalogSurface, ModelRow as ModelViewRow, ProbeHistoryRow as ProbeHistoryViewRow,
+    ProbeRow as ProbeViewRow, ProbeSurface,
+};
 use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
 use crate::um_service::ServiceSurface;
 
@@ -182,6 +186,165 @@ impl ServiceSurface for MainWindow {
             Tone::Bad => 2,
             Tone::Neutral => 3,
         });
+    }
+}
+
+impl CatalogSurface for MainWindow {
+    fn set_models(&self, rows: &[ModelViewRow]) {
+        let rows: Vec<ModelRow> = rows
+            .iter()
+            .map(|row| ModelRow {
+                id: row.id.as_str().into(),
+                name: row.name.as_str().into(),
+                context: row.context.as_str().into(),
+                efforts: row.efforts.as_str().into(),
+                last_test: row.last_test.as_str().into(),
+                detail: row.detail.as_str().into(),
+            })
+            .collect();
+        self.set_um_models(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_status(&self, status: &str) {
+        self.set_um_model_status(status.into());
+    }
+
+    fn set_tone(&self, tone: Tone) {
+        self.set_um_model_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+    }
+
+    fn set_stale(&self, stale: bool) {
+        self.set_um_model_stale(stale);
+    }
+
+    fn set_empty(&self, empty: bool) {
+        self.set_um_model_empty(empty);
+    }
+
+    fn set_loading(&self, loading: bool) {
+        self.set_um_model_loading(loading);
+    }
+
+    fn selected_model(&self) -> String {
+        self.get_selected_model().to_string()
+    }
+
+    fn set_selected_model(&self, id: &str) {
+        self.set_selected_model(id.into());
+    }
+
+    fn set_detail(&self, title: &str, body: &str) {
+        self.set_um_model_detail_title(title.into());
+        self.set_um_model_detail(body.into());
+    }
+}
+
+impl ProbeSurface for MainWindow {
+    fn probe_rows(&self) -> Vec<ProbeViewRow> {
+        let rows = self.get_probe_models();
+        (0..rows.row_count())
+            .filter_map(|index| rows.row_data(index))
+            .map(|row| ProbeViewRow {
+                model_id: row.model_id.to_string(),
+                name: row.name.to_string(),
+                state: row.state.to_string(),
+                summary: row.summary.to_string(),
+                tone: tone_from_index(row.tone),
+                selected: row.selected,
+            })
+            .collect()
+    }
+
+    fn set_probe_rows(&self, rows: &[ProbeViewRow]) {
+        let rows: Vec<ProbeRow> = rows
+            .iter()
+            .map(|row| ProbeRow {
+                model_id: row.model_id.as_str().into(),
+                name: row.name.as_str().into(),
+                state: row.state.as_str().into(),
+                summary: row.summary.as_str().into(),
+                tone: tone_index(row.tone),
+                selected: row.selected,
+            })
+            .collect();
+        self.set_probe_models(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn probe_selection(&self) -> Vec<String> {
+        self.get_probe_selected()
+            .iter()
+            .map(|id| id.to_string())
+            .collect()
+    }
+
+    fn set_probe_selection(&self, ids: &[String]) {
+        let values: Vec<slint::SharedString> = ids.iter().map(|id| id.as_str().into()).collect();
+        self.set_probe_selected(ModelRc::from(Rc::new(VecModel::from(values))));
+    }
+
+    fn set_probe_status(&self, status: &str) {
+        self.set_probe_status(status.into());
+    }
+
+    fn set_probe_tone(&self, tone: Tone) {
+        self.set_probe_tone(tone_index(tone));
+    }
+
+    fn set_probe_progress(&self, progress: &str) {
+        self.set_probe_progress(progress.into());
+    }
+
+    fn set_probe_budget(&self, budget: &str) {
+        self.set_probe_budget(budget.into());
+    }
+
+    fn set_probe_running(&self, running: bool) {
+        self.set_probe_running(running);
+    }
+
+    fn set_probe_stop_requested(&self, requested: bool) {
+        self.set_probe_stop_requested(requested);
+    }
+
+    fn set_probe_history(&self, rows: &[ProbeHistoryViewRow]) {
+        let rows: Vec<ProbeHistoryRow> = rows
+            .iter()
+            .map(|row| ProbeHistoryRow {
+                time: row.time.as_str().into(),
+                model: row.model.as_str().into(),
+                result: row.result.as_str().into(),
+                summary: row.summary.as_str().into(),
+                tone: tone_index(row.tone),
+            })
+            .collect();
+        self.set_probe_history(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_probe_loading(&self, loading: bool) {
+        self.set_probe_loading(loading);
+    }
+}
+
+fn tone_index(tone: Tone) -> i32 {
+    match tone {
+        Tone::Good => 0,
+        Tone::Warn => 1,
+        Tone::Bad => 2,
+        Tone::Neutral => 3,
+    }
+}
+
+fn tone_from_index(index: i32) -> Tone {
+    match index {
+        0 => Tone::Good,
+        1 => Tone::Warn,
+        2 => Tone::Bad,
+        _ => Tone::Neutral,
     }
 }
 
