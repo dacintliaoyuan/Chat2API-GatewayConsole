@@ -325,9 +325,10 @@ component MaintenanceItem inherits VerticalLayout {
                 font-weight: 600;
                 font-size: 13px;
             }
-            Hint {
-                text: root.item.enabled ? root.item.impact : root.item.reason;
-                color: root.item.enabled ? Theme.muted : Theme.warn-text;
+            Hint { text: root.item.impact; }
+            if !root.item.enabled : Hint {
+                text: root.item.reason;
+                color: Theme.warn-text;
             }
         }
         activate-button := ActionButton {
@@ -3342,14 +3343,14 @@ export component MainWindow inherits Window {
             maintenance-menu := Panel {
                 visible: root.maintenance-menu-open && root.page == 0;
                 x: page-host.width - self.width - 8px;
-                y: 44px;
+                y: 36px;
                 width: min(520px, page-host.width - 16px);
                 height: maintenance-menu-content.preferred-height;
                 z: 20;
                 maintenance-menu-content := VerticalLayout {
                     width: parent.width;
-                    padding: 14px;
-                    spacing: 8px;
+                    padding: 12px;
+                    spacing: 6px;
                     HorizontalLayout {
                         spacing: 8px;
                         SectionLabel {
