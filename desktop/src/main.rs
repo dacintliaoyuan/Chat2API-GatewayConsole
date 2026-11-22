@@ -1016,6 +1016,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *status
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+            // The first read may have landed while the supervisor was still
+            // starting; read the service card again now that the state is known.
+            OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
         });
     }
 
