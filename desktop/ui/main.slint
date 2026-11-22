@@ -684,6 +684,7 @@ export component MainWindow inherits Window {
     out property <[float]> request-plotted-values: request-analytics.plotted-values;
     out property <int> request-chart-series-count: request-analytics.series-count;
     out property <int> request-model-row-count: request-analytics.model-row-count;
+    out property <bool> request-analytics-empty-fits: request-analytics.empty-hint-fits;
     out property <string> request-model-first: root.request-model-speeds.length > 0
         ? root.request-model-speeds[0].model : "";
     out property <string> request-model-speed: root.request-model-speeds.length > 0

@@ -55,6 +55,9 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
+    // Guards the empty state against being pushed below the card edge.
+    out property <bool> empty-hint-fits: empty-hint.absolute-position.y + empty-hint.height
+        <= root.absolute-position.y + root.height;
 
     VerticalLayout {
         padding: 12px;
@@ -151,27 +154,39 @@ export component RequestAnalytics inherits Panel {
                     Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
                     Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
                 }
-                ListView {
-                    height: 112px;
-                    for row in root.model-speeds : HorizontalLayout {
-                        spacing: 6px;
-                        height: 20px;
-                        Text {
-                            text: row.model;
-                            color: Theme.ink;
-                            font-size: 12px;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                            wrap: no-wrap;
+                // The empty-state hint must sit inside the remaining height;
+                // a trailing sibling would overflow the fixed-height card row.
+                Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    ListView {
+                        width: parent.width;
+                        height: parent.height;
+                        for row in root.model-speeds : HorizontalLayout {
+                            spacing: 6px;
+                            height: 20px;
+                            Text {
+                                text: row.model;
+                                color: Theme.ink;
+                                font-size: 12px;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+                            DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
+                            DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
+                            DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
+                            DataText { text: row.output; width: 58px; horizontal-alignment: right; }
                         }
-                        DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
-                        DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
-                        DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
-                        DataText { text: row.output; width: 58px; horizontal-alignment: right; }
                     }
-                }
-                if root.model-speeds.length == 0 : Hint {
-                    text: "暂无模型速度数据";
+                    empty-hint := Hint {
+                        text: "暂无模型速度数据";
+                        visible: root.model-speeds.length == 0;
+                        width: parent.width;
+                        height: parent.height;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

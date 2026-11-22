@@ -451,6 +451,20 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
 }
 
 #[test]
+fn the_empty_model_speed_hint_stays_inside_the_analytics_card() {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(1060.0, 720.0));
+    window.set_page(1);
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+
+    assert_eq!(window.get_request_model_row_count(), 0);
+    assert!(window.get_request_analytics_empty_fits());
+}
+
+#[test]
 fn closing_request_detail_keeps_filters_page_and_scroll_position() {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");
