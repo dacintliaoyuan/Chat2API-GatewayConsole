@@ -4,7 +4,7 @@
 
 ## 迭代顺序
 
-1. **只改 UI 时用 preview**：`output/impeccable-ui-review` 是同一份 UI 的预览 crate。把 `desktop/ui/*.slint` 同步到它的 `ui/`，构建它自己的 target，渲染截图；不要停真实 App，也不要动 8000/8001。
+1. **只改 UI 时用 preview**：`output/impeccable-ui-review` 是同一份 UI 的预览 crate（主工作区保留，删 worktree 前先确认它不在里面）。把 `desktop/ui/*.slint` 同步到它的 `ui/`，构建它自己的 target，渲染截图；不要停真实 App，也不要动 8000/8001。夹具的合成数据必须按产品实际格式生成（千分位/亿、本页口径），否则评审会把夹具文案当成产品缺陷。
 2. **要真实 App 截图时用 smoke**：`python output/desktop-sse-smoke.py` 用隔离的 `LOCALAPPDATA` 和随机端口启动 App，结束时只停本轮启动的 App 和它的子网关。
 3. **要重建 `desktop/target/debug` 时用独立 target**：
 
@@ -14,6 +14,8 @@
    ```
 
    运行中的 `desktop/target/debug/um-desktop.exe` 会被 Windows 锁住；独立 target 不碰它，因此不需要停 App。
+
+4. **桌面测试用 `scripts/check-desktop.sh`**：`CARGO_INCREMENTAL=0 cargo test -j 2 --manifest-path desktop/Cargo.toml`。默认并行度会在这台机器上触发 `link.exe` 1102 与 rustc ICE；`scripts/check.sh --desktop` 和 `--full` 都走这个脚本。
 
 ## 安全停止
 

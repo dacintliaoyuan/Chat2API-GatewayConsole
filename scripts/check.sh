@@ -12,12 +12,18 @@ cd "$ROOT" || exit 1
 FAIL=0
 run() {
   echo "== $*"
-  "$@" || FAIL=1
+  if ! "$@"; then
+    FAIL=1
+    echo "FAILED: $*" >&2
+  fi
 }
 
 web_run() {
   echo "== web: $*"
-  (cd web && "$@") || FAIL=1
+  if ! (cd web && "$@"); then
+    FAIL=1
+    echo "FAILED: web: $*" >&2
+  fi
 }
 
 # A fresh worktree starts without web/node_modules; the gates below need the
@@ -58,8 +64,12 @@ case "${1:-}" in
       tests.test_manifest_stability \n      tests.test_manifest_rust_closure
     web_run npm run check:cloud-console
     ;;
+  --desktop)
+    run bash scripts/check-desktop.sh
+    ;;
   --full)
     run python -m unittest discover -s tests -p "test_*.py"
+    run bash scripts/check-desktop.sh
     ;;
 esac
 

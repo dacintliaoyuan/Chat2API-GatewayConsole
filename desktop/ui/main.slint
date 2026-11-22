@@ -944,7 +944,7 @@ export component MainWindow inherits Window {
     restart-confirm-timer := Timer {
         interval: 3s;
         running: false;
-        triggered => { root.confirm-restart = false; }
+        triggered => { root.confirm-restart = false; restart-confirm-timer.running = false; }
     }
     clear-confirm-timer := Timer {
         interval: 3s;

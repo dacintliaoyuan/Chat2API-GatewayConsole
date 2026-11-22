@@ -34,11 +34,6 @@ def read(name: str) -> str:
 
 def main() -> int:
     main_ui = read("main.slint")
-    if "navigate-to" not in main_ui:
-        # The pre-Magpie layout is still the only UI on this branch; the rules
-        # below describe the desktop/122 design and are checked where it exists.
-        print("desktop UI is the pre-Magpie layout; skipping UI checks", file=sys.stderr)
-        return 0
     icons = read("icons.slint")
     theme = read("theme.slint")
 
@@ -171,6 +166,34 @@ def main() -> int:
         r"icon-only:\s*true",
         "查询/刷新/分页等操作按钮必须用图标",
     )
+
+    # A one-shot Timer must stop itself: Slint repeats a Timer while `running`
+    # is true, and `start()` only sets it true.
+    for source_name in ("main.slint", "usage-chart.slint", "theme.slint"):
+        source = read(source_name)
+        for match in re.finditer(r"(\w+)\s*:=\s*Timer\s*\{", source):
+            name = match.group(1)
+            start = match.end() - 1
+            depth = 0
+            end = start
+            for index in range(start, len(source)):
+                char = source[index]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = index + 1
+                        break
+            block = source[start:end]
+            if "running: false" not in block:
+                continue
+            if f"{name}.running = false" in block or f"{name}.stop()" in block:
+                continue
+            line = source.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{source_name}:{line}: {name} 是一次性 Timer，triggered 里必须设 running = false"
+            )
 
     if problems:
         print("desktop UI rules violated:", file=sys.stderr)

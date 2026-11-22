@@ -24,6 +24,7 @@
 - 键盘焦点用背景或 `Theme.edge-strong` 表达；不用蓝色描边，不用 2px 焦点边框。
 - 字段文字垂直居中；label/input/button 同行对齐、同高；`Field` 无标签时 `spacing` 为 0。
 - 动效 120–180ms；页面切换 cross-fade；分段选中底块滑动；实例管理整卡可点并展开；图表尊重 reduced motion。
+- 一次性 `Timer` 必须在 `triggered` 里把 `running` 设回 `false`（或调用 `stop()`）：Slint 的 `Timer` 在 `running` 为真时重复触发，`start()` 只把它置真，不会自己停。
 - 视觉复核用 `output/impeccable-ui-review` 截图；golden 截图需人工批准；`impeccable detect` 只覆盖 web，不能替代 Slint 截图。
 
 ## 文档与证据
