@@ -44,6 +44,7 @@ use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
 use um_desktop::models;
+use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::ui::*;
@@ -1161,6 +1162,153 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         models::open_model(&window, state.as_ref(), id.as_str());
+    });
+
+    // Context probes (#154): the gateway owns the queue and the per-model
+    // results, so the App polls its admin face and only keeps the batch it
+    // submitted. The poll keeps the previous rows on a failed read; the status
+    // carries the reason. Submit and stop are immediate loopback actions.
+    let probe_batch: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+    let probe_client = Arc::new(models::HttpProbeClient::new());
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let catalog_state = Arc::clone(&catalog_state);
+        let batch_state = Arc::clone(&probe_batch);
+        std::thread::spawn(move || {
+            let client = models::HttpProbeClient::new();
+            let mut last_view: Option<models::ProbeView> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                if !matches!(gateway.state, GatewayState::Running { .. }) {
+                    std::thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+                let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
+                let catalog = catalog_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let batch = batch_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let read = match load_control_token(&token_path) {
+                    Ok(token) => client.read_probes(&base, &token),
+                    Err(error) => Err(error),
+                };
+                let view = match read {
+                    Ok(payload) => {
+                        match models::parse_probe_snapshot(
+                            &payload,
+                            batch.as_deref(),
+                            catalog.as_ref(),
+                        ) {
+                            Ok(view) => {
+                                last_view = Some(view.clone());
+                                view
+                            }
+                            Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                        }
+                    }
+                    Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                };
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_probe(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        });
+    }
+    let weak_probe = window.as_weak();
+    window.on_toggle_probe_model(move |id| {
+        if let Some(window) = weak_probe.upgrade() {
+            models::toggle_probe_model(&window, id.as_str());
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_catalog = Arc::clone(&catalog_state);
+    window.on_select_all_probes(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            let catalog = probe_catalog
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            models::select_all_probes(&window, catalog.as_ref());
+        }
+    });
+    let weak_probe = window.as_weak();
+    window.on_clear_probe_selection(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            models::clear_probe_selection(&window);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_run = Arc::clone(&probe_client);
+    let probe_port_run = Arc::clone(&current_port);
+    let probe_token_run = paths.control_token.clone();
+    let probe_batch_run = Arc::clone(&probe_batch);
+    window.on_run_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        if window.get_probe_loading() || window.get_probe_running() {
+            return;
+        }
+        let base = format!("http://127.0.0.1:{}", probe_port_run.load(Ordering::SeqCst));
+        let token = match load_control_token(&probe_token_run) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("上下文探测启动失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let selected: Vec<String> = window
+            .get_probe_selected()
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        window.set_probe_loading(true);
+        window.set_probe_status("正在提交上下文探测…".into());
+        window.set_probe_tone(status_tone(Tone::Neutral));
+        let result = models::run_context_probe(&window, &*probe_client_run, &base, &token);
+        window.set_probe_loading(false);
+        if result.is_ok() {
+            *probe_batch_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(selected);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_stop = Arc::clone(&probe_client);
+    let probe_port_stop = Arc::clone(&current_port);
+    let probe_token_stop = paths.control_token.clone();
+    window.on_stop_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        let base = format!(
+            "http://127.0.0.1:{}",
+            probe_port_stop.load(Ordering::SeqCst)
+        );
+        let token = match load_control_token(&probe_token_stop) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("停止失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let _ = models::stop_context_probe(&window, &*probe_client_stop, &base, &token);
     });
     {
         let weak = window.as_weak();
