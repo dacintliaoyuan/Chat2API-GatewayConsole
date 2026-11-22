@@ -1,0 +1,67 @@
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> background: dark ? #141b25 : #f4f6fa;
+    out property <color> sidebar: dark ? #192331 : #eaf0f7;
+    out property <color> surface: dark ? #1c2735 : #ffffff;
+    out property <color> edge: dark ? #364457 : #dce2ed;
+    out property <color> ink: dark ? #eef3fa : #19222e;
+    out property <color> muted: dark ? #b6c3d6 : #515d70;
+    out property <color> accent: dark ? #a9caff : #1b5ccc;
+    out property <color> selected: dark ? #29446a : #dfeaff;
+    out property <color> good: dark ? #84dfac : #176a3c;
+    out property <color> warn: dark ? #ffc685 : #8b4c0c;
+    out property <color> bad: dark ? #ffa9a0 : #b42318;
+    public pure function status(tone: int) -> color {
+        return tone == 0 ? Theme.good : tone == 1 ? Theme.warn : tone == 2 ? Theme.bad : Theme.muted;
+    }
+}
+
+export component Panel inherits Rectangle {
+    background: Theme.surface;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.edge;
+    @children
+}
+
+export component Heading inherits Text {
+    color: Theme.ink;
+    font-size: 17px;
+    font-weight: 650;
+}
+
+export component Hint inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+export component Selectable inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback activate();
+    min-height: 36px;
+    border-radius: 6px;
+    background: root.selected ? Theme.selected : pointer.has-hover ? Theme.sidebar : transparent;
+    border-color: Theme.accent;
+    border-width: keyboard.has-focus ? 1px : 0px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.activate(); }
+    @children
+    keyboard := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.activate();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { keyboard.focus(); root.activate(); }
+    }
+}

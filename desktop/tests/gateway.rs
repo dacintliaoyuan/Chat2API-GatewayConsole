@@ -94,6 +94,7 @@ fn gateway_args_pin_the_instance_cli_contract() {
         vec![
             "--mode".to_string(),
             "production".to_string(),
+            "--desktop-instance".to_string(),
             "--port".to_string(),
             "7999".to_string(),
             "--role".to_string(),
@@ -286,6 +287,7 @@ mod windows_acl {
 // Supervisor seam: a fake HTTP edge and a fake process launcher.
 // ---------------------------------------------------------------------------
 
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::net::TcpListener;
@@ -295,8 +297,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use um_desktop::gateway::{
-    quit_app, ChildProcess, GatewayHttp, GatewayState, GatewaySupervisor, HttpGateway, Ownership,
-    PortSwitch, ProcessExit, ProcessLauncher, Sleeper, StopReason, SystemLauncher, ThreadSleeper,
+    quit_app, ChildProcess, DrainAction, GatewayHttp, GatewayState, GatewaySupervisor, HttpGateway,
+    Ownership, PortSwitch, PortSwitchProgress, ProcessExit, ProcessLauncher, Sleeper, StopReason,
+    SystemLauncher, ThreadSleeper,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,6 +439,8 @@ struct FakeHttp {
     health_calls: AtomicUsize,
     shutdown_keeps_healthy: AtomicBool,
     shutdown_stops_processes: AtomicBool,
+    drain_calls: Mutex<Vec<DrainAction>>,
+    drain_counts: Mutex<VecDeque<usize>>,
     processes: Arc<Mutex<Vec<Arc<Mutex<FakeProcessState>>>>>,
 }
 
@@ -448,6 +453,8 @@ impl FakeHttp {
             health_calls: AtomicUsize::new(0),
             shutdown_keeps_healthy: AtomicBool::new(false),
             shutdown_stops_processes: AtomicBool::new(true),
+            drain_calls: Mutex::new(Vec::new()),
+            drain_counts: Mutex::new(VecDeque::new()),
             processes,
         }
     }
@@ -520,6 +527,26 @@ impl GatewayHttp for FakeHttp {
             }
         }
         Ok(())
+    }
+
+    fn port_switch_drain(
+        &self,
+        base_url: &str,
+        token: &um_desktop::gateway::ControlToken,
+        lease: &str,
+        action: DrainAction,
+    ) -> Result<usize, String> {
+        assert_eq!(lease.len(), 32);
+        self.drain_calls.lock().unwrap().push(action);
+        match action {
+            DrainAction::Wait => Ok(self.drain_counts.lock().unwrap().pop_front().unwrap_or(0)),
+            DrainAction::Commit => self.shutdown(base_url, token).map(|()| 0),
+            DrainAction::Cancel => Ok(0),
+        }
+    }
+
+    fn listener_down(&self, base_url: &str) -> bool {
+        self.health(base_url).is_err()
     }
 }
 
@@ -895,6 +922,73 @@ fn switch_port_stops_the_old_and_starts_the_new_port() {
         GatewayState::Running {
             ownership: Ownership::Managed
         }
+    );
+}
+
+#[test]
+fn switch_port_waits_for_zero_and_quit_cancels_without_saving() {
+    let dir = TempDir::new("gateway-switch-drain");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    let mut saved = Vec::new();
+    let mut stages = Vec::new();
+    let quitting = AtomicBool::new(false);
+    *world.http.drain_counts.lock().unwrap() = [2, 1, 0].into();
+    let cancelled = supervisor.switch_port_with_progress(
+        7996,
+        &mut |port| {
+            saved.push(port);
+            Ok(())
+        },
+        &mut |stage| {
+            stages.push(stage);
+            if stage == (PortSwitchProgress::Waiting { in_flight: 1 }) {
+                quitting.store(true, Ordering::SeqCst);
+            }
+        },
+        &|| quitting.load(Ordering::SeqCst),
+    );
+    assert!(matches!(cancelled, PortSwitch::Rejected { .. }));
+    assert!(saved.is_empty());
+    assert!(world.http.shutdown_calls().is_empty());
+    assert_eq!(world.launcher.spawn_count(), 1);
+    assert_eq!(
+        *world.http.drain_calls.lock().unwrap(),
+        [DrainAction::Wait, DrainAction::Wait, DrainAction::Cancel]
+    );
+    assert_eq!(
+        stages,
+        [
+            PortSwitchProgress::Waiting { in_flight: 2 },
+            PortSwitchProgress::Waiting { in_flight: 1 },
+        ]
+    );
+
+    *world.http.drain_counts.lock().unwrap() = [1, 0].into();
+    world.http.drain_calls.lock().unwrap().clear();
+    stages.clear();
+    let completed = supervisor.switch_port_with_progress(
+        7996,
+        &mut |port| {
+            assert_eq!(
+                *world.http.drain_calls.lock().unwrap(),
+                [DrainAction::Wait, DrainAction::Wait, DrainAction::Commit]
+            );
+            saved.push(port);
+            Ok(())
+        },
+        &mut |stage| stages.push(stage),
+        &|| false,
+    );
+    assert!(matches!(completed, PortSwitch::Switched { .. }));
+    assert_eq!(saved, [7996]);
+    assert_eq!(
+        stages,
+        [
+            PortSwitchProgress::Waiting { in_flight: 1 },
+            PortSwitchProgress::Switching,
+        ]
     );
 }
 
@@ -1285,6 +1379,20 @@ fn a_real_gateway_starts_stops_switches_and_attaches_on_7999() {
     assert!(http.health("http://127.0.0.1:7998").is_ok());
     drop(listener);
 
+    let custom = supervisor.switch_port(7997, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    assert_eq!(
+        custom,
+        PortSwitch::Switched {
+            from: 7998,
+            to: 7997,
+        }
+    );
+    assert!(http.health("http://127.0.0.1:7997").is_ok());
+    assert!(http.health("http://127.0.0.1:7998").is_err());
+
     let back = supervisor.switch_port(7999, &mut |port| {
         saved.push(port);
         Ok(())
@@ -1292,12 +1400,12 @@ fn a_real_gateway_starts_stops_switches_and_attaches_on_7999() {
     assert_eq!(
         back,
         PortSwitch::Switched {
-            from: 7998,
+            from: 7997,
             to: 7999
         }
     );
     assert!(http.health("http://127.0.0.1:7999").is_ok());
-    assert_eq!(saved, vec![7998, 7999]);
+    assert_eq!(saved, vec![7998, 7997, 7999]);
 
     let final_stop = supervisor.stop(StopReason::UserRequested);
     assert_eq!(final_stop.state, GatewayState::Stopped);

@@ -334,6 +334,18 @@ _Avoid_: 主控制台、统一控制台
 **本地控制台桌面版 (Local console desktop app)**:
 本地控制台在 Windows 用户会话中的应用入口，提供主窗口和系统托盘。关闭主窗口后，桌面应用继续在托盘中运行。
 
+**网关 API 地址 (Gateway API address)**:
+本机模型客户端使用的 base URL，形如 `http://127.0.0.1:<port>`。复制和配置的单位是完整地址，不是裸端口号。
+_Avoid_: 端口号、endpoint
+
+**控制台主题 (Console theme)**:
+桌面版的外观选择，取浅色、深色或跟随系统。手动选择保存在 `desktop.json`；跟随系统时随 Windows 主题实时变化。
+_Avoid_: 皮肤、配色方案
+
+**控制台自动刷新 (Console auto refresh)**:
+总览页按设置重新拉取状态与用量；间隔取 15 秒、30 秒、60 秒或关闭，默认 30 秒。手动刷新不改变该间隔。
+_Avoid_: 后端轮询、定时任务
+
 **云端控制台 (Cloud console)**:
 云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。端口是 8002（2026-11-17 已切 Rust；Python 回滚单元 `um-share-console-python.service` 监听 8096），入口为 `cloud/Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
 _Avoid_: 远程管理本地、跨机统一控制台

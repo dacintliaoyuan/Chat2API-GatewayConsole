@@ -1,8 +1,6 @@
 //! Saved desktop settings: `%LOCALAPPDATA%\Chat2API\desktop.json`.
 //!
-//! The ticket only saves the configured model API port. Binding and switching the
-//! listener belongs to #124; the port is still validated here so a bad value can
-//! never reach that later switch.
+//! Stores the instance's model API port and whether first-run login was deferred.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +13,7 @@ pub const CONFIG_VERSION: i64 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopConfig {
     pub model_api_port: u16,
+    pub intro_dismissed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +30,7 @@ impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
             model_api_port: DEFAULT_MODEL_API_PORT,
+            intro_dismissed: false,
         }
     }
 }
@@ -86,6 +86,10 @@ pub fn parse_config(text: &str) -> Result<DesktopConfig, String> {
     }
     Ok(DesktopConfig {
         model_api_port: port as u16,
+        intro_dismissed: match body.get("intro_dismissed") {
+            None => false,
+            Some(value) => value.as_bool().ok_or_else(|| "配置 intro_dismissed 不是布尔值".to_string())?,
+        },
     })
 }
 
@@ -116,6 +120,7 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&json!({
         "version": CONFIG_VERSION,
         "model_api_port": config.model_api_port,
+        "intro_dismissed": config.intro_dismissed,
     }))
     .map_err(|error| format!("序列化配置失败：{error}"))?;
     let temp = parent.join(format!(".desktop.json.{}.tmp", std::process::id()));

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use support::{client_request, start_chat_gateway, ChatAttempt, ChatStub, ClientRequest, TempDir};
+use support::{client_request, start_chat_gateway, wait_jsonl, ChatAttempt, ChatStub, ClientRequest, TempDir};
 
 fn request(path: &str, body: &Value) -> ClientRequest {
     ClientRequest::post(path, &body.to_string()).header("Content-Type", "application/json")
@@ -25,6 +25,37 @@ fn embedding_body() -> Value {
     json!({"model": "embedding-model",
            "input": ["first", "second"],
            "encoding_format": "float"})
+}
+
+#[test]
+fn desktop_embeddings_record_reported_input_tokens_in_the_private_ledger() {
+    use um_gateway::Role;
+
+    let temp = TempDir::new("desktop-embedding-ledger-");
+    let stub = ChatStub::start();
+    let upstream_body = json!({
+        "data": [{"embedding": [0.1, 0.2]}],
+        "usage": {"prompt_tokens": 2, "total_tokens": 2},
+    });
+    stub.push(ChatAttempt::Json { status: 200, body: upstream_body.clone() });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.role = Role::Local;
+        config.desktop_instance = true;
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request("/v1/embeddings", &embedding_body()))
+        .expect("desktop embedding");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json(), upstream_body);
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["protocol"], "embeddings");
+    assert_eq!(rows[0]["usage_source"], "upstream");
+    assert_eq!(rows[0]["input_tokens"], 2);
+    assert_eq!(rows[0]["output_tokens"], 0);
+    assert_eq!(rows[0]["request_id"].as_str().map(str::len), Some(32));
 }
 
 #[test]

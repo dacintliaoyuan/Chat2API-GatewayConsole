@@ -222,6 +222,35 @@ function Invoke-ReadyProbe {
     return Invoke-DefaultProbe
 }
 
+function Test-LegacyWorkerListener {
+    param($Descriptor, [int[]]$WorkerPids, [int[]]$IngressPids)
+
+    $path = Get-GatewayWorkerPortFilePath -Descriptor $Descriptor
+    if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    $text = [IO.File]::ReadAllText($path)
+    # The old binary publishes one decimal port and its ingress can only read
+    # that format. Leave the file as written and verify its owner separately.
+    if ($text -notmatch '\A[0-9]{1,5}(?:\r?\n)?\z') { return $false }
+    $workerPort = [int]$text.Trim()
+    if ($workerPort -lt 1 -or $workerPort -gt 65535 -or $workerPort -eq [int]$Descriptor.Port) {
+        return $false
+    }
+
+    foreach ($target in @(
+        @{ Port = $workerPort; Pids = $WorkerPids }
+        @{ Port = [int]$Descriptor.Port; Pids = $IngressPids }
+    )) {
+        $snapshot = Get-GatewayListenerSnapshot -Port $target.Port
+        if (@($snapshot.Unconfirmed).Count -gt 0) { throw 'legacy listener identity unconfirmed' }
+        $listeners = @($snapshot.Overlapping)
+        if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1' -or
+                [int]$listeners[0].OwningProcess -notin $target.Pids) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Invoke-DefaultProcessQuery {
     # Round 18 stop-scope identity, not the bare "chat2api.py" token: the
     # other chat2api.py instances must never
@@ -285,9 +314,11 @@ function Invoke-DefaultProcessQuery {
             }
             if ($null -eq (Get-GatewayWorkerPort -Descriptor $desc) -and
                     (Test-GatewayWorkerStartingExpired -Descriptor $desc `
-                        -Processes $workerScope.Private)) {
-                # A worker alive past StartTimeoutSeconds without a port file is
-                # stuck, not starting: the component start will replace it.
+                        -Processes $workerScope.Private) -and
+                    !(Test-LegacyWorkerListener -Descriptor $desc `
+                        -WorkerPids $workerPids -IngressPids $ingressPids)) {
+                # A worker past the startup deadline without a usable record
+                # or verified legacy listener can be replaced.
                 return [pscustomobject]@{ State = 'absent'; Pids = @(); Error = $null }
             }
             $pids = @()
@@ -1016,6 +1047,20 @@ function Invoke-WatchSelfTest {
     # is stuck, not starting: the watch returns absent so the component start
     # can replace it.
     & {
+        $legacyPortFile = Join-Path $testRoot 'legacy-worker.port'
+        function Get-GatewayWorkerPortFilePath {
+            param($Descriptor)
+            return $legacyPortFile
+        }
+        function Get-NetTCPConnection {
+            [CmdletBinding()]
+            param([int]$LocalPort, [string]$State)
+            if ($LocalPort -eq 8000) {
+                [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 4243 }
+            } elseif ($LocalPort -eq 5678 -and $null -ne $fixture.Owner) {
+                [pscustomobject]@{ LocalAddress = $fixture.Address; OwningProcess = $fixture.Owner }
+            }
+        }
         function Get-GatewayWorkerPort {
             param($Descriptor)
             return $null
@@ -1052,6 +1097,20 @@ function Invoke-WatchSelfTest {
         if ($expired.State -ne 'absent') {
             throw ('self-test failed: a worker past the start budget was not treated as absent (state={0})' -f
                 $expired.State)
+        }
+        foreach ($fixture in @(
+            @{ Owner = 4242; Address = '127.0.0.1'; Content = "5678`n"; Expected = 'verified' }
+            @{ Owner = 9999; Address = '127.0.0.1'; Content = "5678`n"; Expected = 'absent' }
+            @{ Owner = 4242; Address = '100.64.0.1'; Content = "5678`n"; Expected = 'absent' }
+            @{ Owner = $null; Address = '127.0.0.1'; Content = "5678`n"; Expected = 'absent' }
+            @{ Owner = 4242; Address = '127.0.0.1'; Content = "5678`ninvalid`n"; Expected = 'absent' }
+        )) {
+            [IO.File]::WriteAllText($legacyPortFile, $fixture.Content)
+            $legacy = Invoke-DefaultProcessQuery
+            if ($legacy.State -ne $fixture.Expected) {
+                throw ('self-test failed: legacy worker port expected {0}, got {1} (owner={2}, address={3})' -f
+                    $fixture.Expected, $legacy.State, $fixture.Owner, $fixture.Address)
+            }
         }
         $script:selfTestWorkerScope = @([pscustomobject]@{
             ProcessId = 4242; Name = 'um-gateway-candidate.exe'

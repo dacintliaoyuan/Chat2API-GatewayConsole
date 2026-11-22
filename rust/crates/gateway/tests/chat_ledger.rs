@@ -70,6 +70,37 @@ fn assert_verified_attribution(row: &Value) {
 }
 
 #[test]
+fn desktop_chat_failure_links_its_single_ledger_row_to_the_runtime_log() {
+    use um_gateway::Role;
+
+    let temp = TempDir::new("desktop-chat-ledger-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Json {
+        status: 400,
+        body: json!({"error": {"message": "fixture invalid request"}}),
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let service = temp.path().join("service.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.role = Role::Local;
+        config.desktop_instance = true;
+        config.usage_log = Some(ledger.clone());
+        config.service_log = Some(service.clone());
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request(false)).expect("desktop chat");
+    assert!(response.status >= 400);
+    let usage = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    let failures = wait_jsonl(&service, 1, Duration::from_secs(2));
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0]["usage_source"], "none");
+    let id = usage[0]["request_id"].as_str().expect("HTTP request ID");
+    assert_eq!(id.len(), 32);
+    assert_eq!(failures[0]["request_id"], id);
+    assert_eq!(failures[0]["final"], usage[0]["status"]);
+}
+
+#[test]
 fn a_non_stream_row_matches_the_python_field_set_and_values() {
     let temp = TempDir::new("um-rust-chat-ledger-");
     let stub = ChatStub::start();

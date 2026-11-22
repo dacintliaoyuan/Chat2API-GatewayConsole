@@ -398,6 +398,8 @@ pub struct GatewayConfig {
     pub candidate: bool,
     /// The process shape selected by `--mode`; gateway by default.
     pub run_mode: RunMode,
+    /// A separately supervised, loopback-only desktop instance.
+    pub desktop_instance: bool,
     /// The broker instance key file; `None` disables the instance channel.
     pub instance_key_file: Option<PathBuf>,
     /// The instance-channel AF_UNIX socket path prefix.
@@ -466,6 +468,7 @@ impl Default for GatewayConfig {
             slow_retry_threshold: DEFAULT_SLOW_RETRY_THRESHOLD,
             candidate: true,
             run_mode: RunMode::Gateway,
+            desktop_instance: false,
             instance_key_file: None,
             instance_pipe_prefix: None,
             registration_file: None,

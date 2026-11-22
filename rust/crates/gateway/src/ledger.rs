@@ -16,6 +16,16 @@ use std::time::Instant;
 use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
 
+/// Desktop's private ledger can correlate its local rows to the HTTP event log.
+/// Keep the independently minted share request ID when there is one.
+pub(crate) fn request_id<'a>(
+    shared_id: Option<&'a str>,
+    http_id: &'a str,
+    desktop_instance: bool,
+) -> Option<&'a str> {
+    shared_id.or(desktop_instance.then_some(http_id))
+}
+
 /// The four coverage labels of `usage_source`.
 pub const USAGE_SOURCE_UPSTREAM: &str = "upstream";
 pub const USAGE_SOURCE_PARTIAL: &str = "partial";
