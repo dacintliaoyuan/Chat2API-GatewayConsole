@@ -44,6 +44,7 @@ use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
 use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
+use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
@@ -574,6 +575,34 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
         .collect()
 }
 
+fn request_row_ui(row: &usage::RequestRow) -> RequestRow {
+    RequestRow {
+        id: row.key.clone().into(),
+        at: row.at.clone().into(),
+        model: row.model.clone().into(),
+        outcome: row.result.clone().into(),
+        tone: match row.result.as_str() {
+            "成功" => status_tone(Tone::Good),
+            "失败" | "截断" => status_tone(Tone::Bad),
+            "客户端断开" => status_tone(Tone::Warn),
+            _ => status_tone(Tone::Neutral),
+        },
+        summary: format!(
+            "耗时 {} · ID {}",
+            row.duration,
+            row.request_id.as_deref().unwrap_or("—")
+        )
+        .into(),
+        first_token: row.first_token.clone().into(),
+        detail: "".into(),
+    }
+}
+
+fn apply_request_rows(window: &MainWindow, rows: &[usage::RequestRow]) {
+    let rows = rows.iter().map(request_row_ui).collect::<Vec<_>>();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+}
+
 fn apply_request_page(window: &MainWindow, page: &usage::RequestPage) {
     let mut models = vec![String::from("全部模型")];
     models.extend(page.models.iter().cloned());
@@ -592,32 +621,8 @@ fn apply_request_page(window: &MainWindow, page: &usage::RequestPage) {
         .collect::<Vec<slint::SharedString>>();
     window.set_request_model_options(ModelRc::from(model_options.as_slice()));
     window.set_request_model_index(model_index);
-    let rows = page
-        .rows
-        .iter()
-        .map(|row| RequestRow {
-            id: row.key.clone().into(),
-            at: row.at.clone().into(),
-            model: row.model.clone().into(),
-            outcome: row.result.clone().into(),
-            tone: match row.result.as_str() {
-                "成功" => status_tone(Tone::Good),
-                "失败" | "截断" => status_tone(Tone::Bad),
-                "客户端断开" => status_tone(Tone::Warn),
-                _ => status_tone(Tone::Neutral),
-            },
-            summary: format!(
-                "耗时 {} · ID {}",
-                row.duration,
-                row.request_id.as_deref().unwrap_or("—")
-            )
-            .into(),
-            first_token: row.first_token.clone().into(),
-            detail: "".into(),
-        })
-        .collect::<Vec<_>>();
-    let count = rows.len();
-    window.set_requests(ModelRc::from(rows.as_slice()));
+    apply_request_rows(window, &page.rows);
+    let count = page.rows.len();
     apply_request_analytics(window, page);
     if count == 0 || !page.message.is_empty() {
         window.set_request_status(page.message.clone().into());
@@ -706,6 +711,7 @@ enum RequestLoad {
     Query,
     Page,
     Refresh,
+    Earlier,
 }
 
 fn load_requests(
@@ -716,6 +722,7 @@ fn load_requests(
     mode: RequestLoad,
 ) {
     let refresh = mode == RequestLoad::Refresh;
+    let earlier = mode == RequestLoad::Earlier;
     let range = Range::from_index(window.get_request_period());
     let current_time = chrono::Utc::now().timestamp_millis();
     let (cursor, now, generation) = {
@@ -724,6 +731,17 @@ fn load_requests(
             RequestLoad::Refresh => nav.refresh(current_time, range),
             RequestLoad::Query => nav.query(current_time),
             RequestLoad::Page => nav.page(direction),
+            RequestLoad::Earlier => match nav.begin_earlier() {
+                usage::EarlierLoad::Cursor(cursor) => Some(Some(cursor)),
+                usage::EarlierLoad::NoMore => {
+                    drop(nav);
+                    window.set_request_status("没有更早记录".into());
+                    window.set_request_tone(3);
+                    window.set_has_earlier_records(false);
+                    return;
+                }
+                usage::EarlierLoad::Busy => return,
+            },
         };
         let Some(cursor) = cursor else {
             return;
@@ -737,7 +755,12 @@ fn load_requests(
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
-    if !refresh {
+    if earlier {
+        // Loading earlier appends history: the displayed rows, the selected
+        // detail and the scroll position stay where they are.
+        window.set_request_status("正在加载更早的记录…".into());
+        window.set_request_tone(3);
+    } else if !refresh {
         window.set_selected_request("".into());
         // Filter changes keep the reader where they were; only a page jump
         // starts at the top of the new page.
@@ -747,6 +770,7 @@ fn load_requests(
         window.set_request_status("正在读取请求记录…".into());
         window.set_request_tone(3);
         window.set_older_requests(false);
+        window.set_has_earlier_records(false);
         window.set_newer_requests(false);
     }
     std::thread::spawn(move || {
@@ -764,6 +788,35 @@ fn load_requests(
             let Some(window) = weak.upgrade() else { return; };
             let mut nav = nav.lock().expect("request navigation poisoned");
             if nav.generation != generation { return; }
+            if earlier {
+                match nav.finish_earlier(page) {
+                    usage::EarlierOutcome::Appended { added } => {
+                        apply_request_rows(&window, &nav.rows);
+                        // Appending changes the model; put the reader back at
+                        // the row they were reading.
+                        window.set_request_scroll_y(scroll);
+                        window.set_has_earlier_records(nav.append_cursor.is_some());
+                        window.set_older_requests(nav.earlier.is_some());
+                        window.set_request_status(
+                            format!("已加载更早的 {added} 条记录 · 共 {} 条", nav.rows.len())
+                                .into(),
+                        );
+                        window.set_request_tone(0);
+                        window.set_request_updated_at(clock_now().into());
+                    }
+                    usage::EarlierOutcome::NoMore => {
+                        window.set_has_earlier_records(false);
+                        window.set_request_status("没有更早记录".into());
+                        window.set_request_tone(3);
+                    }
+                    usage::EarlierOutcome::Failed(message) => {
+                        window.set_has_earlier_records(nav.append_cursor.is_some());
+                        window.set_request_status(format!("加载更早失败：{message}").into());
+                        window.set_request_tone(2);
+                    }
+                }
+                return;
+            }
             let page = if refresh {
                 let previous = usage::RequestPage {
                     rows: nav.rows.clone(),
@@ -781,12 +834,11 @@ fn load_requests(
             };
             apply_request_page(&window, &page);
             window.set_newer_requests(nav.pages.len() > 1);
-            nav.summary = page.summary.clone();
-            nav.model_speeds = page.model_speeds.clone();
-            nav.chart = page.chart.clone();
-            nav.models = page.models.clone();
-            nav.rows = page.rows;
-            nav.earlier = page.earlier;
+            // A failed refresh kept the appended rows and their 加载更早 cursor;
+            // a successful page read restarts 加载更早 from this page.
+            nav.apply_page(&page, !refresh || page.coverage != Coverage::Unavailable);
+            window.set_older_requests(nav.earlier.is_some());
+            window.set_has_earlier_records(nav.append_cursor.is_some());
             if refresh {
                 // Replacing the list model can move the viewport; the refresh
                 // must leave the reader where they were.
@@ -1049,6 +1101,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         supervision_log: paths.supervision_log.clone(),
     }));
     let current_port = Arc::new(AtomicU16::new(loaded_config.model_api_port));
+
+    // The maintenance menu starts closed while the supervisor is still
+    // starting; the overview reader refreshes it with the real state.
+    {
+        let gateway = gateway_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        maintenance::apply_menu(
+            &window,
+            &maintenance::menu(&maintenance::MenuState::new(&gateway.state, None, None)),
+        );
+    }
 
     {
         let supervisor = Arc::clone(&gateway_supervisor);
@@ -1396,6 +1461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_failure: Option<String> = None;
             let mut last_faults: Option<overview::FaultHistory> = None;
             let mut last_service: Option<um_service::ServiceView> = None;
+            let mut last_menu: Option<maintenance::Menu> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1437,6 +1503,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
                             overview::apply_fault_history(&window, &faults);
+                        }
+                    });
+                }
+                // The menu only depends on the gateway/service/auth facts; a
+                // changed row set is applied once, so a refresh never resets an
+                // armed confirmation the user is still looking at.
+                let menu = maintenance::menu(&maintenance::MenuState::new(
+                    &gateway.state,
+                    Some(&service),
+                    Some(&auth),
+                ));
+                if last_menu.as_ref() != Some(&menu) {
+                    last_menu = Some(menu.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            maintenance::apply_menu(&window, &menu);
                         }
                     });
                 }
@@ -1729,6 +1812,134 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    // The maintenance menu re-checks the same availability its rows show, then
+    // runs the action through the seam each card already owns. Verify, on-demand
+    // login and restart delegate to their own cards so there is one data path;
+    // start/stop use the existing supervisor and its drain semantics.
+    let weak_maintenance = window.as_weak();
+    let maintenance_supervisor = Arc::clone(&gateway_supervisor);
+    let maintenance_gateway = Arc::clone(&gateway_status);
+    let maintenance_service = Arc::clone(&service_state);
+    let maintenance_auth = Arc::clone(&auth_state);
+    window.on_maintenance_act(move |index| {
+        let Some(window) = weak_maintenance.upgrade() else {
+            return;
+        };
+        if window.get_maintenance_action_busy() || QUIT_REQUESTED.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(action) = maintenance::Action::from_index(index) else {
+            return;
+        };
+        let gateway = maintenance_gateway
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let service = maintenance_service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let auth = maintenance_auth
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let state = maintenance::MenuState::new(&gateway.state, service.as_ref(), auth.as_ref());
+        let Some(row) = maintenance::menu(&state)
+            .items
+            .into_iter()
+            .find(|row| row.action == action)
+        else {
+            return;
+        };
+        if !row.enabled {
+            window.set_maintenance_status(row.reason.into());
+            window.set_maintenance_status_tone(status_tone(Tone::Warn));
+            return;
+        }
+        match action {
+            maintenance::Action::Verify => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_verify_login();
+            }
+            maintenance::Action::Login => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_continue_login();
+            }
+            maintenance::Action::Restart => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_restart_gateway();
+            }
+            maintenance::Action::Start | maintenance::Action::Stop => {
+                window.set_maintenance_action_busy(true);
+                window.set_maintenance_status(format!("正在{}本实例网关…", row.label).into());
+                window.set_maintenance_status_tone(status_tone(Tone::Warn));
+                let supervisor = Arc::clone(&maintenance_supervisor);
+                let status_slot = Arc::clone(&maintenance_gateway);
+                let weak = window.as_weak();
+                std::thread::spawn(move || {
+                    let (result, running) = {
+                        let mut guard = supervisor
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        match guard.as_mut() {
+                            Some(supervisor) => {
+                                let status = match action {
+                                    maintenance::Action::Start => supervisor.start_or_attach(),
+                                    maintenance::Action::Stop => {
+                                        supervisor.stop(StopReason::UserRequested)
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                *status_slot
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                    status.clone();
+                                let outcome = match (&status.state, action) {
+                                    (GatewayState::Running { .. }, maintenance::Action::Start) => {
+                                        Ok(format!("本实例网关运行于 {}", status.base_url))
+                                    }
+                                    (GatewayState::Stopped, maintenance::Action::Stop) => {
+                                        Ok("本实例网关已停止".to_string())
+                                    }
+                                    _ => Err(status.state.detail()),
+                                };
+                                (
+                                    maintenance::action_result(action, outcome),
+                                    matches!(status.state, GatewayState::Running { .. }),
+                                )
+                            }
+                            None => (
+                                maintenance::action_result(
+                                    action,
+                                    Err("本实例网关未接入，无法执行维护动作".to_string()),
+                                ),
+                                false,
+                            ),
+                        }
+                    };
+                    if running {
+                        OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+                        USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_maintenance_action_busy(false);
+                            if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                                maintenance::apply_result(&window, &result);
+                            }
+                        }
+                    });
+                });
+            }
+        }
+    });
+
     let request_nav = Arc::new(Mutex::new(usage::RequestNav::default()));
     let ledger = paths.usage_log.clone();
     let request_ledger = ledger.clone();
@@ -1742,6 +1953,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 RequestLoad::Page
             };
             load_requests(&window, &request_ledger, &request_page_nav, direction, mode);
+        }
+    });
+    let request_earlier_ledger = ledger.clone();
+    let request_earlier_nav = Arc::clone(&request_nav);
+    let weak_request = window.as_weak();
+    window.on_load_earlier_requests(move || {
+        if let Some(window) = weak_request.upgrade() {
+            load_requests(
+                &window,
+                &request_earlier_ledger,
+                &request_earlier_nav,
+                0,
+                RequestLoad::Earlier,
+            );
         }
     });
     let request_refresh_ledger = ledger.clone();

@@ -404,7 +404,13 @@ fn matches_query(round: &LoginRound, query: &LoginRoundsQuery) -> bool {
             return false;
         }
     }
-    let search = query.q.trim().to_lowercase();
+    let search: String = query
+        .q
+        .trim()
+        .to_lowercase()
+        .chars()
+        .take(MAX_QUERY_CHARS)
+        .collect();
     if search.is_empty() {
         return true;
     }
