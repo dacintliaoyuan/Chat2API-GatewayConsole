@@ -41,7 +41,9 @@ use um_desktop::instance::{self, InstanceError};
 use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
-use um_desktop::overview::{self, HttpProbe, Overview, Tone};
+use um_desktop::overview::{
+    self, FaultRow as FaultHistoryRow, FaultSurface, HttpProbe, Overview, Tone,
+};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::usage::{self, Coverage, Range, UsageView};
 
@@ -163,6 +165,42 @@ impl AccountSurface for MainWindow {
 
     fn set_credential_status(&self, value: &str) {
         self.set_credential_status(value.into());
+    }
+}
+
+impl FaultSurface for MainWindow {
+    fn set_fault_status(&self, status: &str) {
+        self.set_upstream_fault_status(status.into());
+    }
+
+    fn set_fault_tone(&self, tone: Tone) {
+        self.set_upstream_fault_tone(status_tone(tone));
+    }
+
+    fn set_fault_check(&self, check: &str) {
+        self.set_upstream_fault_check(check.into());
+    }
+
+    fn set_fault_active(&self, active: Option<&FaultHistoryRow>) {
+        self.set_upstream_fault_active(active.is_some());
+        let (title, detail) = match active {
+            Some(row) => (row.title.as_str(), row.detail.as_str()),
+            None => ("", ""),
+        };
+        self.set_upstream_fault_active_title(title.into());
+        self.set_upstream_fault_active_detail(detail.into());
+    }
+
+    fn set_fault_history(&self, rows: &[FaultHistoryRow]) {
+        let rows: Vec<FaultRow> = rows
+            .iter()
+            .map(|row| FaultRow {
+                title: row.title.as_str().into(),
+                detail: row.detail.as_str().into(),
+                evidence: row.evidence.as_str().into(),
+            })
+            .collect();
+        self.set_upstream_fault_history(ModelRc::from(Rc::new(VecModel::from(rows))));
     }
 }
 
@@ -993,6 +1031,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_admin = Arc::new(HttpAuthAdmin::new());
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
+    let upstream_faults_path = paths.upstream_faults.clone();
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);
@@ -1003,6 +1042,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::thread::spawn(move || {
             let mut has_success = false;
             let mut last_failure: Option<String> = None;
+            let mut last_faults: Option<overview::FaultHistory> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1034,6 +1074,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // The window was hidden or minimized while the probe was
                     // in flight; the resume pass reads again before applying.
                     continue;
+                }
+                let faults = overview::read_fault_history(&upstream_faults_path);
+                if last_faults.as_ref() != Some(&faults) {
+                    last_faults = Some(faults.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            overview::apply_fault_history(&window, &faults);
+                        }
+                    });
                 }
                 *auth_state
                     .lock()
