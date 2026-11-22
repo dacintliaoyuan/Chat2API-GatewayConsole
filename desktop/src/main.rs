@@ -1291,6 +1291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let probe = HttpProbe::new();
     let auth_admin = Arc::new(HttpAuthAdmin::new());
     let service_api = Arc::new(um_service::HttpServiceApi::new());
+    let records_api = Arc::new(maintenance::HttpRecordsApi::new());
     let service_state: Arc<Mutex<Option<um_service::ServiceView>>> = Arc::new(Mutex::new(None));
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
@@ -1670,6 +1671,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_admin = Arc::clone(&auth_admin);
         let service_api = Arc::clone(&service_api);
         let service_state = Arc::clone(&service_state);
+        let records_api = Arc::clone(&records_api);
         std::thread::spawn(move || {
             let mut has_success = false;
             let mut last_failure: Option<String> = None;
@@ -1720,14 +1722,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
-                // The menu only depends on the gateway/service/auth facts; a
-                // changed row set is applied once, so a refresh never resets an
-                // armed confirmation the user is still looking at.
-                let menu = maintenance::menu(&maintenance::MenuState::new(
-                    &gateway.state,
-                    Some(&service),
-                    Some(&auth),
-                ));
+                // The menu depends on the gateway/service/auth facts and the
+                // records read; a changed set is applied once, so a refresh never
+                // resets an armed confirmation the user is still looking at.
+                let records = match gateway.state {
+                    GatewayState::Running { .. } => match load_control_token(&control_token_path)
+                    {
+                        Ok(token) => maintenance::read_records(
+                            records_api.as_ref(),
+                            &base,
+                            token.expose(),
+                        ),
+                        Err(error) => maintenance::RecordsView::failure(error),
+                    },
+                    _ => maintenance::RecordsView::failure(format!(
+                        "网关{}，无法读取维护记录",
+                        gateway.state.detail()
+                    )),
+                };
+                let menu = maintenance::menu_with_records(
+                    &maintenance::MenuState::new(&gateway.state, Some(&service), Some(&auth)),
+                    records,
+                );
                 if last_menu.as_ref() != Some(&menu) {
                     last_menu = Some(menu.clone());
                     let weak = weak.clone();

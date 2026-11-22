@@ -480,16 +480,36 @@ impl MaintenanceSurface for MainWindow {
             Tone::Neutral => 3,
         });
         self.set_maintenance_records_not_applicable(records.not_applicable);
+        self.set_maintenance_records_detail(records.detail.as_str().into());
+        // A new read invalidates any expanded row: the old index may not exist.
+        self.set_maintenance_record_expanded(-1);
         let rows: Vec<MaintenanceRecordRow> = records
             .rows
             .iter()
             .map(|row| MaintenanceRecordRow {
+                key: row.key.as_str().into(),
                 at: row.at.as_str().into(),
                 action: row.action.as_str().into(),
+                state: row.state.as_str().into(),
+                state_tone: tone_index(row.state_tone),
                 result: row.result.as_str().into(),
+                took: row.took.as_str().into(),
+                steps: ModelRc::from(Rc::new(VecModel::from(
+                    row.steps
+                        .iter()
+                        .map(|step| MaintenanceStepRow {
+                            at: step.at.as_str().into(),
+                            note: step.note.as_str().into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ))),
             })
             .collect();
         self.set_maintenance_records(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_records_detail(&self, detail: &str) {
+        self.set_maintenance_records_detail(detail.into());
     }
 
     fn set_status(&self, status: &str, tone: Tone) {
