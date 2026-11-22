@@ -393,6 +393,10 @@ export component MainWindow inherits Window {
     in property <string> account-saved-detail;
     in property <bool> account-can-clear;
     in property <bool> account-can-continue;
+    // ADR 0011: an operator-requested manual takeover opens the visible window
+    // directly; the on-demand action only opens it when verify rejects the
+    // current credential.
+    in property <bool> account-manual-takeover;
     in property <bool> account-form-visible;
     in property <bool> account-busy;
     in property <bool> show-intro;
@@ -407,6 +411,15 @@ export component MainWindow inherits Window {
     in property <int> credential-tone: 3;
     in property <string> login-status;
     in property <int> login-tone: 3;
+    // The overview's 「最近核验」 card: the last `/admin/auth/verify` probe,
+    // its reason and the re-probe action. `verify-at` stays empty until the
+    // first probe, so the action reads 立即核验 and then 重新核验.
+    in property <string> verify-at;
+    in property <string> verify-result: "从未核验";
+    in property <string> verify-detail: "还没有向上游确认过当前登录凭据。";
+    in property <int> verify-tone: 3;
+    in property <bool> verify-busy: false;
+    in property <string> verify-action-label: "立即核验";
     in property <string> status-line;
     in property <int> status-tone: 0;
     // Inline clear confirmation: one click arms it, the next click clears.
@@ -829,6 +842,14 @@ export component MainWindow inherits Window {
     out property <bool> save-button-focused: save-account.has-focus;
     out property <bool> cancel-button-focused: cancel-account.has-focus;
     out property <bool> login-card-visible: login-card.visible;
+    out property <string> continue-login-label: configure-account-button.label;
+    out property <bool> verify-card-visible: verify-card.visible;
+    out property <length> verify-card-height: verify-card.height;
+    out property <bool> verify-button-enabled: !root.verify-busy;
+    out property <length> verify-button-x: verify-action.absolute-position.x;
+    out property <length> verify-button-y: verify-action.absolute-position.y;
+    out property <length> verify-button-width: verify-action.width;
+    out property <length> verify-button-height: verify-action.height;
     out property <bool> skip-login-visible: skip-login-button.visible;
     out property <bool> configure-account-visible: configure-account-button.visible;
     out property <bool> account-saved-detail-visible: account-saved-detail.visible;
@@ -907,6 +928,7 @@ export component MainWindow inherits Window {
     callback save-credentials(string, string);
     callback clear-credentials();
     callback continue-login();
+    callback verify-login();
     callback toggle-password-visible();
     callback save-port(string);
     callback refresh-overview();
@@ -1428,7 +1450,9 @@ export component MainWindow inherits Window {
                                 spacing: 8px; alignment: start;
                                 configure-account-button := ActionButton {
                                     visible: root.account-label != "已登录" || root.account-can-continue;
-                                    label: root.account-can-continue ? "继续登录" : "配置账号";
+                                    label: root.account-can-continue
+                                        ? (root.account-manual-takeover ? "继续登录" : "按需登录")
+                                        : "配置账号";
                                     icon: "edit";
                                     enabled: !root.account-busy;
                                     primary: true;
@@ -1548,6 +1572,50 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                    }
+                    // The recent verify card always exists: a never-verified
+                    // instance is a legal state with its own copy and the first
+                    // probe action, not a blank card. It sits below the fault
+                    // history so the cards above keep their default-window place.
+                    verify-card := Card {
+                        gap: 10px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                SectionLabel {
+                                    text: "最近核验";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if !root.verify-at.is-empty : DataText {
+                                    text: root.verify-at;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 7px;
+                                cross-axis-alignment: center;
+                                StatusDot { tone: root.verify-tone; }
+                                Text {
+                                    text: root.verify-result;
+                                    color: Theme.ink;
+                                    font-weight: 600;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            if !root.verify-detail.is-empty : Hint {
+                                text: root.verify-detail;
+                            }
+                            verify-action := ActionButton {
+                                label: root.verify-action-label;
+                                icon: "check";
+                                enabled: !root.verify-busy;
+                                clicked => { root.verify-login(); }
                             }
                         }
                     }
@@ -2054,7 +2122,8 @@ export component MainWindow inherits Window {
                                 }
                                 ActionButton {
                                     visible: root.account-can-continue && !root.account-form-visible;
-                                    enabled: !root.account-busy; primary: true; label: "继续登录";
+                                    enabled: !root.account-busy; primary: true;
+                                    label: root.account-manual-takeover ? "继续登录" : "按需登录";
                                     clicked => { root.continue-login(); }
                                 }
                             }
@@ -2387,7 +2456,7 @@ export component MainWindow inherits Window {
                             spacing: 9px;
                             SectionLabel { text: "UM 登录"; }
                             Hint { text: "在「总览」或「设置」中录入 UMPASS 账号密码。账号密码只保存在本机，本实例网关会用它们自动重新登录。"; }
-                            Hint { text: "需要人工完成 Duo 验证时，点「继续登录」会打开可见的 Edge 窗口；完成后回到控制台即可看到登录状态。"; }
+                            Hint { text: "点「按需登录」会先核验当前凭据，有效时不打开窗口；需要人工完成 Duo 验证时，点「继续登录」会打开可见的 Edge 窗口，完成后回到控制台即可看到登录状态。"; }
                         }
                     }
                     Card {

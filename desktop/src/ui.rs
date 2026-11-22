@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use slint::{ModelRc, VecModel};
 
-use crate::account::AccountSurface;
+use crate::account::{AccountSurface, VerifySurface};
 use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
 
 slint::include_modules!();
@@ -27,6 +27,10 @@ impl AccountSurface for MainWindow {
 
     fn set_can_continue_login(&self, value: bool) {
         self.set_account_can_continue(value);
+    }
+
+    fn set_manual_takeover(&self, value: bool) {
+        self.set_account_manual_takeover(value);
     }
 
     fn set_overview_label(&self, value: &str) {
@@ -56,6 +60,33 @@ impl AccountSurface for MainWindow {
 
     fn set_credential_status(&self, value: &str) {
         self.set_credential_status(value.into());
+    }
+}
+
+impl VerifySurface for MainWindow {
+    fn set_verify_at_label(&self, value: &str) {
+        self.set_verify_at(value.into());
+    }
+
+    fn set_verify_result_label(&self, value: &str) {
+        self.set_verify_result(value.into());
+    }
+
+    fn set_verify_detail_text(&self, value: &str) {
+        self.set_verify_detail(value.into());
+    }
+
+    fn set_verify_tone_index(&self, tone: Tone) {
+        self.set_verify_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+    }
+
+    fn set_verify_action_text(&self, value: &str) {
+        self.set_verify_action_label(value.into());
     }
 }
 
