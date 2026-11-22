@@ -14,6 +14,7 @@ use crate::models::{
     ProbeRow as ProbeViewRow, ProbeSurface,
 };
 use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
+use crate::recent_issues::{IssueRow as RecentIssueViewRow, RecentIssuesSurface};
 use crate::um_service::ServiceSurface;
 
 slint::include_modules!();
@@ -396,5 +397,31 @@ impl MaintenanceSurface for MainWindow {
             Tone::Bad => 2,
             Tone::Neutral => 3,
         });
+    }
+}
+
+impl RecentIssuesSurface for MainWindow {
+    fn set_issue_rows(&self, rows: &[RecentIssueViewRow]) {
+        let rows: Vec<IssueRow> = rows
+            .iter()
+            .map(|row| IssueRow {
+                title: row.title.as_str().into(),
+                count: row.count.as_str().into(),
+                detail: row.detail.as_str().into(),
+                tone: tone_index(row.tone),
+                evidence_result: row.evidence.map_or(-1, |query| query.result),
+                evidence_window: row.evidence.map_or(0, |query| query.window),
+                evidence_note: row.evidence_note.as_str().into(),
+            })
+            .collect();
+        self.set_recent_issues(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_issue_status(&self, status: &str) {
+        self.set_recent_issues_status(status.into());
+    }
+
+    fn set_issue_tone(&self, tone: Tone) {
+        self.set_recent_issues_tone(tone_index(tone));
     }
 }

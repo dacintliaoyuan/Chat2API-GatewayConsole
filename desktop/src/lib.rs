@@ -18,6 +18,7 @@ pub mod logstream;
 pub mod maintenance;
 pub mod models;
 pub mod overview;
+pub mod recent_issues;
 pub mod shell;
 pub mod tail;
 pub mod ui;
