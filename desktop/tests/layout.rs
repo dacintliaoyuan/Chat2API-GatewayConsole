@@ -59,6 +59,21 @@ fn click(window: &MainWindow, x: f32, y: f32) {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 }
 
+fn scroll(window: &MainWindow, x: f32, y: f32, delta_y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y,
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
 fn type_text(window: &MainWindow, text: &str) {
     for ch in text.chars() {
         let text: slint::SharedString = ch.to_string().into();
@@ -1380,6 +1395,9 @@ fn addresses_stay_copyable_when_the_gateway_is_not_running() {
     window.set_gateway_value("未运行".into());
     window.set_gateway_tone(2);
     window.set_active_address("127.0.0.1:7999".into());
+    // The appearance card with four settings makes the settings page scroll at
+    // this size; bring the gateway address row into view before clicking it.
+    scroll(&window, 600.0, 400.0, -40.0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
     let copied = Rc::new(RefCell::new(None::<String>));
