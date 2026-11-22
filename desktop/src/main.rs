@@ -551,6 +551,7 @@ fn load_log_history(
             let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
                 return;
             };
+            let acknowledge_refresh = window.get_log_refresh_pending();
             match result {
                 Ok(payload) => match log_history::parse_history_payload(&payload) {
                     Ok(view) if view.tone == Tone::Bad => {
@@ -604,6 +605,10 @@ fn load_log_history(
                         window.set_log_total(rows.len() as i32);
                         window.set_log_updated_at(clock_now().into());
                         window.set_log_version(window.get_log_version().wrapping_add(1));
+                        window.set_log_refresh_pending(false);
+                        if acknowledge_refresh {
+                            window.set_log_refreshed(true);
+                        }
                     }
                     Err(reason) => apply_history_failure(&window, &mut nav, reason),
                 },
@@ -2196,6 +2201,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_query.upgrade() else {
             return;
         };
+        if window.get_refreshing() {
+            window.set_log_refresh_pending(true);
+        }
         let base = format!("http://127.0.0.1:{}", query_port.load(Ordering::SeqCst));
         load_log_history(
             &window,
