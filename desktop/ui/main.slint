@@ -64,12 +64,23 @@ export struct MaintenanceRow {
     danger: bool,
 }
 
-// One maintenance-record row. The app instance has no record source yet, so the
-// array stays empty and the area says 不适用 instead of drawing a table.
+// One step of a maintenance record, expanded under its row.
+export struct MaintenanceStepRow {
+    at: string,
+    note: string,
+}
+
+// One maintenance-record row. The array stays empty while the gateway has no
+// source; a source with rows fills it instead of the 不适用 placeholder.
 export struct MaintenanceRecordRow {
+    key: string,
     at: string,
     action: string,
+    state: string,
+    state-tone: int,
     result: string,
+    took: string,
+    steps: [MaintenanceStepRow],
 }
 
 // One row of the settings page's UM model catalog (#153). The name/ID column
@@ -683,6 +694,8 @@ export component MainWindow inherits Window {
     in property <string> maintenance-records-status: "不适用（本机实例无维护记录来源）";
     in property <int> maintenance-records-tone: 3;
     in property <bool> maintenance-records-not-applicable: true;
+    // The concrete reason behind an unavailable or failed read.
+    in property <string> maintenance-records-detail;
     in property <[MaintenanceRecordRow]> maintenance-records: [];
     // A start/stop action runs through the existing supervisor; verify,
     // on-demand login and restart delegate to their own cards.
@@ -806,6 +819,27 @@ export component MainWindow inherits Window {
         !root.maintenance-records-not-applicable
         && root.maintenance-records.length > 0;
     out property <int> maintenance-record-count: root.maintenance-records.length;
+    // The row under which the steps are expanded; -1 keeps every row closed.
+    in-out property <int> maintenance-record-expanded: -1;
+    out property <int> maintenance-record-step-count:
+        root.maintenance-record-expanded >= 0
+            && root.maintenance-record-expanded < root.maintenance-records.length
+        ? root.maintenance-records[root.maintenance-record-expanded].steps.length : 0;
+    out property <string> maintenance-record-step-first:
+        root.maintenance-record-step-count > 0
+        ? root.maintenance-records[root.maintenance-record-expanded].steps[0].at + " "
+            + root.maintenance-records[root.maintenance-record-expanded].steps[0].note
+        : "";
+    out property <string> maintenance-record-step-second:
+        root.maintenance-record-step-count > 1
+        ? root.maintenance-records[root.maintenance-record-expanded].steps[1].at + " "
+            + root.maintenance-records[root.maintenance-record-expanded].steps[1].note
+        : "";
+    // Test seams: the record list's geometry; every row starts at a fixed 36px.
+    out property <length> maintenance-records-x: maintenance-record-list.absolute-position.x;
+    out property <length> maintenance-records-y: maintenance-record-list.absolute-position.y;
+    out property <length> maintenance-records-width: maintenance-record-list.width;
+    out property <length> maintenance-record-row-height: 36px;
     out property <bool> maintenance-busy-note-visible: root.maintenance-busy;
     in property <string> status-line;
     in property <int> status-tone: 0;
@@ -4004,25 +4038,65 @@ export component MainWindow inherits Window {
                         text: root.maintenance-records-status;
                         color: Theme.status_ink(root.maintenance-records-tone);
                     }
-                    if root.maintenance-table-visible : VerticalLayout {
-                        spacing: 6px;
-                        for record-row in root.maintenance-records : HorizontalLayout {
+                    if !root.maintenance-records-detail.is-empty : Hint {
+                        text: root.maintenance-records-detail;
+                    }
+                    maintenance-record-table := VerticalLayout {
+                        visible: root.maintenance-table-visible;
+                        spacing: 4px;
+                        HorizontalLayout {
                             spacing: 8px;
-                            Text {
-                                text: record-row.at;
-                                color: Theme.ink;
-                                font-size: 12px;
-                            }
-                            Text {
-                                text: record-row.action;
-                                color: Theme.ink;
-                                font-size: 12px;
-                                horizontal-stretch: 1;
-                            }
-                            Text {
-                                text: record-row.result;
-                                color: Theme.muted;
-                                font-size: 12px;
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            Hint { text: "开始"; width: 92px; }
+                            Hint { text: "操作"; width: 96px; }
+                            Hint { text: "状态"; width: 56px; }
+                            Hint { text: "结果"; horizontal-stretch: 1; }
+                            Hint { text: "用时"; width: 56px; horizontal-alignment: right; }
+                        }
+                        // Each row toggles its own steps; a record without steps
+                        // still shows the row but has nothing to expand.
+                        maintenance-record-list := VerticalLayout {
+                            spacing: 4px;
+                            for record-row[index] in root.maintenance-records : Selectable {
+                                height: 36px + (root.maintenance-record-expanded == index
+                                    ? record-row.steps.length * 18px : 0px);
+                                label: record-row.at + " " + record-row.action + " " + record-row.state;
+                                selected: root.maintenance-record-expanded == index;
+                                activate => {
+                                    root.maintenance-record-expanded =
+                                        root.maintenance-record-expanded == index ? -1 : index;
+                                }
+                                VerticalLayout {
+                                    height: parent.height;
+                                    HorizontalLayout {
+                                        height: 36px;
+                                        spacing: 8px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        DataText { text: record-row.at; width: 92px; font-size: 11px; overflow: elide; }
+                                        Text {
+                                            text: record-row.action;
+                                            color: Theme.ink;
+                                            font-size: 12px;
+                                            width: 96px;
+                                            overflow: elide;
+                                        }
+                                        Tag { label: record-row.state; tone: record-row.state-tone; width: 56px; }
+                                        Hint { text: record-row.result; horizontal-stretch: 1; overflow: elide; }
+                                        DataText { text: record-row.took; width: 56px; font-size: 11px; horizontal-alignment: right; }
+                                    }
+                                    if root.maintenance-record-expanded == index : VerticalLayout {
+                                        for step in record-row.steps : HorizontalLayout {
+                                            height: 18px;
+                                            spacing: 8px;
+                                            padding-left: 12px;
+                                            padding-right: 8px;
+                                            DataText { text: step.at; width: 64px; font-size: 11px; overflow: elide; }
+                                            Hint { text: step.note; horizontal-stretch: 1; font-size: 11px; overflow: elide; }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
