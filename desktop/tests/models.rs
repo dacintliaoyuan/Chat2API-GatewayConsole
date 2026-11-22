@@ -292,7 +292,7 @@ fn model_window() -> um_desktop::ui::MainWindow {
     let window = um_desktop::ui::MainWindow::new().expect("create MainWindow");
     slintplot::register!(window);
     window.set_page(2);
-    window.window().set_size(LogicalSize::new(1060.0, 900.0));
+    window.window().set_size(LogicalSize::new(1060.0, 1200.0));
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     window
