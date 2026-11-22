@@ -609,7 +609,7 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
             false,
         ),
         Some(AuthRead::Unavailable(reason)) => (
-            "认证未知".to_string(),
+            "登录状态未知".to_string(),
             reason.clone(),
             Tone::Warn,
             false,

@@ -709,10 +709,10 @@ fn an_unreachable_gateway_keeps_its_reason_and_does_not_claim_login() {
         &saved,
         Some(&AuthRead::Unavailable("连接被拒绝".to_string())),
     );
-    assert_eq!(view.state_value, "认证未知");
+    assert_eq!(view.state_value, "登录状态未知");
     assert_eq!(view.state_tone, Tone::Warn);
     assert!(view.state_detail.contains("连接被拒绝"));
-    assert_eq!(view.overview_label, "认证未知");
+    assert_eq!(view.overview_label, "登录状态未知");
     assert!(!view.can_continue_login);
     assert!(!format!("{view:?}").contains("super-secret"));
 }

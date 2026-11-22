@@ -30,12 +30,14 @@ export struct ModelSpeedRow {
 component RequestTrendChart inherits Rectangle {
     in property <[string]> labels;
     in property <[ChartDataset]> datasets;
+    callback category-clicked(int);
     in property <bool> show-legend: false;
     in property <bool> integer-ticks: true;
     in property <int> value-decimals: 0;
     in property <bool> allow-motion: true;
+    out property <int> hovered-index: chart.hovered-index;
 
-    BarChart {
+    chart := BarChart {
         width: parent.width;
         height: parent.height;
         labels: root.labels;
@@ -50,6 +52,7 @@ component RequestTrendChart inherits Rectangle {
         bar-radius: 3px;
         fill-opacity: 0.78;
         accessible-label: "请求趋势图";
+        category-clicked(index) => { root.category-clicked(index); }
     }
 }
 
@@ -140,6 +143,63 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
+    // The chart selection reads the visible plot only; a hidden plot reports -1.
+    private property <int> pinned: -1;
+    private property <int> key-index: -1;
+    private property <int> active: root.pinned >= 0 ? root.pinned
+        : root.key-index >= 0 ? root.key-index
+        : root.compact ? compact-plot.hovered-index : wide-plot.hovered-index;
+    private property <bool> has-data: root.labels.length > 0;
+    private property <bool> has-selection: root.active >= 0 && root.active < root.labels.length;
+    private property <string> selection-label: root.has-selection ? root.labels[root.active] : "";
+    private property <string> selection-value: !root.has-selection ? ""
+        : "" + (root.metric == 1 ? round(root.request-counts[root.active])
+            : root.metric == 2 ? round(root.speed-counts[root.active] * 10) / 10
+            : round(root.token-counts[root.active]));
+    out property <int> active-index: root.active;
+    out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    out property <string> selection-text: root.selection-label + " " + root.selection-value;
+    // The request chart is a keyboard stop: Tab reaches it, arrows move the
+    // active bucket, Enter pins it and Esc clears the pin.
+    chart-focus := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        accessible-role: groupbox;
+        accessible-label: "请求趋势图";
+        key-pressed(event) => {
+            if (event.text == Key.Escape && root.pinned >= 0) {
+                root.pinned = -1;
+                return accept;
+            }
+            if (root.labels.length == 0) { return reject; }
+            if (event.text == Key.Home) { root.key-index = 0; return accept; }
+            if (event.text == Key.End) { root.key-index = root.labels.length - 1; return accept; }
+            if (event.text == Key.LeftArrow) {
+                root.key-index = root.key-index <= 0 ? 0 : root.key-index - 1;
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.key-index = root.key-index < 0 ? 0
+                    : root.key-index + 1 < root.labels.length ? root.key-index + 1
+                    : root.labels.length - 1;
+                return accept;
+            }
+            if (event.text == Key.Return && root.has-selection) {
+                root.pinned = root.active;
+                return accept;
+            }
+            return reject;
+        }
+    }
+    public function toggle-pin(index: int) {
+        if (index == root.pinned) {
+            root.pinned = -1;
+        } else if (index >= 0 && index < root.labels.length) {
+            root.pinned = index;
+        }
+    }
     // Reads the table that is actually laid out at the current width.
     out property <bool> empty-hint-fits: root.compact
         ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
@@ -162,13 +222,12 @@ export component RequestAnalytics inherits Panel {
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
-                min-width: 0px;
-                preferred-width: root.compact
+                width: root.compact
                     ? (index == 4 ? root.width - 24px : (root.width - 24px - 8px) / 2)
                     : (root.width - 24px - 32px) / 5;
                 // Tall enough for the label, value and detail line without
                 // clipping the detail at the card edge.
-                height: 80px;
+                height: 76px;
                 border-radius: 8px;
                 background: Theme.surface-2;
                 VerticalLayout {
@@ -177,7 +236,7 @@ export component RequestAnalytics inherits Panel {
                     Hint { text: metric.label; }
                     DataText {
                         text: metric.value;
-                        font-size: 22px;
+                        font-size: 18px;
                         font-weight: 650;
                         overflow: elide;
                     }
@@ -192,17 +251,20 @@ export component RequestAnalytics inherits Panel {
 
         compact-summary := HorizontalLayout {
             visible: root.compact;
+            // Clicking the summary row toggles the chart as well.
+            summary-pointer := TouchArea {
+                clicked => { root.details-open = !root.details-open; }
+            }
             // A hidden row still feeds the parent's preferred height.
             height: root.compact ? self.preferred-height : 0px;
             spacing: 8px;
             // The compact summary wraps instead of losing the last metrics.
             Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            // A visible label says what the control does instead of a bare
+            // chevron; the whole summary row reads as one action.
             details-toggle := ActionButton {
-                width: Theme.icon-button;
-                height: Theme.icon-button;
                 label: root.details-open ? "收起图表" : "查看图表";
                 icon: root.details-open ? "chevron-down" : "chevron-right";
-                icon-only: true;
                 quiet: true;
                 tooltip: root.details-open ? "收起图表" : "查看图表";
                 clicked => { root.details-open = !root.details-open; }
@@ -213,6 +275,7 @@ export component RequestAnalytics inherits Panel {
             height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
+            Hint { text: "所选范围"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
                 visible: !root.compact || root.details-open;
@@ -243,9 +306,10 @@ export component RequestAnalytics inherits Panel {
             // inactive stack collapses to zero explicitly.
             height: (root.compact && root.details-open) ? self.preferred-height : 0px;
             spacing: 8px;
-            RequestTrendChart {
+            compact-plot := RequestTrendChart {
                 width: 100%;
                 height: 148px;
+                category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
                 datasets: root.split-by-model
                     ? (root.metric == 1 ? root.request-series
@@ -272,9 +336,10 @@ export component RequestAnalytics inherits Panel {
             visible: !root.compact || root.details-open;
             spacing: 12px;
             height: (!root.compact || root.details-open) ? 148px : 0px;
-            RequestTrendChart {
+            wide-plot := RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
+                category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
                 datasets: root.split-by-model
                     ? (root.metric == 1 ? root.request-series
@@ -297,6 +362,39 @@ export component RequestAnalytics inherits Panel {
                 rows: root.model-speeds;
             }
         }
+        if root.has-data && (!root.compact || root.details-open) : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                height: 34px;
+                Hint {
+                    text: root.has-selection ? root.selection-label : "悬停查看数值";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                DataText { text: root.selection-value; font-weight: 650; vertical-alignment: center; }
+                unpin := ActionButton {
+                    visible: root.can-unpin;
+                    quiet: true;
+                    label: "取消固定";
+                    icon: "close";
+                    icon-only: true;
+                    tooltip: "取消固定";
+                    width: Theme.icon-button;
+                    height: Theme.icon-button;
+                    clicked => { root.pinned = -1; }
+                }
+            }
+            Hint {
+                text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
+                height: 18px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
+        }
+
     }
 }
 

@@ -1571,7 +1571,7 @@ export component MainWindow inherits Window {
                     // filter keeps the console's field/edge/radius language.
                     log-level-control := Segmented {
                         width: root.compact ? 170px : 248px;
-                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始行" }];
+                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始日志" }];
                         current-index <=> root.log-filter-level;
                         label: "日志级别";
                         selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
@@ -1776,7 +1776,7 @@ export component MainWindow inherits Window {
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.account-saved-detail;
                             }
-                            if !root.account-detail.is-empty : Hint { text: root.account-detail; }
+                            if !root.account-detail.is-empty : Hint { text: root.account-detail; color: Theme.bad-text; }
                             account-actions := HorizontalLayout {
                                 height: root.account-form-visible ? 0px : self.preferred-height;
                                 spacing: 8px; alignment: start;
@@ -1840,7 +1840,8 @@ export component MainWindow inherits Window {
                                 SectionLabel { text: "录入账号密码"; }
                                 Hint { text: "账号密码保存在本机，供此网关重新登录。"; }
                                 account-input := Field {
-                                    placeholder: "UMPASS 账号";
+                                    label: "UMPASS 账号";
+                                    placeholder: "输入账号";
                                     text <=> root.credential-account-input;
                                     invalid: root.account-input-invalid;
                                     edited(_) => {
@@ -1854,7 +1855,8 @@ export component MainWindow inherits Window {
                                     color: Theme.bad-text;
                                 }
                                 password-input := Field {
-                                    placeholder: "UMPASS 密码";
+                                    label: "UMPASS 密码";
+                                    placeholder: "输入密码";
                                     password: true;
                                     text <=> root.credential-password-input;
                                     invalid: root.password-input-invalid;
@@ -1935,9 +1937,8 @@ export component MainWindow inherits Window {
                                 copy-base := ActionButton {
                                     width: Theme.icon-button;
                                     height: Theme.icon-button;
-                                    label: "复制模型 API 地址";
+                                    label: root.base-copied ? "已复制" : "复制";
                                     icon: root.base-copied ? "check" : "copy";
-                                    icon-only: true;
                                     quiet: true;
                                     tooltip: "复制模型 API 地址";
                                     clicked => { root.request-copy(root.base-url, 1); }
@@ -1945,9 +1946,8 @@ export component MainWindow inherits Window {
                                 copy-v1 := ActionButton {
                                     width: Theme.icon-button;
                                     height: Theme.icon-button;
-                                    label: "复制 /v1 地址";
+                                    label: root.v1-copied ? "已复制" : "复制";
                                     icon: root.v1-copied ? "check" : "copy";
-                                    icon-only: true;
                                     quiet: true;
                                     tooltip: "复制 /v1 地址";
                                     clicked => { root.request-copy(root.base-url + "/v1", 2); }
@@ -1994,7 +1994,7 @@ export component MainWindow inherits Window {
                                 details-content := VerticalLayout {
                                     spacing: 12px;
                                     instance-supervision := SettingRow {
-                                        label: "网关监督";
+                                        label: "网关状态";
                                         instance-supervision-value := Hint {
                                             text: root.supervision-value + (root.supervision-detail.is-empty ? "" : "  " + root.supervision-detail);
                                             color: Theme.status_ink(root.supervision-tone);
@@ -2095,7 +2095,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout { spacing: 12px; DataText { text: "Token"; width: 96px; } Hint { text: "模型返回的输入与输出 Token 总量"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "缓存命中率"; width: 96px; } Hint { text: "缓存读取 Token 占输入 Token 的比例"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "首字耗时"; width: 96px; } Hint { text: "从请求开始到首个输出 Token 的时间"; horizontal-stretch: 1; } }
-                            HorizontalLayout { spacing: 12px; DataText { text: "整次平均"; width: 96px; } Hint { text: "整次请求的输出 Token 除以总耗时"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "输出速度"; width: 96px; } Hint { text: "整次请求的输出 Token 除以总耗时"; horizontal-stretch: 1; } }
                         }
                     }
                     Card {
