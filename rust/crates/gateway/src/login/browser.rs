@@ -132,6 +132,11 @@ pub trait LoginPage: Send {
             .find(|selector| self.any_visible_text(&[*selector]))
     }
     fn credential_field(&self, selectors: &[&str]) -> CredentialField;
+    /// The unique visible field's trimmed text, or `None` when the field is
+    /// absent, ambiguous, empty or unreadable.
+    fn credential_value(&self, _selectors: &[&str]) -> Option<String> {
+        None
+    }
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String>;
@@ -705,6 +710,14 @@ impl LoginPage for RealPage {
         CredentialField::ProtectedAutofill
     }
 
+    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
+        let expression = credential_value_expression(selectors);
+        match self.evaluate(&expression) {
+            Ok(Value::String(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        }
+    }
+
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget> {
         let expression = one_visible_expression(selectors);
         let value = self.evaluate(&expression).ok()?;
@@ -975,6 +988,22 @@ fn credential_field_expression(selectors: &[&str]) -> String {
          if(found.length>1)return 'ambiguous';\
          var field=found[0];if((field.value||'').trim().length>0)return 'filled';\
          return field.matches(':-webkit-autofill')?'protected':'empty';}})({selectors})"
+    )
+}
+
+fn credential_value_expression(selectors: &[&str]) -> String {
+    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
+    format!(
+        "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
+         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
+         && s.visibility!=='hidden'&&s.display!=='none';}};\
+         var matches=function(sel){{if(sel.indexOf('text=')===0)return [];\
+         var marker=sel.indexOf(':has-text(\"');if(marker>=0)return [];\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
+         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
+         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length!==1)return null;\
+         var value=(found[0].value||'').trim();return value.length?value:null;}})({selectors})"
     )
 }
 

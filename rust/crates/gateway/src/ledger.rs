@@ -276,6 +276,17 @@ pub struct UsageRecord<'a> {
     pub key_id: Option<&'a str>,
     pub request_id: Option<&'a str>,
     pub attribution: &'a str,
+    /// Time from request start to the first streamed byte the client can use.
+    /// `None` for non-stream requests and streams that never committed.
+    pub first_token_ms: Option<u64>,
+}
+
+/// Records the elapsed time to the first substantive streamed output exactly once.
+/// Prelude metadata and terminal-only streams never call this.
+pub fn mark_first_token(started_at: Instant, first_token_ms: &mut Option<u64>) {
+    if first_token_ms.is_none() {
+        *first_token_ms = Some((Instant::now() - started_at).as_millis() as u64);
+    }
 }
 
 /// The append-only share ledger.
@@ -319,7 +330,7 @@ impl Ledger {
         } else {
             USAGE_SOURCE_NONE
         };
-        let row = json!({
+        let mut row = json!({
             "time": Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
             "service": "chat2api",
             "model": record.model,
@@ -343,6 +354,9 @@ impl Ledger {
             "request_id": record.request_id,
             "attribution": record.attribution,
         });
+        if let Some(first_token_ms) = record.first_token_ms {
+            row["first_token_ms"] = json!(first_token_ms);
+        }
         let mut line = serde_json::to_string(&row).unwrap_or_default();
         line.push('\n');
         let result = (|| -> std::io::Result<()> {

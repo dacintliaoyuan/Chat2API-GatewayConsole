@@ -63,6 +63,7 @@ const UNRECOGNIZED_SUBMIT_HINT: &str = "UMPASS 页面未识别到唯一提交按
 const SUBMITTED_HINT: &str = "已自动提交 UMPASS 登录，正在等待结果";
 const UNTRUSTED_ORIGIN_HINT: &str = "UMPASS 页面来源不可信，已停止自动提交";
 const REJECTED_HINT: &str = "上游拒绝了当前账号密码，请人工处理";
+const ACCOUNT_MISMATCH_HINT: &str = "UMPASS 页面账号与已保存账号不一致，请确认使用哪个账号";
 const FORM_READY: &str = "ready";
 const FORM_PROTECTED_AUTOFILL: &str = "protected_autofill";
 const FORM_MISSING_FIELDS: &str = "missing_fields";
@@ -71,6 +72,7 @@ const FORM_SUBMIT_UNRECOGNIZED: &str = "submit_unrecognized";
 const FORM_SUBMITTED: &str = "submitted";
 const FORM_UNTRUSTED_ORIGIN: &str = "untrusted_origin";
 const FORM_REJECTED: &str = "rejected";
+const FORM_ACCOUNT_MISMATCH: &str = "account_mismatch";
 pub const LOGIN_TERMINAL_MANUAL_REASONS: [&str; 4] = [
     "umpass_mfa_required",
     "umpass_prefill_missing",
@@ -2117,6 +2119,30 @@ fn drive_login(
                 matches!(field, CredentialField::Filled | CredentialField::ProtectedAutofill)
             }) {
                 saw_umpass_form = true;
+            }
+            // #125: a browser-prefilled account is never overwritten or
+            // submitted when it differs from the account the app saved. Pause
+            // the automatic round and ask the user which account to use.
+            if !inner.config.um_account.is_empty() {
+                if let Some(page_account) = page.credential_value(&UMPASS_ACCOUNT_SELECTORS) {
+                    if !page_account.eq_ignore_ascii_case(inner.config.um_account.trim()) {
+                        note_form(
+                            inner,
+                            round,
+                            "manual_takeover",
+                            Some(&url),
+                            Some("umpass_account_mismatch"),
+                            FormState {
+                                form: FORM_ACCOUNT_MISMATCH,
+                                detail: Some(ACCOUNT_MISMATCH_HINT),
+                                submit_count: auto_submissions,
+                            },
+                        );
+                        return LoginOutcome::Manual {
+                            reason: "umpass_account_mismatch".to_string(),
+                        };
+                    }
+                }
             }
             // A rejection is only acted on once a UMPASS form was recognized in
             // this round (automatically submitted or completed by the operator).

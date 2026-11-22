@@ -114,8 +114,8 @@ def main() -> int:
         "字段文字必须垂直居中",
     )
     require(
-        "desktop/ui/theme.slint",
-        theme,
+        "desktop/ui/icons.slint",
+        icons,
         r"colorize:\s*root\.tint",
         "AppIcon 必须用 colorize 着色第三方 SVG",
     )

@@ -299,6 +299,7 @@ fn a_rust_ledger_append_is_read_by_python_and_survives_a_rollback() {
         key_id: Some("key-alpha"),
         request_id: Some("rust-append-1"),
         attribution: "verified",
+        first_token_ms: None,
     });
     let bytes = fs::read(&ledger_path).expect("read appended ledger");
     assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);

@@ -44,6 +44,8 @@ use crate::responses::handle_responses;
 use crate::watch::WatchStatus;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const DESKTOP_DRAIN_LEASE: Duration = Duration::from_secs(8);
+const DESKTOP_PORT_SWITCH_PATH: &str = "/admin/desktop/port-switch";
 /// Python `AUTH_WATCH_INTERVAL_S`: the periodic credential probe interval.
 const AUTH_WATCH_INTERVAL: Duration = Duration::from_secs(300);
 /// Python `AUTH_WATCH_MAX_INTERVAL_S`: the rejected-credential backoff ceiling.
@@ -70,6 +72,60 @@ pub struct AppState {
     /// Set by `POST /admin/shutdown`; the process entry waits on it and then
     /// performs the graceful stop (listener, login browser, instance channel).
     pub shutdown_request: Arc<AtomicBool>,
+    /// The desktop-only port-switch gate; `None` outside `--desktop-instance`.
+    ///
+    /// Handler tests construct `AppState` directly and pass `None`; the gateway
+    /// start path derives the gate from `config.desktop_instance`.
+    #[doc(hidden)]
+    pub desktop_drain: Option<Mutex<DesktopDrain>>,
+}
+
+#[doc(hidden)]
+#[derive(Default)]
+pub struct DesktopDrain {
+    active: usize,
+    lease: Option<DrainLease>,
+    stopping: bool,
+}
+
+struct DrainLease {
+    owner: String,
+    expires_at: Instant,
+}
+
+impl DesktopDrain {
+    fn expire_lease(&mut self, now: Instant) {
+        if self
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.expires_at <= now)
+        {
+            self.lease = None;
+        }
+    }
+}
+
+/// Counts a request from admission through its last response write, including
+/// streamed output. An idle keep-alive connection does not own an admission.
+struct DesktopRequest<'a>(&'a Mutex<DesktopDrain>);
+
+impl<'a> DesktopRequest<'a> {
+    fn admit(drain: &'a Mutex<DesktopDrain>) -> Option<Self> {
+        let mut state = drain.lock().unwrap_or_else(|error| error.into_inner());
+        state.expire_lease(Instant::now());
+        if state.stopping || state.lease.is_some() {
+            return None;
+        }
+        state.active += 1;
+        Some(Self(drain))
+    }
+}
+
+impl Drop for DesktopRequest<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        state.active -= 1;
+    }
 }
 
 /// A started gateway server.
@@ -213,6 +269,7 @@ impl GatewayServer {
         let require_local_api_key = !local_api_key.is_empty();
         let ledger = Arc::new(Ledger::new(config.usage_log.clone()));
         let event_log = Arc::new(EventLog::new(config.service_log.clone()));
+        let desktop_drain = config.desktop_instance.then(Mutex::<DesktopDrain>::default);
         let state = Arc::new(AppState {
             config: config.clone(),
             proxy,
@@ -226,6 +283,7 @@ impl GatewayServer {
             login,
             watch,
             shutdown_request: Arc::new(AtomicBool::new(false)),
+            desktop_drain,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -305,6 +363,9 @@ impl ServerHandle {
             if let Some(login) = &self.state.login {
                 login.shutdown();
             }
+        }
+        if let Some(login) = &self.state.login {
+            login.shutdown();
         }
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();
@@ -460,7 +521,9 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
                 "/v1/models" | "/v1/chat/completions" | "/v1/messages" | "/v1/responses"
             );
         if head.method != "OPTIONS" && !share_path_is_hidden {
-            if let Some(allow) = allowed_methods(&path) {
+            let desktop_allow = (path == DESKTOP_PORT_SWITCH_PATH && state.desktop_drain.is_some())
+                .then_some("POST");
+            if let Some(allow) = allowed_methods(&path).or(desktop_allow) {
                 if !method_allowed(allow, &head.method) {
                     let mut response =
                         GatewayError::method_not_allowed().response_for(error_protocol(&path));
@@ -475,6 +538,34 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             }
         }
         let request_id = head.request_id.clone();
+        let _desktop_request = match &state.desktop_drain {
+            Some(drain)
+                if head.method != "OPTIONS"
+                    && (path.starts_with("/v1/") || path.starts_with("/api/")) =>
+            {
+                match DesktopRequest::admit(drain) {
+                    Some(request) => Some(request),
+                    None => {
+                        let mut response = GatewayError::new(
+                            503,
+                            "Desktop gateway is preparing to switch ports",
+                            "desktop_port_switch_in_progress",
+                        )
+                        .with_retry_after("1")
+                        .with_should_retry(true)
+                        .response_for(error_protocol(&path))
+                        .closing();
+                        if let Some(origin) = cors_allow_origin(&state, &head.headers) {
+                            response = response.with_header("Access-Control-Allow-Origin", origin);
+                        }
+                        let response = with_error_headers(response, &request_id);
+                        let _ = write_response(&mut stream, &response);
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
         let max_body = body_read_cap(&state, &head);
         let _ = stream.set_read_timeout(Some(state.config.body_read_timeout));
         let body_result = read_request_body(&mut stream, head, max_body);
@@ -506,7 +597,11 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
         let (close, write_ok) = match outcome {
             RouteOutcome::Response(response) => {
                 let close = response.close;
-                (close, write_response(&mut stream, &response).is_ok())
+                let written = write_response(&mut stream, &response).is_ok();
+                if path == DESKTOP_PORT_SWITCH_PATH && response.status == 202 {
+                    state.shutdown_request.store(true, Ordering::SeqCst);
+                }
+                (close, written)
             }
             RouteOutcome::Written { close } => (close, true),
         };
@@ -1006,6 +1101,7 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
 fn handle_post(state: &AppState, request: &Request) -> Response {
     let path = request.path();
     match path {
+        DESKTOP_PORT_SWITCH_PATH => handle_desktop_port_switch(state, request),
         "/admin/share/revoke" => {
             let Some(gate) = &state.gate else {
                 return GatewayError::new(
@@ -1106,6 +1202,57 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             }
         }
         _ => GatewayError::unknown_path(path).response(),
+    }
+}
+
+fn handle_desktop_port_switch(state: &AppState, request: &Request) -> Response {
+    let Some(drain) = &state.desktop_drain else {
+        return GatewayError::unknown_path(request.path()).response();
+    };
+    if let Err(error) = control_allowed(state, request) {
+        return error.response();
+    }
+    let Some(owner) = request
+        .headers
+        .get("X-Desktop-Port-Switch")
+        .filter(|value| value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    else {
+        return GatewayError::invalid_request("Invalid desktop port switch lease").response();
+    };
+    let now = Instant::now();
+    let mut drain = drain.lock().unwrap_or_else(|error| error.into_inner());
+    drain.expire_lease(now);
+    let owns_lease = drain
+        .lease
+        .as_ref()
+        .is_some_and(|lease| lease.owner == owner);
+    let other_owner = drain.lease.is_some() && !owns_lease;
+    let conflict = || {
+        GatewayError::new(
+            409,
+            "Desktop port switch lease is unavailable",
+            "desktop_drain_conflict",
+        )
+        .response()
+    };
+    match request.headers.get("X-Desktop-Port-Switch-Action") {
+        Some("wait") if !other_owner && !drain.stopping => {
+            drain.lease = Some(DrainLease {
+                owner: owner.to_string(),
+                expires_at: now + DESKTOP_DRAIN_LEASE,
+            });
+            Response::json(200, &json!({"in_flight": drain.active}))
+        }
+        Some("cancel") if !other_owner && !drain.stopping => {
+            drain.lease = None;
+            Response::json(200, &json!({"status": "accepting"}))
+        }
+        Some("commit") if owns_lease && !drain.stopping && drain.active == 0 => {
+            drain.stopping = true;
+            Response::json(202, &json!({"status": "stopping"})).closing()
+        }
+        Some("wait" | "cancel" | "commit") => conflict(),
+        _ => GatewayError::invalid_request("Invalid desktop port switch action").response(),
     }
 }
 

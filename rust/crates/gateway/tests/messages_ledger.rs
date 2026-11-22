@@ -13,8 +13,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use support::{
-    client_request, read_jsonl, start_chat_gateway, wait_jsonl, ChatAttempt, ChatChunk, ChatStub,
-    ClientRequest, StreamingClient, TempDir, SHARE_SECRET,
+    client_request, parse_raw_response, read_jsonl, start_chat_gateway, wait_jsonl, ChatAttempt,
+    ChatChunk, ChatStub, ClientRequest, StreamingClient, TempDir, SHARE_SECRET,
 };
 
 fn request(stream: bool) -> ClientRequest {
@@ -219,6 +219,10 @@ fn a_stream_row_translates_the_anthropic_usage_events() {
     assert_eq!(row["estimated"], json!(false));
     assert_eq!(row["usage_source"], json!("upstream"));
     assert_eq!(row["protocol"], json!("messages"));
+    assert!(
+        row["first_token_ms"].as_u64().is_some(),
+        "a stream row records the first token time"
+    );
     assert_verified_attribution(row);
 }
 
@@ -394,4 +398,152 @@ fn a_ledger_write_failure_never_blocks_the_proxy() {
     assert_eq!(response.json()["type"], json!("message"));
     assert!(gateway.server.state().ledger.disabled());
     assert!(read_jsonl(&blocker.join("usage.jsonl")).is_empty());
+}
+
+#[test]
+fn a_terminal_only_messages_stream_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-messages-terminal-only-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            sse_event(
+                "message_start",
+                json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1", "type": "message", "role": "assistant",
+                        "model": "claude-x", "content": [], "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": {"input_tokens": 7, "output_tokens": 0},
+                    },
+                }),
+            ),
+            sse_event(
+                "message_delta",
+                json!({"type": "message_delta",
+                       "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+                       "usage": {"output_tokens": 0}}),
+            ),
+            sse_event("message_stop", json!({"type": "message_stop"})),
+        ]
+        .into_iter()
+        .map(ChatChunk::now)
+        .collect(),
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream messages");
+    let _ = client
+        .read_all(Duration::from_secs(5))
+        .expect("read stream");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "a terminal-only stream never produced substantive output"
+    );
+}
+
+#[test]
+fn a_tool_use_prelude_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-messages-tool-prelude-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            sse_event(
+                "message_start",
+                json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1", "type": "message", "role": "assistant",
+                        "model": "claude-x", "content": [], "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": {"input_tokens": 7, "output_tokens": 0},
+                    },
+                }),
+            ),
+            sse_event(
+                "content_block_start",
+                json!({"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "tool_use", "id": "toolu_1",
+                                        "name": "lookup", "input": {}}}),
+            ),
+            sse_event("message_stop", json!({"type": "message_stop"})),
+        ]
+        .into_iter()
+        .map(ChatChunk::now)
+        .collect(),
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream messages");
+    let _ = client
+        .read_all(Duration::from_secs(5))
+        .expect("read stream");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "a tool_use header without arguments is prelude, not substantive output"
+    );
+}
+
+#[test]
+fn a_messages_prelude_overflow_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-messages-prelude-overflow-");
+    let stub = ChatStub::start();
+    let mut chunks = vec![sse_event(
+        "message_start",
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_1", "type": "message", "role": "assistant",
+                "model": "claude-x", "content": [], "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {"input_tokens": 7, "output_tokens": 0},
+            },
+        }),
+    )];
+    // Ping events carry no substantive output; enough of them overflow the
+    // 64 KiB prelude before any text delta arrives.
+    let padding = "x".repeat(10_000);
+    for _ in 0..8 {
+        chunks.push(sse_event(
+            "ping",
+            json!({"type": "ping", "padding": padding}),
+        ));
+    }
+    stub.push(ChatAttempt::Sse {
+        chunks: chunks.into_iter().map(ChatChunk::now).collect(),
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream messages");
+    let raw = client.read_all(Duration::from_secs(5)).expect("read stream");
+    let (status, _, _) = parse_raw_response(&raw);
+    assert_eq!(status, 200, "prelude overflow commits the 200");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("upstream_eof_without_event"));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "prelude overflow never produced substantive output"
+    );
 }

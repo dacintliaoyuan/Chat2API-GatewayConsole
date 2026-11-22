@@ -1,7 +1,9 @@
 use std::cell::RefCell;
 
 use serde_json::{json, Value};
-use um_desktop::overview::{read_overview, status_line, Card, Overview, Probe, Tone};
+use um_desktop::overview::{
+    read_overview, status_line, Card, Overview, OverviewPoller, Probe, Tone,
+};
 
 struct FakeProbe {
     gateway: Result<Value, String>,
@@ -180,9 +182,54 @@ fn reads_only_the_instance_gateway_health_route() {
 }
 
 #[test]
+fn gateway_um_login_and_upstream_are_reported_independently() {
+    let overview = read(Ok(gateway_health(
+        json!({"state": "missing", "label": "未配置"}),
+        json!({"state": "ok", "upstream_status": 200}),
+    )));
+    assert_eq!(overview.gateway.value, "运行中");
+    assert_eq!(overview.account_label, "尚未登录");
+    assert_eq!(overview.upstream.value, "可达");
+    assert_eq!(overview.upstream.tone, Tone::Good);
+}
+
+#[test]
 fn status_line_lists_failures_instead_of_claiming_normal() {
     let overview = read(Err("本实例网关: timeout".to_string()));
     let line = status_line(&overview);
     assert!(line.contains("本实例网关"));
     assert!(!line.contains("状态正常"));
+}
+
+#[test]
+fn the_overview_reader_reads_only_on_a_new_epoch_and_after_resume() {
+    let mut poller = OverviewPoller::new();
+    assert!(
+        poller.should_read(false, 0),
+        "the initial read still loads the cards"
+    );
+    assert!(
+        !poller.should_read(false, 0),
+        "the reader never polls on its own once the first read landed"
+    );
+    assert!(
+        !poller.should_read(true, 0),
+        "a hidden or minimized window pauses the reader"
+    );
+    assert!(
+        !poller.should_read(true, 1),
+        "an epoch queued while hidden must not apply overview data"
+    );
+    assert!(
+        poller.should_read(false, 1),
+        "showing the window reads immediately even if the epoch already moved"
+    );
+    assert!(
+        !poller.should_read(false, 1),
+        "the resume read happens once"
+    );
+    assert!(
+        poller.should_read(false, 2),
+        "a manual refresh or an auto-refresh tick reads once"
+    );
 }

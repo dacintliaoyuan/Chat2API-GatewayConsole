@@ -322,6 +322,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
                 context.state.config.desktop_instance,
             ),
             attribution: context.attribution,
+            first_token_ms: None,
         });
         if data
             .get("choices")
@@ -371,6 +372,7 @@ fn record_desktop_failure(context: &ChatContext<'_>, stream: bool, result: &Chat
         key_id: context.key_id,
         request_id: Some(context.http_request_id),
         attribution: context.attribution,
+        first_token_ms: None,
     });
 }
 
@@ -502,6 +504,7 @@ fn forward_stream_inner(
                             context.state.config.desktop_instance,
                         ),
                         attribution: context.attribution,
+                        first_token_ms: None,
                     });
                 }
                 if !retry::sleep_with_deadline(plan.delay, context.deadline) {
@@ -530,6 +533,7 @@ fn forward_stream_inner(
 
 struct SseState {
     committed: bool,
+    first_token_ms: Option<u64>,
     staged: Vec<u8>,
     event_raw: Vec<u8>,
     event_lines: Vec<String>,
@@ -548,6 +552,7 @@ impl SseState {
     fn new() -> Self {
         Self {
             committed: false,
+            first_token_ms: None,
             staged: Vec::new(),
             event_raw: Vec::new(),
             event_lines: Vec::new(),
@@ -566,6 +571,7 @@ impl SseState {
 
 struct StreamOutcome {
     committed: bool,
+    first_token_ms: Option<u64>,
     status: StreamStatus,
     usage: Option<Value>,
     completion_chars: u64,
@@ -702,6 +708,7 @@ fn consume_stream(
     drop(reader);
     StreamOutcome {
         committed: state.committed,
+        first_token_ms: state.first_token_ms,
         status: state.status,
         usage: state.usage,
         completion_chars: state.completion_chars,
@@ -837,7 +844,11 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
         return false;
     }
     let staged = std::mem::take(&mut state.staged);
-    write_chunk(stream, &staged).is_ok()
+    if write_chunk(stream, &staged).is_err() {
+        return false;
+    }
+    crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
+    true
 }
 
 fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
@@ -885,6 +896,7 @@ fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
             context.state.config.desktop_instance,
         ),
         attribution: context.attribution,
+        first_token_ms: outcome.first_token_ms,
     });
 }
 

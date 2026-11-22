@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use um_desktop::config::{
-    config_path, load_from, model_api_bind, parse_config, save_to, validate_port, DesktopConfig,
-    LoadOutcome, DEFAULT_MODEL_API_PORT, MODEL_API_HOST,
+    apply_theme, config_path, load_from, model_api_bind, parse_config, save_to, validate_port,
+    DesktopConfig, LoadOutcome, ThemeMode, DEFAULT_MODEL_API_PORT, MODEL_API_HOST,
 };
 
 mod common;
@@ -58,6 +58,68 @@ fn saving_again_replaces_the_previous_port() {
             model_api_port: 7998, ..DesktopConfig::default()
         })
     );
+}
+
+#[test]
+fn missing_theme_is_a_system_theme_from_older_configs() {
+    let config = parse_config(r#"{"version":1,"model_api_port":7999}"#).expect("old config");
+    assert_eq!(config.theme, ThemeMode::System);
+}
+
+#[test]
+fn invalid_theme_values_fall_back_to_system() {
+    for text in [
+        r#"{"version":1,"model_api_port":7999,"theme":"sepia"}"#,
+        r#"{"version":1,"model_api_port":7999,"theme":3}"#,
+        r#"{"version":1,"model_api_port":7999,"theme":null}"#,
+    ] {
+        let config = parse_config(text).expect("theme is optional");
+        assert_eq!(config.theme, ThemeMode::System, "{text}");
+    }
+}
+
+#[test]
+fn save_then_load_round_trips_the_theme() {
+    let dir = TempDir::new("config-theme-roundtrip");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    save_to(&path, &DesktopConfig { theme: ThemeMode::Dark, ..DesktopConfig::default() })
+        .expect("save theme");
+    let text = std::fs::read_to_string(&path).expect("read config");
+    assert!(text.contains(r#""theme": "dark""#), "{text}");
+    assert_eq!(
+        load_from(&path),
+        LoadOutcome::Loaded(DesktopConfig {
+            theme: ThemeMode::Dark, ..DesktopConfig::default()
+        })
+    );
+}
+
+#[test]
+fn applying_a_theme_persists_it() {
+    let dir = TempDir::new("config-theme-apply");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let mut config = DesktopConfig::default();
+    apply_theme(Some(&path), &mut config, ThemeMode::Light).expect("save theme");
+    assert_eq!(config.theme, ThemeMode::Light);
+    assert_eq!(
+        load_from(&path),
+        LoadOutcome::Loaded(DesktopConfig {
+            theme: ThemeMode::Light, ..DesktopConfig::default()
+        })
+    );
+}
+
+#[test]
+fn failed_theme_save_keeps_the_new_mode_in_memory() {
+    let dir = TempDir::new("config-theme-save-fail");
+    let blocker = dir.path().join("blocked");
+    std::fs::write(&blocker, "not a directory").expect("write blocker");
+    let path = blocker.join("desktop.json");
+    let mut config = DesktopConfig::default();
+    let error = apply_theme(Some(&path), &mut config, ThemeMode::Dark).expect_err("save must fail");
+    assert!(error.contains("主题已切换，但保存失败"), "{error}");
+    assert_eq!(config.theme, ThemeMode::Dark);
+    assert!(!path.exists());
 }
 
 #[test]

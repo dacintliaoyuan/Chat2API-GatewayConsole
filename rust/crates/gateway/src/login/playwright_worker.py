@@ -110,6 +110,8 @@ class BrowserPage:
         if field is None:
             if op == "field":
                 return "missing"
+            if op == "value":
+                return None
             raise ValueError("login field absent")
         try:
             if op == "fill":

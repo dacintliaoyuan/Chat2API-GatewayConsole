@@ -1,0 +1,37 @@
+// Third-party Lucide icons (ISC, v0.468.0). The SVG sources live in
+// `desktop/ui/icons/`; `AppIcon` only maps a kind to one file and tints it.
+export component AppIcon inherits Image {
+    in property <string> kind;
+    in property <length> size: 16px;
+    in property <color> tint: #000;
+    // Layouts size children from their min/preferred/max size; pin all three so
+    // an icon keeps the requested square inside a button or a row.
+    min-width: root.size;
+    max-width: root.size;
+    preferred-width: root.size;
+    min-height: root.size;
+    max-height: root.size;
+    preferred-height: root.size;
+    image-fit: contain;
+    colorize: root.tint;
+    source: root.kind == "search" ? @image-url("icons/search.svg")
+        : root.kind == "refresh" ? @image-url("icons/refresh-cw.svg")
+        : root.kind == "chevron-left" ? @image-url("icons/chevron-left.svg")
+        : root.kind == "chevron-right" ? @image-url("icons/chevron-right.svg")
+        : root.kind == "chevron-down" ? @image-url("icons/chevron-down.svg")
+        : root.kind == "arrow-right" ? @image-url("icons/arrow-right.svg")
+        : root.kind == "pause" ? @image-url("icons/pause.svg")
+        : root.kind == "play" ? @image-url("icons/play.svg")
+        : root.kind == "copy" ? @image-url("icons/copy.svg")
+        : root.kind == "close" ? @image-url("icons/x.svg")
+        : root.kind == "trash" ? @image-url("icons/trash-2.svg")
+        : root.kind == "edit" ? @image-url("icons/pencil.svg")
+        : root.kind == "swap" ? @image-url("icons/arrow-left-right.svg")
+        : root.kind == "check" ? @image-url("icons/check.svg")
+        : root.kind == "power" ? @image-url("icons/power.svg")
+        : root.kind == "settings" ? @image-url("icons/settings.svg")
+        : root.kind == "dashboard" ? @image-url("icons/layout-dashboard.svg")
+        : root.kind == "scroll-text" ? @image-url("icons/scroll-text.svg")
+        : root.kind == "help" ? @image-url("icons/circle-help.svg")
+        : @image-url("icons/search.svg");
+}

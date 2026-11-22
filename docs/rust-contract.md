@@ -66,7 +66,7 @@ systemd
 ### 2.3 Rust 二进制启动模式
 
 - Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8000/8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
-- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
+- production 模式必须显式选择 `--mode production`：默认只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；加 `--desktop-instance` 时允许任意未保留的 loopback 端口（见 §2.7）。非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
 - 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：7998/7999/8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - `--mode worker` 与 `--mode ingress` 是本机 8000 的拆分形态，见 §2.7；云端 8002/8003 仍用单进程 production 模式。
@@ -371,6 +371,32 @@ systemd
     云端 8002/8003、桌面 App 壳；PowerShell 测试用替换的进程表、监听快照、
     HTTP 与 `Start-Process` 边界，不启动真实服务。非 Windows 上 ingress 跳过
     worker PID 的完整路径校验。
+### 2.8 桌面实例网关（#122/#132）
+
+- 桌面 App 只监督唯一一个网关子进程：按 `UM_DESKTOP_GATEWAY_BIN`、同目录
+  `um-gateway.exe`、祖先目录 `rust/target/release/um-gateway-candidate.exe` 的顺序
+  解析二进制，以 `--mode production --desktop-instance --port <port> --role local`
+  启动；不启动第二套网关，也不监听 8000/8001。默认端口 7999，隔离测试实例 7998。
+- `--desktop-instance` 把 production 绑定限制在 loopback，并要求 local 角色、控制令牌
+  文件和无 share 配置；除 0/5173/5901/8000–8009/8090–8119/8300–8399/18096 外
+  允许任意 loopback 端口。没有该标志时 production 仍只允许 §2.3 列出的固定端口。
+- 端口切换只使用桌面实例的 `POST /admin/desktop/port-switch`，请求头
+  `X-Admin-Control`、`X-Desktop-Port-Switch`（32 位十六进制租约）与
+  `X-Desktop-Port-Switch-Action: wait|cancel|commit`：
+  - `wait` 返回 200 `{"in_flight": n}` 并续租 8 秒；其他租约、或 `commit` 后返回 409。
+  - `cancel` 返回 200 `{"status": "accepting"}` 并恢复准入；租约在 `wait` 后过期
+    同样恢复准入。
+  - `commit` 只接受当前租约且 `in_flight == 0`，返回 202
+    `{"status": "stopping"}` 后进程立即停止监听并退出；未 `commit` 前 `/health`
+    保持 200。
+- 租约存在期间，`/v1/*` 与 `/api/*` 的新请求返回 503
+  `desktop_port_switch_in_progress`（`Retry-After: 1`、`X-Should-Retry: true`）；
+  已准入的 SSE 请求正常收尾，`/health` 与控制面不受准入门影响。
+- `POST /admin/shutdown` 不等待在途请求：返回 202 后进程立即退出，客户端流被中断；
+  桌面 App 托盘的「退出并停止网关」走这条路径。
+- 切换端口先拒绝新请求并等待在途请求结束，再停止旧监听、保存新端口、核验新端口
+  `/health` 200；端口被占用、新端口启动失败或等待超时都显示原因，并保留或恢复原端口
+  服务。等待期间点托盘退出会取消切换、不保存新端口，并立即停止旧网关。
 
 ## 3. 云端 idle RSS 基线
 
@@ -540,7 +566,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPLAY`/`WAYLAND_DISPLAY`；只有显式 `/admin/auth/login` 的 `{"visible": true}`，或按需 manual display 标记文件 `CHAT2API_LOGIN_DISPLAY_FILE`（默认 `/run/um-share/login-display.env`）完整有效时，才打开可见窗口。没有可用显示时的显式 visible 返回 `visible_login_unavailable`，不静默降级。同一 profile 目录由 `login-browser.lock` 的 OS 锁（POSIX `flock`/Windows `LockFileEx`）保证单实例；锁被占用时本轮以 `login_already_running` 结束且不打开第二个浏览器。登录成功按 Python 相同格式原子写 `CHAT2API_TOKEN_FILE`（默认 `/var/lib/um-share-console/share-backend/token.json`），并更新进程内 bearer、清空模型缓存。上游请求与凭据探测优先使用该文件的 `api_key`，没有或已被上游 401/403 拒绝时回退 JWT bearer；登录成功保存新 token 时保留已有的 `api_key`，不覆盖。可重试的 `timeout`/`attempts_exhausted` 终态按 `CHAT2API_RECOVERY_RETRY_INTERVAL_S`（默认 1800，60..86400）与 `CHAT2API_RECOVERY_RETRY_MAX_PER_DAY`（默认 3，0..24）自动重开轮次；人工接管、拒绝、取消和 `BrowserDisabled` 不重开。
 
-`/admin/auth/status` 返回 `state`（`valid`/`needs_login`/`logging_in`/`failed`/`cancelled`）、`label`（认证有效/需要登录/登录中/登录失败/已取消登录）、`error`、`primary`、`evidence`、`login`、`gate`、`watch`、`recovery`、`login_window_deadline_epoch` 与 `login_window_s`。`login` 记录当前轮次的 `phase`/`origin`/`manual_reason`/`detail`/`form` 与自动提交计数 `submit_count`；`recovery` 额外记录上一轮结束时的 `last_form`/`last_submit_count`，以及 `retry_scheduled`/`retry_count`/`next_attempt_epoch`；`CHAT2API_AUTH_STATE_FILE` 的顶层 `upstream_401_summary` 是脱敏后的 401/403 body 文本；`/admin/auth/status` 的 `evidence` 不包含该摘要。UMPASS 自动提交只在可信 HTTPS 页面、账号与密码栏就绪且提交按钮唯一时发生一次；受保护预填保留可见窗口并返回操作提示，字段未就绪、提交按钮不唯一、不可信页面和上游明确拒绝分别记录且不再自动提交旧凭据。`/admin/auth/verify` 是 GET-only 单次 `/api/models` 核验，不改认证状态与模型缓存，返回 `verify`/`reason`/`upstream_status`/`checked_epoch`。`/admin/auth/login` 接受可选 `{"visible": bool}` 并返回 202 状态快照；`/admin/auth/cancel` 返回 200 最终状态，取消本轮但服务继续运行，普通请求不会自动重开。可见窗口关闭按操作员取消记为 `cancelled`（`error` 为 `window_closed`）；headless 窗口关闭是可重开的 transient。人工接管原因保留 `manual_takeover_required:<reason>`（`umpass_mfa_required`、`umpass_prefill_missing`、`unrecognized_page`），Duo 推送等待不误判为人工接管。`--no-browser` 的显式登录与 401 恢复都返回 `BrowserDisabled`。认证等待仍按 #63 的 30 秒预算、128 并发等待者与每秒复查；滚动 900 秒内 3 次全局登录启动上限由登录执行器统一执行，显式登录同样受限。测试通过 `GatewayServer::start_with_login` 注入 fake browser factory 与 fake credential probe，不打开真实浏览器；真实 UM 登录与 MFA 由维护者验收。
+`/admin/auth/status` 返回 `state`（`valid`/`needs_login`/`logging_in`/`failed`/`cancelled`）、`label`（认证有效/需要登录/登录中/登录失败/已取消登录）、`error`、`primary`、`evidence`、`login`、`gate`、`watch`、`recovery`、`login_window_deadline_epoch` 与 `login_window_s`。`login` 记录当前轮次的 `phase`/`origin`/`manual_reason`/`detail`/`form` 与自动提交计数 `submit_count`；`recovery` 额外记录上一轮结束时的 `last_form`/`last_submit_count`，以及 `retry_scheduled`/`retry_count`/`next_attempt_epoch`；`CHAT2API_AUTH_STATE_FILE` 的顶层 `upstream_401_summary` 是脱敏后的 401/403 body 文本；`/admin/auth/status` 的 `evidence` 不包含该摘要。UMPASS 自动提交只在可信 HTTPS 页面、账号与密码栏就绪且提交按钮唯一时发生一次；页面已预填账号与已保存账号不一致时暂停并返回 `umpass_account_mismatch`，不覆盖或提交页面账号；受保护预填保留可见窗口并返回操作提示，字段未就绪、提交按钮不唯一、不可信页面和上游明确拒绝分别记录且不再自动提交旧凭据。`/admin/auth/verify` 是 GET-only 单次 `/api/models` 核验，不改认证状态与模型缓存，返回 `verify`/`reason`/`upstream_status`/`checked_epoch`。`/admin/auth/login` 接受可选 `{"visible": bool}` 并返回 202 状态快照；`/admin/auth/cancel` 返回 200 最终状态，取消本轮但服务继续运行，普通请求不会自动重开。可见窗口关闭按操作员取消记为 `cancelled`（`error` 为 `window_closed`）；headless 窗口关闭是可重开的 transient。人工接管原因保留 `manual_takeover_required:<reason>`（`umpass_mfa_required`、`umpass_prefill_missing`、`unrecognized_page`），Duo 推送等待不误判为人工接管。`--no-browser` 的显式登录与 401 恢复都返回 `BrowserDisabled`。认证等待仍按 #63 的 30 秒预算、128 并发等待者与每秒复查；滚动 900 秒内 3 次全局登录启动上限由登录执行器统一执行，显式登录同样受限。测试通过 `GatewayServer::start_with_login` 注入 fake browser factory 与 fake credential probe，不打开真实浏览器；真实 UM 登录与 MFA 由维护者验收。
 
 ### 5.5 副作用
 

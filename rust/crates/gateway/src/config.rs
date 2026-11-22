@@ -727,13 +727,9 @@ impl GatewayConfig {
     /// Fail closed before binding a socket.
     pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
         if !is_loopback_host(&self.bind_host) {
-            let label = if self.run_mode == RunMode::Gateway {
-                self.bind_mode().label()
-            } else {
-                self.run_mode.label()
-            };
             return Err(ConfigError(format!(
-                "{label} bind host is not loopback: {}",
+                "{} bind host is not loopback: {}",
+                self.bind_mode().label(),
                 self.bind_host
             )));
         }
@@ -757,45 +753,67 @@ impl GatewayConfig {
                         .to_string(),
                 ));
             }
-            RunMode::Gateway if self.candidate => {
-                if self.bind_port != 0 {
-                    return Err(ConfigError(format!(
-                        "candidate must bind an ephemeral loopback port, got {}",
-                        self.bind_port
-                    )));
-                }
-                if governed_ports().contains(&self.bind_port) {
-                    return Err(ConfigError(format!(
-                        "refusing to bind governed production port {}",
-                        self.bind_port
-                    )));
-                }
-            }
             RunMode::Gateway => {
-                if !production_ports().contains(&self.bind_port) {
-                    return Err(ConfigError(format!(
-                        "production must bind one of 7998, 7999, 8000, 8002 or 8003 on loopback, got {}",
-                        self.bind_port
-                    )));
+                if self.desktop_instance
+                    && (self.role != Role::Local
+                        || self.share_config.is_some()
+                        || self.control_token_file.is_none())
+                {
+                    return Err(ConfigError(
+                        "desktop instances require the local role, a control token file, and no share configuration".to_string(),
+                    ));
                 }
-                // #75 user story 17: the local role assembles the general `/api/*`
-                // surface, so it may never run on the cloud 8002/8003 pair; the
-                // cloud role keeps that surface unassembled on 8002/8003 only.
-                let role_allowed = match self.role {
-                    Role::Local => matches!(self.bind_port, 7998 | 7999 | 8000),
-                    Role::Cloud => matches!(self.bind_port, 8002 | 8003),
-                };
-                if !role_allowed {
-                    let allowed = match self.role {
-                        Role::Local => "7998, 7999 or 8000",
-                        Role::Cloud => "8002 or 8003",
+                if self.candidate {
+                    if self.bind_port != 0 {
+                        return Err(ConfigError(format!(
+                            "candidate must bind an ephemeral loopback port, got {}",
+                            self.bind_port
+                        )));
+                    }
+                    if governed_ports().contains(&self.bind_port) {
+                        return Err(ConfigError(format!(
+                            "refusing to bind governed production port {}",
+                            self.bind_port
+                        )));
+                    }
+                } else if self.desktop_instance {
+                    // Keep the owned listener outside the shared repository segments
+                    // and their legacy aliases. 7998/7999 are already desktop ports.
+                    if matches!(
+                        self.bind_port,
+                        0 | 5173 | 5901 | 8000..=8009 | 8090..=8119 | 8300..=8399 | 18096
+                    ) {
+                        return Err(ConfigError(format!(
+                            "desktop production port is reserved: {}",
+                            self.bind_port
+                        )));
+                    }
+                } else {
+                    if !production_ports().contains(&self.bind_port) {
+                        return Err(ConfigError(format!(
+                            "production must bind one of 7998, 7999, 8000, 8002 or 8003 on loopback, got {}",
+                            self.bind_port
+                        )));
+                    }
+                    // #75 user story 17: the local role assembles the general `/api/*`
+                    // surface, so it may never run on the cloud 8002/8003 pair; the
+                    // cloud role keeps that surface unassembled on 8002/8003 only.
+                    let role_allowed = match self.role {
+                        Role::Local => matches!(self.bind_port, 7998 | 7999 | 8000),
+                        Role::Cloud => matches!(self.bind_port, 8002 | 8003),
                     };
-                    return Err(ConfigError(format!(
-                        "production role {} must bind {}, got {}",
-                        self.role.as_str(),
-                        allowed,
-                        self.bind_port
-                    )));
+                    if !role_allowed {
+                        let allowed = match self.role {
+                            Role::Local => "7998, 7999 or 8000",
+                            Role::Cloud => "8002 or 8003",
+                        };
+                        return Err(ConfigError(format!(
+                            "production role {} must bind {}, got {}",
+                            self.role.as_str(),
+                            allowed,
+                            self.bind_port
+                        )));
+                    }
                 }
             }
         }

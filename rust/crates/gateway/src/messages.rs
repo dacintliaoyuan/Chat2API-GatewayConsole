@@ -196,6 +196,16 @@ fn record_usage(
     usage: Option<&Value>,
     output_estimate: u64,
 ) {
+    record_usage_with_first_token(context, status, usage, output_estimate, None);
+}
+
+fn record_usage_with_first_token(
+    context: &MessagesContext<'_>,
+    status: &str,
+    usage: Option<&Value>,
+    output_estimate: u64,
+    first_token_ms: Option<u64>,
+) {
     context.state.ledger.record(UsageRecord {
         model: context.model,
         stream: context.client_stream,
@@ -212,6 +222,7 @@ fn record_usage(
             context.state.config.desktop_instance,
         ),
         attribution: context.attribution,
+        first_token_ms,
     });
 }
 
@@ -516,16 +527,18 @@ fn record_stream_usage(context: &MessagesContext<'_>, outcome: &MessagesStreamOu
             outcome.exception.map(str::to_string),
         );
     }
-    record_usage(
+    record_usage_with_first_token(
         context,
         outcome.status.reason(),
         outcome.usage.as_ref(),
         outcome.output_chars / 4,
+        outcome.first_token_ms,
     );
 }
 
 struct MessagesSseState {
     committed: bool,
+    first_token_ms: Option<u64>,
     staged: Vec<u8>,
     event_lines: Vec<String>,
     saw_terminal: bool,
@@ -538,6 +551,7 @@ impl MessagesSseState {
     fn new() -> Self {
         Self {
             committed: false,
+            first_token_ms: None,
             staged: Vec::new(),
             event_lines: Vec::new(),
             saw_terminal: false,
@@ -601,6 +615,7 @@ impl AnthropicUsageAccumulator {
 
 struct MessagesStreamOutcome {
     committed: bool,
+    first_token_ms: Option<u64>,
     status: MessagesStreamStatus,
     usage: Option<Value>,
     output_chars: u64,
@@ -709,6 +724,7 @@ fn consume_stream(
     drop(reader);
     MessagesStreamOutcome {
         committed: state.committed,
+        first_token_ms: state.first_token_ms,
         status: state.status,
         usage: state.usage.usage(),
         output_chars: state.usage.output_chars,
@@ -768,14 +784,15 @@ fn process_event(
                 tool_action = true;
             }
         }
-        if event
-            .get("content_block")
-            .and_then(Value::as_object)
-            .and_then(|block| block.get("type"))
-            .and_then(Value::as_str)
-            == Some("tool_use")
-        {
-            tool_action = true;
+        if let Some(block) = event.get("content_block").and_then(Value::as_object) {
+            if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && block
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| !input.is_empty())
+            {
+                tool_action = true;
+            }
         }
         let event_type = event.get("type").and_then(Value::as_str);
         terminal = matches!(event_type, Some("message_stop" | "error"));
@@ -788,6 +805,21 @@ fn process_event(
     }
     state.usage.observe_text(thinking_piece);
     state.usage.observe_text(text_piece);
+    let content_block_text = event
+        .as_ref()
+        .and_then(|event| event.get("content_block"))
+        .and_then(Value::as_object)
+        .and_then(|block| block.get("text"))
+        .and_then(Value::as_str);
+    let substantive = thinking_piece.is_some_and(|piece| !piece.is_empty())
+        || text_piece.is_some_and(|piece| !piece.is_empty())
+        || content_block_text.is_some_and(|text| !text.is_empty())
+        || tool_action;
+    if substantive {
+        // Prelude overflow and terminal-only streams commit without any
+        // substantive output; only the first real delta starts the clock.
+        crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
+    }
 
     if state.committed {
         if write_chunk(stream, &wire).is_err() {
@@ -850,7 +882,10 @@ fn flush_prelude(
         return false;
     }
     let staged = std::mem::take(&mut state.staged);
-    write_chunk(stream, &staged).is_ok()
+    if write_chunk(stream, &staged).is_err() {
+        return false;
+    }
+    true
 }
 
 fn commit_headers(

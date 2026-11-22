@@ -1,459 +1,835 @@
-import { Theme } from "theme.slint";
+import { ListView } from "std-widgets.slint";
+import { BarChart, ChartDataset, ChartSeriesType } from "@slintplot";
+import { Theme, Panel, Heading, Hint, DataText, Segmented, ActionButton, SectionLabel } from "theme.slint";
 
 export struct UsagePoint {
     label: string,
     detail-label: string,
     token-value: string,
     request-value: string,
-    token-height: float,
-    request-height: float,
+    token-count: float,
+    request-count: float,
 }
 
-component ChartOption inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    in property <color> ink;
-    in property <color> accent;
-    in property <color> accent-soft;
-    callback picked();
+export struct RequestMetric {
+    label: string,
+    value: string,
+    detail: string,
+    // 0 keeps the muted ink; 2 marks a real failure count.
+    detail-tone: int,
+}
 
-    height: 32px;
-    border-radius: 5px;
-    border-width: focus.has-focus ? 1px : 0px;
-    border-color: root.accent;
-    background: root.selected || pointer.has-hover ? root.accent-soft : transparent;
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-checkable: true;
-    accessible-checked: root.selected;
-    accessible-action-default => { root.picked(); }
-    forward-focus: focus;
+export struct ModelSpeedRow {
+    model: string,
+    requests: string,
+    output: string,
+    speed: string,
+    first-token: string,
+}
 
-    Text {
-        text: root.label;
-        color: root.selected ? root.accent : root.ink;
-        font-size: 12px;
-        font-weight: root.selected ? 650 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+// Request-page analytics: five metric cards, a Token/请求/速度 chart with an
+// optional per-model split, and the per-model speed table.
+component RequestTrendChart inherits Rectangle {
+    in property <[string]> labels;
+    in property <[ChartDataset]> datasets;
+    callback category-clicked(int);
+    in property <bool> show-legend: false;
+    in property <bool> integer-ticks: true;
+    in property <int> value-decimals: 0;
+    in property <bool> allow-motion: true;
+    out property <int> hovered-index: chart.hovered-index;
+
+    chart := BarChart {
+        width: parent.width;
+        height: parent.height;
+        labels: root.labels;
+        datasets: root.datasets;
+        begin-at-zero: true;
+        integer-ticks: root.integer-ticks;
+        value-decimals: root.value-decimals;
+        show-legend: root.show-legend;
+        show-points: false;
+        show-tooltip: false;
+        animated: root.allow-motion;
+        bar-radius: 3px;
+        fill-opacity: 0.78;
+        accessible-label: "请求趋势图";
+        category-clicked(index) => { root.category-clicked(index); }
     }
+}
 
-    focus := FocusScope {
+// Column order follows Magpie's model speed table: model, speed, first-token,
+// requests, then output tokens.
+component ModelSpeedTable inherits VerticalLayout {
+    in property <[ModelSpeedRow]> rows;
+    // Guards the empty state against being pushed below the card edge.
+    out property <bool> empty-hint-fits: empty-hint.absolute-position.y + empty-hint.height
+        <= self.absolute-position.y + self.height;
+    spacing: 3px;
+    SectionLabel { text: "模型速度"; }
+    // The columns carry their units so the numbers are not bare.
+    Hint { text: "速度 Token/秒 · 首字耗时 ms · 请求 次 · 输出 Token"; overflow: elide; wrap: no-wrap; }
+    HorizontalLayout {
+        spacing: 6px;
+        Hint { text: "模型"; horizontal-stretch: 1; }
+        Hint { text: "速度"; width: 46px; horizontal-alignment: right; }
+        Hint { text: "首字耗时"; width: 64px; horizontal-alignment: right; }
+        Hint { text: "请求"; width: 36px; horizontal-alignment: right; }
+        Hint { text: "输出"; width: 64px; horizontal-alignment: right; }
+    }
+    // The empty-state hint must sit inside the remaining height;
+    // a trailing sibling would overflow the fixed-height card row.
+    Rectangle {
+        vertical-stretch: 1;
+        min-height: 0px;
+        ListView {
+            width: parent.width;
+            height: parent.height;
+            for row in root.rows : HorizontalLayout {
+                spacing: 6px;
+                height: 20px;
+                Text {
+                    text: row.model;
+                    color: Theme.ink;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                DataText { text: row.speed; width: 46px; horizontal-alignment: right; }
+                DataText { text: row.first-token; width: 64px; horizontal-alignment: right; }
+                DataText { text: row.requests; width: 36px; horizontal-alignment: right; }
+                DataText { text: row.output; width: 64px; horizontal-alignment: right; }
+            }
+        }
+        empty-hint := Hint {
+            text: "暂无模型速度数据";
+            visible: root.rows.length == 0;
+            width: parent.width;
+            height: parent.height;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component RequestAnalytics inherits Panel {
+    // The request page gives the list the remaining height; at the minimum
+    // window size the page scrolls and this card keeps its preferred height.
+    min-height: 0px;
+    in property <bool> compact: false;
+    in property <[RequestMetric]> metrics;
+    // The compact request page folds the cards into one summary line.
+    in property <string> summary-line: "";
+    // At compact width the chart and the speed table start collapsed so the
+    // request list stays in the first screen.
+    in-out property <bool> details-open: false;
+    in property <[string]> labels;
+    in property <[float]> token-counts;
+    in property <[float]> request-counts;
+    in property <[float]> speed-counts;
+    in property <[ChartDataset]> token-series;
+    in property <[ChartDataset]> request-series;
+    in property <[ChartDataset]> speed-series;
+    in property <[ModelSpeedRow]> model-speeds;
+    in-out property <int> metric: 0;
+    in-out property <bool> split-by-model: false;
+    in property <bool> allow-motion: true;
+
+    out property <int> metric-index: root.metric;
+    out property <bool> split: root.split-by-model;
+    out property <string> metric-label: root.metric == 1 ? "请求数"
+        : root.metric == 2 ? "输出速度" : "Token";
+    out property <[float]> plotted-values: root.metric == 1 ? root.request-counts
+        : root.metric == 2 ? root.speed-counts : root.token-counts;
+    out property <int> series-count: !root.split-by-model ? 1
+        : root.metric == 1 ? root.request-series.length
+        : root.metric == 2 ? root.speed-series.length
+        : root.token-series.length;
+    out property <int> model-row-count: root.model-speeds.length;
+    // The chart selection reads the visible plot only; a hidden plot reports -1.
+    private property <int> pinned: -1;
+    private property <int> key-index: -1;
+    private property <int> active: root.pinned >= 0 ? root.pinned
+        : root.key-index >= 0 ? root.key-index
+        : root.compact ? compact-plot.hovered-index : wide-plot.hovered-index;
+    private property <bool> has-data: root.labels.length > 0;
+    private property <bool> has-selection: root.active >= 0 && root.active < root.labels.length;
+    private property <string> selection-label: root.has-selection ? root.labels[root.active] : "";
+    private property <string> selection-value: !root.has-selection ? ""
+        : "" + (root.metric == 1 ? round(root.request-counts[root.active])
+            : root.metric == 2 ? round(root.speed-counts[root.active] * 10) / 10
+            : round(root.token-counts[root.active]));
+    out property <int> active-index: root.active;
+    out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    out property <string> selection-text: root.selection-label + " " + root.selection-value;
+    // The request chart is a keyboard stop: Tab reaches it, arrows move the
+    // active bucket, Enter pins it and Esc clears the pin.
+    chart-focus := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        accessible-role: groupbox;
+        accessible-label: "请求趋势图";
         key-pressed(event) => {
-            if (event.text == Key.Return || event.text == " ") {
-                root.picked();
+            if (event.text == Key.Escape && root.pinned >= 0) {
+                root.pinned = -1;
+                return accept;
+            }
+            if (root.labels.length == 0) { return reject; }
+            if (event.text == Key.Home) { root.key-index = 0; return accept; }
+            if (event.text == Key.End) { root.key-index = root.labels.length - 1; return accept; }
+            if (event.text == Key.LeftArrow) {
+                root.key-index = root.key-index <= 0 ? 0 : root.key-index - 1;
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.key-index = root.key-index < 0 ? 0
+                    : root.key-index + 1 < root.labels.length ? root.key-index + 1
+                    : root.labels.length - 1;
+                return accept;
+            }
+            if (event.text == Key.Return && root.has-selection) {
+                root.pinned = root.active;
                 return accept;
             }
             return reject;
         }
     }
-
-    pointer := TouchArea {
-        mouse-cursor: MouseCursor.pointer;
-        clicked => {
-            focus.focus();
-            root.picked();
+    public function toggle-pin(index: int) {
+        if (index == root.pinned) {
+            root.pinned = -1;
+        } else if (index >= 0 && index < root.labels.length) {
+            root.pinned = index;
         }
+    }
+    // Reads the table that is actually laid out at the current width.
+    out property <bool> empty-hint-fits: root.compact
+        ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
+    // Test seam: the compact chart toggle.
+    out property <length> details-toggle-x: details-toggle.absolute-position.x;
+    out property <length> details-toggle-y: details-toggle.absolute-position.y;
+    out property <length> details-toggle-width: details-toggle.width;
+    out property <length> details-toggle-height: details-toggle.height;
+
+    content := VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        // Equal flex-basis keeps the cards the same size; at compact width two
+        // per row and a full-width last card avoid clipped labels and a gap.
+        cards := FlexboxLayout {
+            visible: !root.compact;
+            // A hidden layout still feeds the parent's preferred height.
+            height: root.compact ? 0px : self.preferred-height;
+            flex-wrap: wrap;
+            spacing: 8px;
+            for metric[index] in root.metrics : Rectangle {
+                width: root.compact
+                    ? (index == 4 ? root.width - 24px : (root.width - 24px - 8px) / 2)
+                    : (root.width - 24px - 32px) / 5;
+                // Tall enough for the label, value and detail line without
+                // clipping the detail at the card edge.
+                height: 76px;
+                border-radius: 8px;
+                background: Theme.surface-2;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    Hint { text: metric.label; }
+                    DataText {
+                        text: metric.value;
+                        font-size: 18px;
+                        font-weight: 650;
+                        overflow: elide;
+                    }
+                    // The detail line elides in the card; the hover tooltip
+                    // keeps the full input/output split readable.
+                    Hint {
+                        text: metric.detail;
+                        color: Theme.status_ink(metric.detail-tone);
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                }
+                metric-hover := TouchArea {}
+                Tooltip { text: @markdown("\{metric.detail}"); }
+            }
+        }
+
+        compact-summary := HorizontalLayout {
+            visible: root.compact;
+            // Clicking the summary row toggles the chart as well.
+            summary-pointer := TouchArea {
+                clicked => { root.details-open = !root.details-open; }
+            }
+            // A hidden row still feeds the parent's preferred height.
+            height: root.compact ? self.preferred-height : 0px;
+            spacing: 8px;
+            // The compact summary wraps instead of losing the last metrics.
+            Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            // A visible label says what the control does instead of a bare
+            // chevron; the whole summary row reads as one action.
+            details-toggle := ActionButton {
+                label: root.details-open ? "收起图表" : "查看图表";
+                icon: root.details-open ? "chevron-down" : "chevron-right";
+                quiet: true;
+                tooltip: root.details-open ? "收起图表" : "查看图表";
+                clicked => { root.details-open = !root.details-open; }
+            }
+        }
+        header := HorizontalLayout {
+            visible: !root.compact || root.details-open;
+            height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+            spacing: 8px;
+            Heading { text: "请求趋势"; vertical-alignment: center; }
+            Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Segmented {
+                visible: !root.compact || root.details-open;
+                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                width: root.compact ? 160px : 196px;
+                options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
+                label: "请求指标";
+                current-index: root.metric;
+                selected(index) => { root.metric = index; }
+            }
+            Segmented {
+                visible: !root.compact || root.details-open;
+                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                width: root.compact ? 120px : 148px;
+                options: [{ text: "合计" }, { text: "按模型" }];
+                label: "拆分维度";
+                current-index: root.split-by-model ? 1 : 0;
+                selected(index) => { root.split-by-model = index == 1; }
+            }
+        }
+
+        // Wide: the chart and the speed table share one row. Compact: the table
+        // moves below the chart so neither is squeezed below its readable width.
+        compact-stack := VerticalLayout {
+            visible: root.compact && root.details-open;
+            width: 100%;
+            // Hidden layouts still feed the parent's preferred height, so the
+            // inactive stack collapses to zero explicitly.
+            height: (root.compact && root.details-open) ? self.preferred-height : 0px;
+            spacing: 8px;
+            compact-plot := RequestTrendChart {
+                width: 100%;
+                height: 148px;
+                category-clicked(index) => { root.toggle-pin(index); }
+                labels: root.labels;
+                datasets: root.split-by-model
+                    ? (root.metric == 1 ? root.request-series
+                        : root.metric == 2 ? root.speed-series : root.token-series)
+                    : [{
+                        label: root.metric-label,
+                        values: root.metric == 1 ? root.request-counts
+                            : root.metric == 2 ? root.speed-counts : root.token-counts,
+                        series-type: ChartSeriesType.bar,
+                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
+                    }];
+                show-legend: root.split-by-model;
+                integer-ticks: root.metric != 2;
+                value-decimals: root.metric == 2 ? 1 : 0;
+                allow-motion: root.allow-motion;
+            }
+            compact-table := ModelSpeedTable {
+                width: 100%;
+                height: 146px;
+                rows: root.model-speeds;
+            }
+        }
+        wide-row := HorizontalLayout {
+            visible: !root.compact || root.details-open;
+            spacing: 12px;
+            height: (!root.compact || root.details-open) ? 148px : 0px;
+            wide-plot := RequestTrendChart {
+                horizontal-stretch: 1;
+                height: parent.height;
+                category-clicked(index) => { root.toggle-pin(index); }
+                labels: root.labels;
+                datasets: root.split-by-model
+                    ? (root.metric == 1 ? root.request-series
+                        : root.metric == 2 ? root.speed-series : root.token-series)
+                    : [{
+                        label: root.metric-label,
+                        values: root.metric == 1 ? root.request-counts
+                            : root.metric == 2 ? root.speed-counts : root.token-counts,
+                        series-type: ChartSeriesType.bar,
+                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
+                    }];
+                show-legend: root.split-by-model;
+                integer-ticks: root.metric != 2;
+                value-decimals: root.metric == 2 ? 1 : 0;
+                allow-motion: root.allow-motion;
+            }
+            wide-table := ModelSpeedTable {
+                // Wide enough for the full model name plus the four numbers.
+                width: 420px;
+                rows: root.model-speeds;
+            }
+        }
+        if root.has-data && (!root.compact || root.details-open) : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                height: 34px;
+                Hint {
+                    text: root.has-selection ? root.selection-label : "悬停查看数值 · ← → 切换时段";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                DataText { text: root.selection-value; font-weight: 650; vertical-alignment: center; }
+                unpin := ActionButton {
+                    visible: root.can-unpin;
+                    quiet: true;
+                    label: "取消固定";
+                    icon: "close";
+                    icon-only: true;
+                    tooltip: "取消固定";
+                    width: Theme.icon-button;
+                    height: Theme.icon-button;
+                    clicked => { root.pinned = -1; }
+                }
+            }
+        }
+
     }
 }
 
-export component UsageChart inherits Rectangle {
+export component UsageChart inherits Panel {
     in-out property <int> period: 0;
-    in property <[UsagePoint]> points: [];
-    in property <[string]> token-ticks: [];
-    in property <[string]> request-ticks: [];
+    in property <[UsagePoint]> points;
+    in property <[string]> labels;
+    in property <[float]> token-counts;
+    in property <[float]> request-counts;
     in property <string> token-total: "—";
     in property <string> request-total: "—";
-    in property <bool> loading: false;
-    in property <string> status-text: "发送第一条模型请求后，这里会显示用量。";
-    in property <color> status-tone: root.muted;
-    in property <bool> allow-motion: true;
-    in property <color> surface: Theme.surface;
-    in property <color> border: Theme.edge;
-    in property <color> ink: Theme.ink;
-    in property <color> muted: Theme.muted;
-    in property <color> accent: Theme.accent;
-    in property <color> accent-soft: Theme.selected;
+    in property <bool> loading;
+    in property <string> status-text;
+    in property <color> status-tone: Theme.muted;
+    in property <bool> allow-motion;
+    in-out property <bool> show-requests;
+    in-out property <bool> show-line;
+    // The overview owns the auto-refresh cadence; the chart only renders its
+    // four steps and the shared manual-refresh state.
+    in-out property <int> auto-refresh: 5;
+    in property <bool> refreshing: false;
+    in property <angle> refresh-rotation: 0deg;
+    in property <string> updated-at: "—";
+    callback refresh();
     callback period-changed(int);
+    private property <int> auto-refresh-index: 0;
+    out property <length> refresh-x: refresh-button.absolute-position.x;
+    out property <length> refresh-y: refresh-button.absolute-position.y;
+    out property <length> refresh-width: refresh-button.width;
+    out property <length> refresh-height: refresh-button.height;
+    out property <bool> refresh-enabled: refresh-button.enabled;
+    out property <length> content-height: content.preferred-height;
+    out property <length> metric-x: metric-control.absolute-position.x;
+    out property <length> metric-y: metric-control.absolute-position.y;
+    out property <length> metric-width: metric-control.width;
+    out property <length> metric-height: metric-control.height;
+    out property <length> controls-y: controls.absolute-position.y;
+    out property <length> controls-height: controls.height;
+    out property <length> selection-y: selection.absolute-position.y;
+    out property <length> selection-height: selection.height;
 
-    property <bool> show-requests: false;
-    property <bool> show-line: false;
-    property <bool> compact: root.width < 518px;
-    property <int> pinned: -1;
-    property <string> pinned-label;
-    property <int> keyboard-point: -1;
-    property <bool> has-data: root.points.length > 0;
-    property <bool> has-selection: active >= 0 && active < root.points.length;
-    property <[string]> ticks: root.show-requests ? root.request-ticks : root.token-ticks;
-    property <int> hovered: root.has-data && cursor.has-hover
-        ? max(0, min(root.points.length - 1, floor(cursor.mouse-x / max(1px, plot.width) * root.points.length)))
-        : -1;
-    property <int> active: root.pinned >= 0 ? root.pinned
-        : plot-focus.has-focus && root.keyboard-point >= 0 ? root.keyboard-point : root.hovered;
-
-    preferred-height: root.compact ? 385px : 352px;
-    vertical-stretch: 0;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: root.border;
-    background: root.surface;
-
-    changed period => {
-        root.pinned = -1;
-        root.keyboard-point = -1;
+    private property <int> pinned: -1;
+    private property <string> pinned-label;
+    private property <int> key-index: -1;
+    // The header fits one row at the default width; below 650 px it splits
+    // into two rows instead of overflowing the card.
+    private property <bool> narrow: root.width < 650px;
+    // The selection block animates for 160 ms; the data swap waits for it so
+    // the chart and the block never disagree about which range is selected.
+    private property <int> pending-period: -1;
+    period-sync-timer := Timer {
+        interval: Theme.settle;
+        running: false;
+        triggered => {
+            if (root.pending-period >= 0) {
+                root.period-changed(root.pending-period);
+                root.pending-period = -1;
+                period-sync-timer.running = false;
+            }
+        }
     }
+    private property <int> active: root.pinned >= 0 ? root.pinned
+        : root.key-index >= 0 ? root.key-index : plot.hovered-index;
+    private property <bool> has-data: root.points.length > 0;
+    private property <bool> has-selection: root.active >= 0 && root.active < root.points.length;
+    private property <string> metric: root.show-requests ? "请求数" : "Token";
+    private property <string> keyboard-help: "左右方向键查看时段 · Enter 固定 · Esc 取消固定";
+    private property <string> empty-title: root.loading ? "正在读取本实例用量…"
+        : !root.status-text.is-empty ? root.status-text : "暂无用量数据";
 
+    out property <length> plot-x: plot.absolute-position.x;
+    out property <length> plot-y: plot.absolute-position.y;
+    out property <length> plot-width: plot.width;
+    out property <length> plot-height: plot.height;
+    out property <length> unpin-x: unpin.absolute-position.x;
+    out property <length> unpin-y: unpin.absolute-position.y;
+    out property <length> unpin-width: unpin.width;
+    out property <length> unpin-height: unpin.height;
+    out property <length> period-x: period-control.absolute-position.x;
+    out property <length> period-y: period-control.absolute-position.y;
+    out property <length> period-width: period-control.width;
+    out property <int> pinned-index: root.pinned;
+    out property <int> active-index: root.active;
+    out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    out property <string> selection-label: root.has-selection ? root.points[root.active].detail-label : "";
+    out property <string> selection-value: !root.has-selection ? ""
+        : root.show-requests ? root.points[root.active].request-value : root.points[root.active].token-value;
+
+    preferred-height: root.width < 670px ? 408px : 368px;
+    vertical-stretch: 0;
+    // The chart card is a keyboard stop: Tab reaches it, the ring is the same
+    // neutral edge step as the other focusable surfaces.
+    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    animate preferred-height { duration: Theme.settle; easing: ease-out; }
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
+
+    changed period => { root.pinned = -1; root.key-index = -1; }
     changed points => {
-        if (root.pinned >= 0 && (root.pinned >= root.points.length
-            || root.points[root.pinned].detail-label != root.pinned-label)) {
+        root.key-index = -1;
+        if (root.pinned >= root.points.length
+            || (root.pinned >= 0 && root.points[root.pinned].detail-label != root.pinned-label)) {
             root.pinned = -1;
         }
-        if (root.keyboard-point >= root.points.length) {
-            root.keyboard-point = -1;
-        }
+    }
+    changed show-requests => { metric-control.current-index = root.show-requests ? 1 : 0; }
+    changed show-line => { type-control.current-index = root.show-line ? 1 : 0; }
+    changed auto-refresh => {
+        root.auto-refresh-index = root.auto-refresh == 15 ? 1
+            : root.auto-refresh == 30 ? 2
+            : root.auto-refresh == 60 ? 3
+            : root.auto-refresh == 0 ? 4 : 0;
+    }
+    changed auto-refresh-index => {
+        root.auto-refresh = root.auto-refresh-index == 1 ? 15
+            : root.auto-refresh-index == 2 ? 30
+            : root.auto-refresh-index == 3 ? 60
+            : root.auto-refresh-index == 4 ? 0 : 5;
     }
 
-    pure function height-for(point: UsagePoint) -> float {
-        // Negative values mark buckets with no known measurement.
-        return clamp(root.show-requests ? point.request-height : point.token-height, -1, 1);
-    }
-
-    function pin(index: int) {
-        root.pinned = index;
-        root.pinned-label = index >= 0 ? root.points[index].detail-label : "";
-    }
-
-    function select-period(next: int) {
-        if (next != root.period) {
-            root.period = next;
-            root.period-changed(next);
-        }
-    }
-
-    function move-selection(direction: int) {
-        let current = root.pinned >= 0 ? root.pinned : root.keyboard-point;
-        root.keyboard-point = current < 0 ? (direction > 0 ? 0 : root.points.length - 1)
-            : clamp(current + direction, 0, root.points.length - 1);
-        root.pinned = -1;
-    }
-
-    VerticalLayout {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        padding: 14px;
-        spacing: 9px;
-
-        toolbar := Rectangle {
-            height: root.compact ? 107px : 70px;
-            vertical-stretch: 0;
-
-            Text {
-                text: "用量趋势";
-                height: 36px;
-                color: root.ink;
-                font-size: 17px;
-                font-weight: 650;
-                vertical-alignment: center;
+    chart-focus := FocusScope {
+        focus-on-click: false;
+        accessible-role: groupbox;
+        accessible-label: "用量趋势图";
+        key-pressed(event) => {
+            if (event.text == Key.Escape && root.pinned >= 0) {
+                root.pinned = -1;
+                return accept;
             }
-
-            range-options := HorizontalLayout {
-                width: 204px;
-                height: 32px;
-                x: root.compact ? 0px : toolbar.width - self.width;
-                y: root.compact ? 36px : 2px;
-                spacing: 2px;
-
-                for label[index] in ["今天", "最近 7 天", "最近 30 天"] : ChartOption {
-                    horizontal-stretch: 1;
-                    label: label;
-                    selected: root.period == index;
-                    ink: root.ink;
-                    accent: root.accent;
-                    accent-soft: root.accent-soft;
-                    picked => { root.select-period(index); }
-                }
+            if (root.points.length == 0) { return reject; }
+            if (event.text == Key.Home) {
+                root.key-index = 0;
+                return accept;
             }
-
-            options := HorizontalLayout {
-                width: 238px;
-                height: 32px;
-                x: 0px;
-                y: root.compact ? 75px : 38px;
-                spacing: 2px;
-
-                for label[index] in ["Token", "请求数"] : ChartOption {
-                    width: 53px;
-                    label: label;
-                    selected: root.show-requests == (index == 1);
-                    ink: root.ink;
-                    accent: root.accent;
-                    accent-soft: root.accent-soft;
-                    picked => { root.show-requests = index == 1; }
-                }
-
-                Rectangle {
-                    width: 1px;
-                    height: 17px;
-                    y: (parent.height - self.height) / 2;
-                    background: root.border;
-                }
-
-                for label[index] in ["柱状图", "折线图"] : ChartOption {
-                    width: 53px;
-                    label: label;
-                    selected: root.show-line == (index == 1);
-                    ink: root.ink;
-                    accent: root.accent;
-                    accent-soft: root.accent-soft;
-                    picked => { root.show-line = index == 1; }
-                }
+            if (event.text == Key.End) {
+                root.key-index = root.points.length - 1;
+                return accept;
             }
-
-            Text {
-                text: root.show-requests ? root.request-total : root.token-total;
-                x: root.compact ? 103px : options.width + 12px;
-                y: root.compact ? 0px : options.y;
-                width: toolbar.width - self.x;
-                height: 34px;
-                color: root.ink;
-                font-size: 17px;
-                font-weight: 650;
-                horizontal-alignment: right;
-                vertical-alignment: center;
-                overflow: elide;
+            if (event.text == Key.LeftArrow) {
+                root.key-index = root.key-index <= 0 ? 0 : root.key-index - 1;
+                return accept;
             }
+            if (event.text == Key.RightArrow) {
+                root.key-index = root.key-index < 0 ? 0
+                    : root.key-index + 1 < root.points.length ? root.key-index + 1
+                    : root.points.length - 1;
+                return accept;
+            }
+            if (event.text == Key.Return && root.active >= 0 && root.active < root.points.length) {
+                root.pinned = root.active;
+                root.pinned-label = root.points[root.active].detail-label;
+                return accept;
+            }
+            return reject;
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-            min-height: 128px;
-
-            if !root.has-data : Text {
-                x: 16px;
-                width: parent.width - 32px;
-                height: parent.height;
-                text: root.loading ? "正在读取本实例用量…" : root.status-text;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                wrap: word-wrap;
-                color: root.loading ? root.muted : root.status-tone;
-                font-size: 13px;
-            }
-
-            axis := Rectangle {
-                visible: root.has-data;
-                width: 49px;
-                height: parent.height;
-
-                for tick[index] in root.ticks : Text {
-                    width: parent.width - 6px;
-                    height: 16px;
-                    y: 9px + (parent.height - 38px) * index / max(root.ticks.length - 1, 1) - self.height / 2;
-                    text: tick;
-                    color: root.muted;
-                    font-size: 11px;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
-
-            plot := Rectangle {
-                visible: root.has-data;
-                x: axis.width;
-                width: parent.width - axis.width;
-                height: parent.height - 19px;
-                border-width: plot-focus.has-focus ? 1px : 0px;
-                border-color: root.accent;
-                border-radius: 4px;
-                accessible-role: groupbox;
-                accessible-label: "用量趋势图";
-                accessible-description: "用左右方向键查看时段，按 Enter 固定数值，按 Esc 清除";
-                forward-focus: plot-focus;
-
-                property <length> top: 9px;
-                property <length> bottom: self.height - 10px;
-                property <length> bucket-width: self.width / max(root.points.length, 1);
-
-                for tick[index] in root.ticks : Rectangle {
-                    width: parent.width;
-                    height: 1px;
-                    y: plot.top + (plot.bottom - plot.top) * index / max(root.ticks.length - 1, 1);
-                    background: root.border;
-                }
-
-                Rectangle {
-                    visible: root.has-selection;
-                    x: plot.bucket-width * root.active;
-                    width: plot.bucket-width;
-                    y: plot.top;
-                    height: plot.bottom - plot.top;
-                    background: root.accent-soft;
-                }
-
-                Rectangle {
-                    opacity: root.show-line ? 0 : 1;
-                    animate opacity { duration: root.allow-motion ? 135ms : 0ms; easing: ease-out; }
-
-                    for point[index] in root.points : Rectangle {
-                        property <float> ratio: root.height-for(point);
-                        x: plot.bucket-width * (index + 0.5) - self.width / 2;
-                        width: min(24px, plot.bucket-width * 0.66);
-                        height: ratio > 0 ? max(1px, (plot.bottom - plot.top) * ratio) : 0px;
-                        y: plot.bottom - self.height;
-                        border-top-left-radius: 2px;
-                        border-top-right-radius: 2px;
-                        background: root.accent;
-                    }
-                }
-
-                Rectangle {
-                    opacity: root.show-line ? 1 : 0;
-                    animate opacity { duration: root.allow-motion ? 135ms : 0ms; easing: ease-out; }
-
-                    for point[index] in root.points : segment := Rectangle {
-                        property <length> data-height: plot.bottom - plot.top;
-                        property <float> from-ratio: root.height-for(point);
-                        property <float> to-ratio: index + 1 < root.points.length
-                            ? root.height-for(root.points[index + 1]) : -1;
-                        property <float> from-y: (data-height / 1px) * (1 - from-ratio);
-                        property <float> to-y: (data-height / 1px) * (1 - to-ratio);
-
-                        x: plot.bucket-width * (index + 0.5);
-                        y: plot.top;
-                        width: plot.bucket-width;
-                        height: data-height;
-
-                        // Native software rendering uses the Slint software-renderer-path feature.
-                        if from-ratio >= 0 && to-ratio >= 0 : Path {
-                            x: 0px;
-                            y: 0px;
-                            width: parent.width;
-                            height: parent.height;
-                            viewbox-width: parent.width / 1px;
-                            viewbox-height: parent.height / 1px;
-                            stroke: root.accent;
-                            stroke-width: 2px;
-                            MoveTo { x: 0; y: segment.from-y; }
-                            LineTo { x: segment.width / 1px; y: segment.to-y; }
-                        }
-
-                        Rectangle {
-                            visible: parent.from-ratio >= 0;
-                            width: root.active == index ? 8px : 4px;
-                            height: self.width;
-                            x: -self.width / 2;
-                            y: parent.from-y * 1px - self.height / 2;
-                            border-radius: self.width / 2;
-                            background: root.accent;
-                        }
-                    }
-                }
-
-                plot-focus := FocusScope {
-                    enabled: root.has-data;
-                    key-pressed(event) => {
-                        if (event.text == Key.LeftArrow) {
-                            root.move-selection(-1);
-                        } else if (event.text == Key.RightArrow) {
-                            root.move-selection(1);
-                        } else if (event.text == Key.Return || event.text == " ") {
-                            if (root.pinned >= 0) {
-                                root.keyboard-point = root.pinned;
-                                root.pinned = -1;
-                            } else {
-                                root.pin(root.has-selection ? root.active : 0);
-                            }
-                        } else if (event.text == Key.Escape && root.has-selection) {
-                            root.pinned = -1;
-                            root.keyboard-point = -1;
-                        } else {
-                            return reject;
-                        }
-                        return accept;
-                    }
-                }
-
-                cursor := TouchArea {
-                    enabled: root.has-data;
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => {
-                        root.keyboard-point = -1;
-                        root.pin(root.pinned == root.hovered ? -1 : root.hovered);
-                        plot-focus.focus();
-                    }
-                }
-            }
-
-            if root.has-data : Rectangle {
-                property <int> stride: max(1, ceil(62px / max(1px, plot.bucket-width)));
-                x: plot.x;
-                y: plot.height + 2px;
-                width: plot.width;
-                height: 17px;
-
-                for point[index] in root.points : Text {
-                    visible: index == 0 || index == root.points.length - 1
-                        || (mod(index, parent.stride) == 0 && index + parent.stride <= root.points.length - 1);
-                    width: min(62px, parent.width / min(root.points.length, 2));
-                    x: clamp(plot.bucket-width * (index + 0.5) - self.width / 2, 0px, parent.width - self.width);
-                    text: point.label;
-                    horizontal-alignment: root.points.length == 1 ? center : index == 0 ? left
-                        : index == root.points.length - 1 ? right : center;
-                    vertical-alignment: center;
-                    color: root.active == index ? root.accent : root.muted;
-                    font-size: 11px;
-                    overflow: elide;
-                }
-            }
+        // Clicking the card background moves keyboard focus here; the plot's own
+        // pointer handling stays on top of this transparent target.
+        chart-pointer := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => { chart-focus.focus(); }
         }
 
-        HorizontalLayout {
-            height: 30px;
+        content := VerticalLayout {
+            padding: 16px;
             spacing: 10px;
 
-            Text {
-                text: root.has-selection ? root.points[root.active].detail-label
-                    : root.has-data ? "选择时段查看数值" : "";
-                color: root.muted;
-                font-size: 12px;
-                horizontal-stretch: 1;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-
-            Text {
-                text: root.has-selection ? (root.show-requests ? root.points[root.active].request-value
-                    : root.points[root.active].token-value) : "";
-                color: root.ink;
-                font-size: 12px;
-                font-weight: 650;
-                vertical-alignment: center;
-            }
-
-            ChartOption {
-                visible: root.has-selection && root.pinned >= 0;
-                width: 66px;
-                height: 30px;
-                label: "取消固定";
-                ink: root.ink;
-                accent: root.accent;
-                accent-soft: root.accent-soft;
-                picked => {
-                    root.pinned = -1;
-                    plot-focus.focus();
+            // The title anchors the card; the metric switch, refresh action,
+            // update label and total share the right edge. Grouping the metric
+            // switch with the total it drives mirrors the Magpie overview, and
+            // leaving the range and chart type on their own row keeps the
+            // controls on one line at the default width instead of wrapping a
+            // blank band into the card. The wide header is a plain layout so its
+            // preferred height stays measurable; below 650 px it collapses and
+            // the conditional narrow header takes over.
+            header := Rectangle {
+                height: root.width < 500px ? 128px : root.width < 650px ? 86px : 44px;
+                wide-header := HorizontalLayout {
+                    visible: !root.narrow;
+                    height: root.narrow ? 0px : parent.height;
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 3px;
+                        Heading { text: "用量趋势"; }
+                        Hint { text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
+                        + (root.show-requests ? " · 单位：次" : " · 单位：亿"); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    right-header := HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        refresh-button := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新";
+                            icon: "refresh";
+                            icon-rotation: root.refresh-rotation;
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "刷新总览";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh(); }
+                        }
+                        metric-control := Segmented {
+                            width: 188px;
+                            options: [{ text: "Token" }, { text: "请求数" }];
+                            label: "用量指标";
+                            current-index: root.show-requests ? 1 : 0;
+                            selected(index) => { root.show-requests = index == 1; }
+                        }
+                        DataText {
+                            text: "更新于 " + root.updated-at;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 2px;
+                            Hint { text: root.show-requests ? "请求总数" : "Token 总量"; horizontal-alignment: right; }
+                            DataText {
+                                text: root.show-requests ? root.request-total : root.token-total;
+                                font-size: 21px;
+                                font-weight: 650;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
+                }
+                if root.narrow : VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            spacing: 3px;
+                            Heading { text: "用量趋势"; }
+                            Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 2px;
+                            Hint { text: root.show-requests ? "请求总数" : "Token 总量"; horizontal-alignment: right; }
+                            DataText {
+                                text: root.show-requests ? root.request-total : root.token-total;
+                                font-size: 21px;
+                                font-weight: 650;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新";
+                            icon: "refresh";
+                            icon-rotation: root.refresh-rotation;
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "刷新总览";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh(); }
+                        }
+                        Segmented {
+                            width: 188px;
+                            options: [{ text: "Token" }, { text: "请求数" }];
+                            label: "用量指标";
+                            current-index: root.show-requests ? 1 : 0;
+                            selected(index) => { root.show-requests = index == 1; }
+                        }
+                        DataText {
+                            text: "更新于 " + root.updated-at;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
-        }
 
-        Text {
-            visible: root.has-data && !root.status-text.is-empty;
-            text: root.status-text;
-            color: root.status-tone;
-            font-size: 12px;
-            wrap: word-wrap;
+            controls := Rectangle {
+                // The same explicit height keeps the wrapping rows from
+                // inflating the card's preferred height; below 650 px the
+                // range and display groups split into two rows.
+                height: root.width < 650px ? 76px : 34px;
+                FlexboxLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    // The explicit y keeps this row out of the parent's
+                    // preferred width, which would otherwise loop through
+                    // the `narrow` label visibility.
+                    y: 0px;
+                    flex-wrap: wrap;
+                    alignment: space-between;
+                    spacing: 8px;
+                    period-control := Segmented {
+                        width: 300px;
+                        options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
+                        label: "用量时间范围";
+                        current-index <=> root.period;
+                        selected(index) => {
+                            root.pending-period = index;
+                            period-sync-timer.start();
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        type-control := Segmented {
+                            width: 192px;
+                            options: [{ text: "柱状图" }, { text: "折线图" }];
+                            label: "图表类型";
+                            current-index: root.show-line ? 1 : 0;
+                            selected(index) => { root.show-line = index == 1; }
+                        }
+                        // The cadence carries a visible label at the wide
+                        // layout; the compact row keeps only the a11y label.
+                        if !root.narrow : Hint { text: "自动刷新"; vertical-alignment: center; }
+                        auto-refresh-control := Segmented {
+                            width: root.narrow ? 180px : 220px;
+                            options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                            label: "总览自动刷新";
+                            current-index <=> root.auto-refresh-index;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 142px;
+
+                VerticalLayout {
+                    visible: !root.has-data;
+                    alignment: center;
+                    spacing: 3px;
+                    Hint {
+                        text: root.empty-title;
+                        color: root.loading ? Theme.muted : root.status-tone;
+                        horizontal-alignment: center;
+                    }
+                    if !root.loading && root.status-text.is-empty : Hint {
+                        text: "调用模型后这里会显示用量趋势";
+                        horizontal-alignment: center;
+                    }
+                }
+
+                plot := BarChart {
+                    visible: root.has-data;
+                    width: parent.width;
+                    height: parent.height;
+                    labels: root.labels;
+                    datasets: [{
+                        label: root.metric,
+                        values: root.show-requests ? root.request-counts : root.token-counts,
+                        series-type: root.show-line ? ChartSeriesType.line : ChartSeriesType.bar,
+                        color: root.show-requests ? Theme.series-b : Theme.accent,
+                        fill: root.show-line,
+                    }];
+                    begin-at-zero: true;
+                    integer-ticks: true;
+                    value-decimals: 0;
+                    show-legend: false;
+                    show-points: false;
+                    show-tooltip: false;
+                    animated: root.allow-motion;
+                    bar-radius: 4px;
+                    fill-opacity: root.show-line ? 0.14 : 0.78;
+                    accessible-label: "用量趋势图";
+                    accessible-description: root.has-selection
+                        ? root.selection-label + "，" + root.selection-value + "。" + root.keyboard-help
+                        : root.keyboard-help;
+                    category-clicked(index) => {
+                        if (index == root.pinned) {
+                            root.pinned = -1;
+                        } else if (index >= 0 && index < root.points.length) {
+                            root.pinned = index;
+                            root.pinned-label = root.points[index].detail-label;
+                        }
+                    }
+                }
+            }
+
+            selection := Rectangle {
+                visible: root.has-data;
+                height: root.has-data ? 58px : 0px;
+
+                HorizontalLayout {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: 40px;
+                    spacing: 8px;
+                    Hint {
+                        text: root.has-selection ? root.selection-label : "悬停查看数值";
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                    DataText {
+                        text: root.selection-value;
+                        font-weight: 650;
+                        vertical-alignment: center;
+                    }
+                    unpin := ActionButton {
+                        visible: root.can-unpin;
+                        quiet: true;
+                        label: "取消固定";
+                        icon: "close";
+                        icon-only: true;
+                        tooltip: "取消固定";
+                        width: Theme.icon-button;
+                        height: Theme.icon-button;
+                        clicked => { root.pinned = -1; }
+                    }
+                }
+
+                Hint {
+                    y: 40px;
+                    width: parent.width;
+                    height: 18px;
+                    text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+            }
+
+            if root.has-data && !root.status-text.is-empty : Hint {
+                text: root.status-text;
+                color: root.status-tone;
+            }
         }
     }
 }

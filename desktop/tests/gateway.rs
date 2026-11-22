@@ -441,6 +441,7 @@ struct FakeHttp {
     shutdown_stops_processes: AtomicBool,
     drain_calls: Mutex<Vec<DrainAction>>,
     drain_counts: Mutex<VecDeque<usize>>,
+    drain_error: Mutex<Option<String>>,
     processes: Arc<Mutex<Vec<Arc<Mutex<FakeProcessState>>>>>,
 }
 
@@ -455,8 +456,13 @@ impl FakeHttp {
             shutdown_stops_processes: AtomicBool::new(true),
             drain_calls: Mutex::new(Vec::new()),
             drain_counts: Mutex::new(VecDeque::new()),
+            drain_error: Mutex::new(None),
             processes,
         }
+    }
+
+    fn fail_drain(&self, reason: &str) {
+        *self.drain_error.lock().unwrap() = Some(reason.to_string());
     }
 
     fn fail_port(&self, port: u16) {
@@ -539,7 +545,10 @@ impl GatewayHttp for FakeHttp {
         assert_eq!(lease.len(), 32);
         self.drain_calls.lock().unwrap().push(action);
         match action {
-            DrainAction::Wait => Ok(self.drain_counts.lock().unwrap().pop_front().unwrap_or(0)),
+            DrainAction::Wait => match self.drain_error.lock().unwrap().as_ref() {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(self.drain_counts.lock().unwrap().pop_front().unwrap_or(0)),
+            },
             DrainAction::Commit => self.shutdown(base_url, token).map(|()| 0),
             DrainAction::Cancel => Ok(0),
         }
@@ -923,6 +932,14 @@ fn switch_port_stops_the_old_and_starts_the_new_port() {
             ownership: Ownership::Managed
         }
     );
+    assert!(
+        world.http.health("http://127.0.0.1:7996").is_ok(),
+        "the new port must be healthy after the switch"
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_err(),
+        "the old port must stop after the switch"
+    );
 }
 
 #[test]
@@ -993,6 +1010,53 @@ fn switch_port_waits_for_zero_and_quit_cancels_without_saving() {
 }
 
 #[test]
+fn quit_during_the_drain_cancels_the_switch_and_stops_the_old_instance() {
+    let dir = TempDir::new("gateway-switch-quit");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    let mut saved = Vec::new();
+    let quitting = AtomicBool::new(false);
+    *world.http.drain_counts.lock().unwrap() = [2, 1].into();
+    let outcome = supervisor.switch_port_with_progress(
+        7996,
+        &mut |port| {
+            saved.push(port);
+            Ok(())
+        },
+        &mut |stage| {
+            if stage == (PortSwitchProgress::Waiting { in_flight: 1 }) {
+                quitting.store(true, Ordering::SeqCst);
+            }
+        },
+        &|| quitting.load(Ordering::SeqCst),
+    );
+    assert!(matches!(outcome, PortSwitch::Rejected { .. }));
+    assert!(
+        saved.is_empty(),
+        "a cancelled switch must not save the new port"
+    );
+    assert_eq!(world.launcher.spawn_count(), 1, "no new gateway may start");
+    assert!(world.http.shutdown_calls().is_empty());
+
+    let mut quit_called = false;
+    let status = quit_app(&mut supervisor, &mut || quit_called = true);
+    assert!(quit_called);
+    assert_eq!(status.state, GatewayState::Stopped);
+    assert_eq!(supervisor.child_count(), 0);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
+    assert_eq!(
+        world.launcher.spawn_count(),
+        1,
+        "quit must stop the old instance instead of starting the new port"
+    );
+    assert!(saved.is_empty());
+    let log = std::fs::read_to_string(&status.supervision_log).expect("supervision log");
+    assert!(!log.contains("\"event\":\"switch\""), "{log}");
+    assert!(!log.contains("\"event\":\"switch_restored\""), "{log}");
+}
+
+#[test]
 fn switch_port_rejects_an_occupied_port_and_keeps_the_old_listener() {
     let dir = TempDir::new("gateway-switch-occupied");
     let world = FakeWorld::new();
@@ -1022,6 +1086,11 @@ fn switch_port_rejects_an_occupied_port_and_keeps_the_old_listener() {
             ownership: Ownership::Managed
         }
     );
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_ok(),
+        "the old listener must keep serving after a rejected switch"
+    );
+    assert_eq!(world.launcher.spawn_count(), 1);
     drop(listener);
 }
 
@@ -1054,6 +1123,90 @@ fn switch_port_restores_the_old_port_when_the_new_start_fails() {
         GatewayState::Running {
             ownership: Ownership::Managed
         }
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_ok(),
+        "the restored old port must serve again"
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7996").is_err(),
+        "the failed new port must not stay healthy"
+    );
+}
+
+#[test]
+fn switch_port_restores_the_old_port_when_saving_the_new_port_fails() {
+    let dir = TempDir::new("gateway-switch-save-failed");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    let mut saved = Vec::new();
+    let outcome = supervisor.switch_port(7996, &mut |port| {
+        saved.push(port);
+        Err("磁盘已满".to_string())
+    });
+    match outcome {
+        PortSwitch::Restored { from, to, reason } => {
+            assert_eq!(from, 7997);
+            assert_eq!(to, 7996);
+            assert!(reason.contains("保存新端口失败"), "{reason}");
+            assert!(reason.contains("磁盘已满"), "{reason}");
+        }
+        other => panic!("a failed save must restore the old port, got {other:?}"),
+    }
+    assert_eq!(supervisor.port(), 7997);
+    assert_eq!(saved, vec![7996]);
+    assert_eq!(world.launcher.spawn_count(), 2);
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_ok(),
+        "the restored old port must serve again"
+    );
+    assert_eq!(
+        supervisor.status().state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+}
+
+#[test]
+fn switch_port_restores_the_old_port_when_the_drain_fails() {
+    let dir = TempDir::new("gateway-switch-drain-failed");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    // The old listener is already gone but the drain/stop wait reported failure.
+    world.http.healthy.lock().unwrap().insert(7997, false);
+    world.http.fail_drain("无法确认当前请求已经结束：网关没有响应");
+    let mut saved = Vec::new();
+    let outcome = supervisor.switch_port(7996, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    match outcome {
+        PortSwitch::Restored { from, to, reason } => {
+            assert_eq!(from, 7997);
+            assert_eq!(to, 7996);
+            assert!(reason.contains("无法确认当前请求已经结束"), "{reason}");
+        }
+        other => panic!("a failed drain must restore the old port, got {other:?}"),
+    }
+    assert_eq!(supervisor.port(), 7997);
+    assert!(saved.is_empty(), "the new port must not be saved");
+    assert_eq!(world.launcher.spawn_count(), 2);
+    assert_eq!(
+        supervisor.status().state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7997").is_ok(),
+        "the restored old port must serve again"
+    );
+    assert!(
+        world.http.health("http://127.0.0.1:7996").is_err(),
+        "the new port must not be started"
     );
 }
 

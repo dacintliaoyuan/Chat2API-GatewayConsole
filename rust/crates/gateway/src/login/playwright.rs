@@ -268,6 +268,13 @@ impl LoginPage for PlaywrightPage {
         }
     }
 
+    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
+        match self.call("value", json!(selectors)) {
+            Ok(Value::String(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        }
+    }
+
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget> {
         let mut worker = self.worker.lock().expect("playwright worker poisoned");
         worker.next_marker += 1;

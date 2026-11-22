@@ -84,6 +84,7 @@ fn gateway_state(stub: &ChatStub) -> Arc<AppState> {
         login: None,
         watch: Arc::new(WatchStatus::new()),
         shutdown_request: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        desktop_drain: None,
     })
 }
 

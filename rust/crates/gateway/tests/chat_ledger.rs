@@ -139,7 +139,56 @@ fn a_non_stream_row_matches_the_python_field_set_and_values() {
     assert!(row["duration_ms"].as_u64().is_some());
     assert_eq!(row["usage_source"], json!("upstream"));
     assert_eq!(row["protocol"], json!("chat"));
+    assert!(
+        row.get("first_token_ms").is_none(),
+        "a non-stream row has no first-token time"
+    );
     assert_verified_attribution(row);
+}
+
+#[test]
+fn a_stream_row_records_the_first_token_time() {
+    let temp = TempDir::new("um-rust-chat-ledger-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::after(
+                Duration::from_millis(120),
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n"
+                    .to_vec(),
+            ),
+            ChatChunk::now(
+                b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),
+            ),
+            ChatChunk::now(b"data: [DONE]\n\n".to_vec()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream chat");
+    let _ = client
+        .read_all(Duration::from_secs(5))
+        .expect("read stream");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    let row = &rows[0];
+    let first = row["first_token_ms"]
+        .as_u64()
+        .expect("the stream row records the first token time");
+    let duration = row["duration_ms"].as_u64().expect("duration");
+    assert!(
+        first >= 80,
+        "the first token waits for the delayed chunk: {first}"
+    );
+    assert!(
+        first <= duration,
+        "first token {first} <= duration {duration}"
+    );
 }
 
 #[test]

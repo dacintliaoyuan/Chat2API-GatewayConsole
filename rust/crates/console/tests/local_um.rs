@@ -12,7 +12,7 @@ use std::fs;
 use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use um_console::local_um::{
-    um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
+    desktop_trend, um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
 };
 use um_console::operations::OperationsReader;
 
@@ -191,6 +191,90 @@ fn trend_aligns_daily_buckets_and_ranks_models() {
 }
 
 #[test]
+fn desktop_trend_accepts_24h_and_all_windows() {
+    let temp = temp();
+    let ledger = ledger(&temp);
+
+    let rolling = desktop_trend(&ledger, "24h", now()).expect("24h trend");
+    assert_eq!(rolling["range"], json!("24h"));
+    let buckets = rolling["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 24);
+    assert_eq!(buckets[22]["label"], json!("10:00"));
+    assert_eq!(
+        buckets[22]["tokens"],
+        json!({"kind": "exact", "value": 125})
+    );
+    assert_eq!(
+        buckets[22]["requests"],
+        json!({"kind": "exact", "value": 1})
+    );
+    assert_eq!(buckets[23]["label"], json!("11:00"));
+    assert_eq!(
+        buckets[23]["tokens"],
+        json!({"kind": "atLeast", "value": 30,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        rolling["total"]["tokens"],
+        json!({"kind": "atLeast", "value": 155,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        rolling["total"]["requests"],
+        json!({"kind": "exact", "value": 2})
+    );
+
+    let all = desktop_trend(&ledger, "all", now()).expect("all trend");
+    assert_eq!(all["range"], json!("all"));
+    let buckets = all["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0]["label"], json!("2026-11-16"));
+    assert_eq!(buckets[0]["tokens"], json!({"kind": "exact", "value": 10}));
+    assert_eq!(buckets[1]["label"], json!("2026-11-17"));
+    assert_eq!(
+        all["total"]["tokens"],
+        json!({"kind": "atLeast", "value": 165,
+                 "note": "旧记录缺少 output Token 字段"})
+    );
+    assert_eq!(
+        all["total"]["requests"],
+        json!({"kind": "exact", "value": 3})
+    );
+
+    assert!(desktop_trend(&ledger, "90d", now()).is_err());
+}
+
+#[test]
+fn requests_accept_24h_and_all_windows_and_report_the_range() {
+    let temp = temp();
+    let ledger = ledger(&temp);
+
+    let today =
+        um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("today requests");
+    assert_eq!(today["range"], json!("today"));
+
+    let rolling =
+        um_requests(&ledger, "24h", None, "all", "", None, 50, now()).expect("24h requests");
+    assert_eq!(rolling["range"], json!("24h"));
+    let rows = rolling["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["model"], json!("m2"));
+    assert_eq!(rows[1]["model"], json!("m1"));
+
+    let all = um_requests(&ledger, "all", None, "all", "", None, 50, now()).expect("all requests");
+    assert_eq!(all["range"], json!("all"));
+    let rows = all["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["model"], json!("m2"));
+    assert_eq!(rows[1]["model"], json!("m1"));
+    assert_eq!(rows[2]["model"], json!("m1"));
+    assert_eq!(
+        all["page"]["scope"].as_str().expect("scope"),
+        "全部时间的 UM 账本（chat2api），时间倒序；物理重试不单独成行"
+    );
+}
+
+#[test]
 fn requests_page_newest_first_and_attach_retries() {
     let temp = temp();
     let ledger = ledger(&temp);
@@ -227,6 +311,232 @@ fn requests_page_newest_first_and_attach_retries() {
     )
     .expect_err("bad cursor");
     assert!(error.0.contains("invalid cursor"), "{error}");
+}
+
+#[test]
+fn requests_expose_first_token_ms_and_keep_legacy_rows_missing() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    let rows = [
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "duration_ms": 900,
+            "first_token_ms": 180,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+        json!({
+            "time": "2026-11-17T10:00:05+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "duration_ms": 900,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+    ];
+    std::fs::write(
+        &ledger,
+        rows.iter()
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    let rows = payload["page"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0]["firstTokenMs"],
+        json!({"kind": "missing", "note": "账本没有记录首字耗时，不推算"})
+    );
+    assert_eq!(
+        rows[1]["firstTokenMs"],
+        json!({"kind": "exact", "value": 180})
+    );
+}
+
+#[test]
+fn missing_cache_fields_stay_unknown_and_zero_cache_stays_exact() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    let rows = [
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "cached_input_tokens": 0,
+            "cache_report_status": "reported",
+            "duration_ms": 900,
+            "first_token_ms": 100,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+        json!({
+            "time": "2026-11-17T10:00:05+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "cache_report_status": "reported",
+            "duration_ms": 900,
+            "first_token_ms": -5,
+            "usage_source": "upstream",
+            "status": "ok",
+        }),
+    ];
+    std::fs::write(
+        &ledger,
+        rows.iter()
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    assert_eq!(
+        payload["summary"]["cache"]["hitRate"],
+        json!({
+            "kind": "atLeast",
+            "value": 0.0,
+            "note": "1 个报告缓存的请求缺少缓存字段，命中率按下界计算",
+        })
+    );
+    assert_eq!(
+        payload["summary"]["firstTokenMs"],
+        json!({
+            "kind": "estimate",
+            "value": 100.0,
+            "note": "按 1 个记录了首字耗时的请求平均；1 个字段为负",
+        })
+    );
+    let rows = payload["page"]["rows"].as_array().expect("rows");
+    assert_eq!(
+        rows[0]["firstTokenMs"],
+        json!({"kind": "unknown", "note": "首字耗时字段为负，不可解析"})
+    );
+    assert_eq!(
+        rows[1]["firstTokenMs"],
+        json!({"kind": "exact", "value": 100})
+    );
+}
+
+#[test]
+fn all_missing_cache_fields_are_unknown_not_zero() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    std::fs::write(
+        &ledger,
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "cache_report_status": "reported",
+            "duration_ms": 900,
+            "first_token_ms": -5,
+            "usage_source": "upstream",
+            "status": "ok",
+        })
+        .to_string(),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    assert_eq!(
+        payload["summary"]["cache"]["hitRate"],
+        json!({"kind": "unknown", "note": "缓存报告状态为 reported 但缓存字段缺失"})
+    );
+    assert_eq!(
+        payload["summary"]["firstTokenMs"],
+        json!({"kind": "unknown", "note": "首字耗时字段为负，不可解析"})
+    );
+}
+
+#[test]
+fn requests_summarize_the_whole_filtered_set_not_only_the_page() {
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    let rows = (0..70)
+        .map(|index| {
+            let model = if index % 2 == 0 { "m1" } else { "m2" };
+            json!({
+                "time": format!(
+                    "2026-11-17T{:02}:{:02}:00+08:00",
+                    10 + index / 60,
+                    index % 60
+                ),
+                "model": model,
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_report_status": "reported",
+                "reasoning_tokens": 0,
+                "duration_ms": 1000,
+                "first_token_ms": 100,
+                "usage_source": "upstream",
+                "status": "ok",
+            })
+        })
+        .collect::<Vec<_>>();
+    std::fs::write(
+        &ledger,
+        rows.iter()
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write ledger");
+    let payload = um_requests(&ledger, "today", None, "all", "", None, 60, now()).expect("requests");
+    assert_eq!(payload["page"]["rows"].as_array().expect("rows").len(), 60);
+    assert_eq!(
+        payload["summary"]["tokens"]["total"],
+        json!({"kind": "exact", "value": 1400})
+    );
+    assert_eq!(
+        payload["summary"]["requests"]["recorded"],
+        json!({"kind": "exact", "value": 70})
+    );
+    assert_eq!(
+        payload["summary"]["cache"]["hitRate"],
+        json!({"kind": "exact", "value": 20.0})
+    );
+    assert_eq!(
+        payload["summary"]["speed"]["value"],
+        json!({"kind": "exact", "value": 10.0})
+    );
+    assert_eq!(
+        payload["summary"]["firstTokenMs"],
+        json!({"kind": "exact", "value": 100})
+    );
+    let model_speeds = payload["modelSpeeds"].as_array().expect("model speeds");
+    assert_eq!(model_speeds.len(), 2);
+    assert_eq!(model_speeds[0]["model"], json!("m1"));
+    assert_eq!(
+        model_speeds[0]["requests"],
+        json!({"kind": "exact", "value": 35})
+    );
+    assert_eq!(
+        model_speeds[0]["speed"],
+        json!({"kind": "exact", "value": 10.0})
+    );
+    assert_eq!(
+        model_speeds[0]["firstTokenMs"],
+        json!({"kind": "exact", "value": 100})
+    );
+    assert_eq!(model_speeds[1]["model"], json!("m2"));
+
+    let filtered = um_requests(&ledger, "today", Some("m2"), "all", "", None, 60, now())
+        .expect("filtered requests");
+    assert_eq!(
+        filtered["summary"]["requests"]["recorded"],
+        json!({"kind": "exact", "value": 35})
+    );
+    let model_speeds = filtered["modelSpeeds"].as_array().expect("model speeds");
+    assert_eq!(model_speeds.len(), 1);
+    assert_eq!(model_speeds[0]["model"], json!("m2"));
 }
 
 #[test]

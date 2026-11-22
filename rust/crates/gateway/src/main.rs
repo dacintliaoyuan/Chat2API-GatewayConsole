@@ -87,6 +87,7 @@ fn main() -> ExitCode {
                 Some(value) => boot_id = Some(value),
                 None => return usage("--boot-id requires a value"),
             },
+            "--desktop-instance" => config.desktop_instance = true,
             "--role" => match args.next().as_deref().and_then(Role::parse) {
                 Some(value) => role = Some(value),
                 None => return usage("--role must be local or cloud"),
@@ -251,7 +252,7 @@ fn main() -> ExitCode {
     // Apply `--role` and `--port` only after the whole argv is parsed, so
     // `validate_bind_policy` sees the final pair regardless of flag order.
     config.role = role.unwrap_or_else(|| {
-        if run_mode == RunMode::Worker {
+        if run_mode == RunMode::Worker || config.desktop_instance {
             Role::Local
         } else {
             Role::for_port(config.bind_port)
