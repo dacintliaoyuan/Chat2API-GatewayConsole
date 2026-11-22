@@ -25,6 +25,7 @@ use chrono::TimeZone;
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel,
 };
+use um_desktop::access_info;
 use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState,
     FormError, HttpAuthAdmin, LoadOutcome, OnDemandLogin, VerifyOutcome,
@@ -64,6 +65,7 @@ static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
 static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
+static ACCESS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_ROUNDS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -1450,6 +1452,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         models::open_model(&window, state.as_ref(), id.as_str());
     });
 
+    // Access info (#152): the settings page reads the gateway's connection
+    // hints whenever the gateway becomes running, after a port change and on every
+    // settings refresh. A failed read keeps its reason and never shows a made-up
+    // address; a gateway that is not running shows the configured address with an
+    // explicit note and never claims a connection.
+    let access_state: Arc<Mutex<Option<access_info::AccessInfoView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&access_state);
+        std::thread::spawn(move || {
+            let reader = access_info::HttpAccessInfoReader::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut last_state: Option<GatewayState> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = ACCESS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let transition =
+                    last_state.as_ref() != Some(&gateway.state) || last_port != Some(port);
+                if epoch == last_epoch && !transition {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                last_state = Some(gateway.state.clone());
+                let view = if !running {
+                    access_info::access_failure(gateway.state.detail(), false, port)
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => match access_info::read_access_info(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                        ) {
+                            Ok(view) => view,
+                            Err(reason) => access_info::access_failure(reason, true, port),
+                        },
+                        Err(error) => access_info::access_failure(error, true, port),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        access_info::apply_access_info(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+
     // Context probes (#154): the gateway owns the queue and the per-model
     // results, so the App polls its admin face and only keeps the batch it
     // submitted. The poll keeps the previous rows on a failed read; the status
@@ -2220,10 +2285,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if page == 3 {
                 REFRESH_LOGS.store(true, Ordering::SeqCst);
             } else if page == 2 {
-                // Opening the settings page reads the login-round table once;
-                // the reader thread skips a duplicate read while the gateway is
-                // unchanged.
+                // Opening the settings page reads the login-round table and the
+                // gateway's access info once; the reader threads skip a duplicate
+                // read while the gateway is unchanged.
                 LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+                ACCESS_REFRESH.fetch_add(1, Ordering::SeqCst);
             } else if page == 1 {
                 // Re-entering the request page re-reads the ledger; the
                 // generation guard in `load_requests` drops stale results.
@@ -2293,6 +2359,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.set_settings_status("正在重新检查网关与账号状态…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
         LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+        ACCESS_REFRESH.fetch_add(1, Ordering::SeqCst);
         let probe = HttpProbe::new();
         let auth_admin = Arc::clone(&settings_auth_admin);
         let gateway_status = Arc::clone(&settings_gateway_status);
