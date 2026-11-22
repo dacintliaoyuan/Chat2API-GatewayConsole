@@ -300,7 +300,10 @@ fn request_detail_shows_first_token_or_a_dash_for_legacy_rows() {
     let request = &page.rows[0];
     assert_eq!(request.first_token, "—");
     let detail = request_detail(request, None);
-    assert!(detail.contains("首字  —"));
+    assert!(
+        detail.contains("首字耗时  不可用（账本没有记录首字耗时，不推算）"),
+        "{detail}"
+    );
     assert_eq!(page.summary.first_token, "—");
 }
 

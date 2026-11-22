@@ -102,6 +102,8 @@ component TextDetails inherits Panel {
     out property <length> copy-y: copy-button.absolute-position.y;
     out property <length> copy-width: copy-button.width;
     out property <length> copy-height: copy-button.height;
+    // Test seam: the text the panel actually displays, not just its input.
+    out property <string> shown-text: full-text.text;
     copy-timer := Timer {
         interval: 1.2s;
         running: false;
@@ -857,6 +859,8 @@ export component MainWindow inherits Window {
     out property <length> request-detail-y: request-details.absolute-position.y;
     out property <length> request-detail-width: request-details.width;
     out property <length> request-detail-height: request-details.height;
+    // Test seam: the visible text of the expanded request detail.
+    out property <string> request-detail-shown: request-details.shown-text;
     out property <int> request-metric-index: request-analytics.metric-index;
     out property <bool> request-split: request-analytics.split;
     out property <string> request-metric-label: request-analytics.metric-label;
