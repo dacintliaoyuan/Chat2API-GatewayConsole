@@ -45,6 +45,7 @@ use um_desktop::log_history::{
     LevelSelection,
 };
 use um_desktop::logstream::{format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine};
+use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
@@ -1246,6 +1247,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
     let current_port = Arc::new(AtomicU16::new(loaded_config.model_api_port));
 
+    // The maintenance menu starts closed while the supervisor is still
+    // starting; the overview reader refreshes it with the real state.
+    {
+        let gateway = gateway_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        maintenance::apply_menu(
+            &window,
+            &maintenance::menu(&maintenance::MenuState::new(&gateway.state, None, None)),
+        );
+    }
+
     {
         let supervisor = Arc::clone(&gateway_supervisor);
         let status = Arc::clone(&gateway_status);
@@ -1522,6 +1536,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_failure: Option<String> = None;
             let mut last_faults: Option<overview::FaultHistory> = None;
             let mut last_service: Option<um_service::ServiceView> = None;
+            let mut last_menu: Option<maintenance::Menu> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1563,6 +1578,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
                             overview::apply_fault_history(&window, &faults);
+                        }
+                    });
+                }
+                // The menu only depends on the gateway/service/auth facts; a
+                // changed row set is applied once, so a refresh never resets an
+                // armed confirmation the user is still looking at.
+                let menu = maintenance::menu(&maintenance::MenuState::new(
+                    &gateway.state,
+                    Some(&service),
+                    Some(&auth),
+                ));
+                if last_menu.as_ref() != Some(&menu) {
+                    last_menu = Some(menu.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            maintenance::apply_menu(&window, &menu);
                         }
                     });
                 }
@@ -1853,6 +1885,134 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
         });
+    });
+
+    // The maintenance menu re-checks the same availability its rows show, then
+    // runs the action through the seam each card already owns. Verify, on-demand
+    // login and restart delegate to their own cards so there is one data path;
+    // start/stop use the existing supervisor and its drain semantics.
+    let weak_maintenance = window.as_weak();
+    let maintenance_supervisor = Arc::clone(&gateway_supervisor);
+    let maintenance_gateway = Arc::clone(&gateway_status);
+    let maintenance_service = Arc::clone(&service_state);
+    let maintenance_auth = Arc::clone(&auth_state);
+    window.on_maintenance_act(move |index| {
+        let Some(window) = weak_maintenance.upgrade() else {
+            return;
+        };
+        if window.get_maintenance_action_busy() || QUIT_REQUESTED.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(action) = maintenance::Action::from_index(index) else {
+            return;
+        };
+        let gateway = maintenance_gateway
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let service = maintenance_service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let auth = maintenance_auth
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let state = maintenance::MenuState::new(&gateway.state, service.as_ref(), auth.as_ref());
+        let Some(row) = maintenance::menu(&state)
+            .items
+            .into_iter()
+            .find(|row| row.action == action)
+        else {
+            return;
+        };
+        if !row.enabled {
+            window.set_maintenance_status(row.reason.into());
+            window.set_maintenance_status_tone(status_tone(Tone::Warn));
+            return;
+        }
+        match action {
+            maintenance::Action::Verify => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_verify_login();
+            }
+            maintenance::Action::Login => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_continue_login();
+            }
+            maintenance::Action::Restart => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_restart_gateway();
+            }
+            maintenance::Action::Start | maintenance::Action::Stop => {
+                window.set_maintenance_action_busy(true);
+                window.set_maintenance_status(format!("正在{}本实例网关…", row.label).into());
+                window.set_maintenance_status_tone(status_tone(Tone::Warn));
+                let supervisor = Arc::clone(&maintenance_supervisor);
+                let status_slot = Arc::clone(&maintenance_gateway);
+                let weak = window.as_weak();
+                std::thread::spawn(move || {
+                    let (result, running) = {
+                        let mut guard = supervisor
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        match guard.as_mut() {
+                            Some(supervisor) => {
+                                let status = match action {
+                                    maintenance::Action::Start => supervisor.start_or_attach(),
+                                    maintenance::Action::Stop => {
+                                        supervisor.stop(StopReason::UserRequested)
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                *status_slot
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                    status.clone();
+                                let outcome = match (&status.state, action) {
+                                    (GatewayState::Running { .. }, maintenance::Action::Start) => {
+                                        Ok(format!("本实例网关运行于 {}", status.base_url))
+                                    }
+                                    (GatewayState::Stopped, maintenance::Action::Stop) => {
+                                        Ok("本实例网关已停止".to_string())
+                                    }
+                                    _ => Err(status.state.detail()),
+                                };
+                                (
+                                    maintenance::action_result(action, outcome),
+                                    matches!(status.state, GatewayState::Running { .. }),
+                                )
+                            }
+                            None => (
+                                maintenance::action_result(
+                                    action,
+                                    Err("本实例网关未接入，无法执行维护动作".to_string()),
+                                ),
+                                false,
+                            ),
+                        }
+                    };
+                    if running {
+                        OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+                        USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_maintenance_action_busy(false);
+                            if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                                maintenance::apply_result(&window, &result);
+                            }
+                        }
+                    });
+                });
+            }
+        }
     });
 
     let request_nav = Arc::new(Mutex::new(usage::RequestNav::default()));

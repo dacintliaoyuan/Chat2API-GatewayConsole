@@ -15,6 +15,7 @@ pub mod instance;
 pub mod log_history;
 pub mod logs;
 pub mod logstream;
+pub mod maintenance;
 pub mod models;
 pub mod overview;
 pub mod shell;

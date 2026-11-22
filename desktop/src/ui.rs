@@ -8,6 +8,7 @@ use std::rc::Rc;
 use slint::{Model, ModelRc, VecModel};
 
 use crate::account::{AccountSurface, VerifySurface};
+use crate::maintenance::{MaintenanceSurface, MenuRow, RecordsView};
 use crate::models::{
     CatalogSurface, ModelRow as ModelViewRow, ProbeHistoryRow as ProbeHistoryViewRow,
     ProbeRow as ProbeViewRow, ProbeSurface,
@@ -344,5 +345,56 @@ fn tone_from_index(index: i32) -> Tone {
         1 => Tone::Warn,
         2 => Tone::Bad,
         _ => Tone::Neutral,
+    }
+}
+
+impl MaintenanceSurface for MainWindow {
+    fn set_menu_rows(&self, rows: &[MenuRow]) {
+        let rows: Vec<MaintenanceRow> = rows
+            .iter()
+            .map(|row| MaintenanceRow {
+                action: row.action.index(),
+                label: row.label.as_str().into(),
+                impact: row.impact.as_str().into(),
+                enabled: row.enabled,
+                reason: row.reason.as_str().into(),
+                confirm_title: row.confirm.title.as_str().into(),
+                confirm_body: row.confirm.body.as_str().into(),
+                confirm_label: row.confirm.label.as_str().into(),
+                danger: row.confirm.danger,
+            })
+            .collect();
+        self.set_maintenance_items(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_records(&self, records: &RecordsView) {
+        self.set_maintenance_records_status(records.status.as_str().into());
+        self.set_maintenance_records_tone(match records.tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+        self.set_maintenance_records_not_applicable(records.not_applicable);
+        let rows: Vec<MaintenanceRecordRow> = records
+            .rows
+            .iter()
+            .map(|row| MaintenanceRecordRow {
+                at: row.at.as_str().into(),
+                action: row.action.as_str().into(),
+                result: row.result.as_str().into(),
+            })
+            .collect();
+        self.set_maintenance_records(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_status(&self, status: &str, tone: Tone) {
+        self.set_maintenance_status(status.into());
+        self.set_maintenance_status_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
     }
 }
