@@ -392,72 +392,20 @@ fn an_unreadable_fault_record_keeps_its_reason_and_never_claims_no_fault() {
     assert_eq!(history.tone, Tone::Bad);
 }
 
-mod main_ui {
-    slint::include_modules!();
-
-    pub fn register_chart(window: &MainWindow) {
-        slintplot::register!(window);
-    }
-}
-
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
-use std::rc::Rc;
-use um_desktop::overview::{
-    apply_fault_history, FaultHistory, FaultRow as HistoryRow, FaultSurface,
-};
-
-impl FaultSurface for main_ui::MainWindow {
-    fn set_fault_status(&self, status: &str) {
-        self.set_upstream_fault_status(status.into());
-    }
-
-    fn set_fault_tone(&self, tone: Tone) {
-        let tone = match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        };
-        self.set_upstream_fault_tone(tone);
-    }
-
-    fn set_fault_check(&self, check: &str) {
-        self.set_upstream_fault_check(check.into());
-    }
-
-    fn set_fault_active(&self, active: Option<&HistoryRow>) {
-        self.set_upstream_fault_active(active.is_some());
-        let (title, detail) = match active {
-            Some(row) => (row.title.as_str(), row.detail.as_str()),
-            None => ("", ""),
-        };
-        self.set_upstream_fault_active_title(title.into());
-        self.set_upstream_fault_active_detail(detail.into());
-    }
-
-    fn set_fault_history(&self, rows: &[HistoryRow]) {
-        let rows: Vec<main_ui::FaultRow> = rows
-            .iter()
-            .map(|row| main_ui::FaultRow {
-                title: row.title.as_str().into(),
-                detail: row.detail.as_str().into(),
-                evidence: row.evidence.as_str().into(),
-            })
-            .collect();
-        self.set_upstream_fault_history(ModelRc::from(Rc::new(VecModel::from(rows))));
-    }
-}
+use slint::{ComponentHandle, Model};
+use um_desktop::overview::{apply_fault_history, FaultHistory, FaultRow as HistoryRow};
+use um_desktop::ui::*;
 
 thread_local! {
     static FAULT_INIT: std::sync::Once = std::sync::Once::new();
 }
 
-fn fault_window() -> main_ui::MainWindow {
+fn fault_window() -> MainWindow {
     FAULT_INIT.with(|init| {
         init.call_once(|| i_slint_backend_testing::init_no_event_loop());
     });
-    let window = main_ui::MainWindow::new().expect("create MainWindow");
-    main_ui::register_chart(&window);
+    let window = MainWindow::new().expect("create MainWindow");
+    slintplot::register!(window);
     window.set_page(0);
     window
         .window()
@@ -528,7 +476,7 @@ fn the_active_fault_card_shows_the_reason_failures_and_next_check() {
     assert!(!window.get_upstream_fault_evidence_toggle_visible());
 }
 
-fn click(window: &main_ui::MainWindow, x: f32, y: f32) {
+fn click(window: &MainWindow, x: f32, y: f32) {
     let position = slint::LogicalPosition::new(x, y);
     window
         .window()
