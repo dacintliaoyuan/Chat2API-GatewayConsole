@@ -1,10 +1,10 @@
 //! The overview UM service card.
 //!
-//! The card reads the app instance's gateway `/admin/um/services` and starts the
-//! service through `/admin/um/services/start`. A failed read keeps its reason and
-//! never invents a PID; a failed start stays stopped and carries the reason.
-//! When the app supervisor has not started the gateway, the card says so and points
-//! at the existing gateway start entry instead of pretending the service ran.
+//! The card reads the app instance's gateway `/admin/um/services`. The gateway is
+//! itself the UM service, so the read face reports the process answering the
+//! request; when the gateway is not running the App cannot read the face and shows
+//! the gateway start entry instead. A failed read keeps its reason and never
+//! invents a PID.
 
 use std::time::Duration;
 
@@ -21,8 +21,6 @@ pub struct ServiceView {
     pub detail: String,
     pub tone: Tone,
     pub checked_at: String,
-    /// True only for a stopped service; the card then offers 「启动 UM 服务」.
-    pub can_start: bool,
     /// The gateway itself is not running; the card points at the gateway entry.
     pub gateway_missing: bool,
     pub gateway_detail: String,
@@ -37,7 +35,6 @@ impl ServiceView {
             detail: reason.into(),
             tone: Tone::Bad,
             checked_at: "核对时间未知".to_string(),
-            can_start: false,
             gateway_missing: false,
             gateway_detail: String::new(),
             can_start_gateway: false,
@@ -51,7 +48,6 @@ impl ServiceView {
             detail: "网关未运行，先启动网关".to_string(),
             tone: Tone::Bad,
             checked_at: "核对时间未知".to_string(),
-            can_start: false,
             gateway_missing: true,
             gateway_detail: detail.to_string(),
             can_start_gateway: true,
@@ -65,7 +61,6 @@ impl ServiceView {
             detail: "网关正在启动，请稍候".to_string(),
             tone: Tone::Warn,
             checked_at: "核对时间未知".to_string(),
-            can_start: false,
             gateway_missing: true,
             gateway_detail: detail.to_string(),
             can_start_gateway: false,
@@ -76,7 +71,6 @@ impl ServiceView {
 /// The gateway's control-token HTTP surface used by the card.
 pub trait ServiceApi {
     fn get_json(&self, url: &str, token: &str) -> Result<Value, String>;
-    fn post_json(&self, url: &str, token: &str, body: &str) -> Result<Value, String>;
 }
 
 pub struct HttpServiceApi {
@@ -112,19 +106,6 @@ impl ServiceApi for HttpServiceApi {
         response
             .into_json::<Value>()
             .map_err(|error| format!("{url}: 服务状态不是有效 JSON：{error}"))
-    }
-
-    fn post_json(&self, url: &str, token: &str, body: &str) -> Result<Value, String> {
-        let response = self
-            .agent
-            .post(url)
-            .set("X-Admin-Control", token)
-            .set("Content-Type", "application/json")
-            .send_string(body)
-            .map_err(|error| api_error(url, error))?;
-        response
-            .into_json::<Value>()
-            .map_err(|error| format!("{url}: 启动结果不是有效 JSON：{error}"))
     }
 }
 
@@ -180,65 +161,6 @@ fn read_result(api: &dyn ServiceApi, base_url: &str, token: &str) -> Result<Serv
     parse_services(&payload)
 }
 
-/// One start attempt and its follow-up status read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartResult {
-    pub service: ServiceView,
-    pub status: String,
-    pub tone: Tone,
-    /// True when the start landed and the follow-up status read succeeded.
-    pub refreshed: bool,
-}
-
-/// Starts the UM service, then re-reads the status.
-///
-/// A failed start keeps the previous service state and carries the reason; a start
-/// that cannot be followed by a status read is never folded into running.
-pub fn start_and_refresh(
-    api: &dyn ServiceApi,
-    base_url: &str,
-    token: &str,
-    previous: &ServiceView,
-) -> StartResult {
-    let url = format!("{}/admin/um/services/start", base_url.trim_end_matches('/'));
-    if let Err(error) = api.post_json(&url, token, "{}") {
-        return StartResult {
-            service: previous.clone(),
-            status: format!("启动失败：{error}"),
-            tone: Tone::Bad,
-            refreshed: false,
-        };
-    }
-    match read_result(api, base_url, token) {
-        Ok(service) => {
-            let running = service.state == "运行中";
-            StartResult {
-                status: if running {
-                    "已启动".to_string()
-                } else {
-                    format!("启动后状态：{}", service.state)
-                },
-                tone: if running { Tone::Good } else { Tone::Warn },
-                service,
-                refreshed: true,
-            }
-        }
-        Err(error) => StartResult {
-            service: previous.clone(),
-            status: format!("启动成功，但状态刷新失败：{error}"),
-            tone: Tone::Warn,
-            refreshed: false,
-        },
-    }
-}
-
-/// Applies one start result to the UM service card.
-pub fn apply_start_result<S: ServiceSurface>(surface: &S, result: &StartResult) {
-    apply_service(surface, &result.service);
-    surface.set_service_start_status(&result.status);
-    surface.set_service_start_tone(result.tone);
-}
-
 /// Parses the gateway's `services` snapshot.
 ///
 /// A missing or malformed snapshot is an error, never a fabricated service row.
@@ -255,7 +177,7 @@ pub fn parse_services(payload: &Value) -> Result<ServiceView, String> {
         .get("state")
         .and_then(Value::as_str)
         .ok_or_else(|| "UM 服务状态字段缺失".to_string())?;
-    let (state, tone, can_start) = state_word(raw_state);
+    let (state, tone) = state_word(raw_state);
     let port = entry
         .get("port")
         .and_then(Value::as_u64)
@@ -295,23 +217,22 @@ pub fn parse_services(payload: &Value) -> Result<ServiceView, String> {
         detail: facts.join(" · "),
         tone,
         checked_at: checked_at(payload),
-        can_start,
         gateway_missing: false,
         gateway_detail: String::new(),
         can_start_gateway: false,
     })
 }
 
-fn state_word(state: &str) -> (String, Tone, bool) {
+fn state_word(state: &str) -> (String, Tone) {
     match state {
-        "Running" => ("运行中".to_string(), Tone::Good, false),
-        "Starting" => ("启动中".to_string(), Tone::Warn, false),
-        "Stopping" => ("停止中".to_string(), Tone::Warn, false),
-        "Stopped" => ("未运行".to_string(), Tone::Bad, true),
-        "Residual" => ("发现受管残留进程".to_string(), Tone::Bad, true),
-        "Degraded" => ("降级".to_string(), Tone::Warn, false),
-        "Conflict" => ("端口被占用".to_string(), Tone::Warn, false),
-        _ => ("状态未知".to_string(), Tone::Neutral, false),
+        "Running" => ("运行中".to_string(), Tone::Good),
+        "Starting" => ("启动中".to_string(), Tone::Warn),
+        "Stopping" => ("停止中".to_string(), Tone::Warn),
+        "Stopped" => ("未运行".to_string(), Tone::Bad),
+        "Residual" => ("发现受管残留进程".to_string(), Tone::Bad),
+        "Degraded" => ("降级".to_string(), Tone::Warn),
+        "Conflict" => ("端口被占用".to_string(), Tone::Warn),
+        _ => ("状态未知".to_string(), Tone::Neutral),
     }
 }
 
@@ -336,12 +257,9 @@ pub trait ServiceSurface {
     fn set_service_detail(&self, value: &str);
     fn set_service_tone(&self, tone: Tone);
     fn set_service_checked_at(&self, value: &str);
-    fn set_service_can_start(&self, value: bool);
     fn set_service_gateway_missing(&self, value: bool);
     fn set_service_gateway_detail(&self, value: &str);
     fn set_service_can_start_gateway(&self, value: bool);
-    fn set_service_start_status(&self, value: &str);
-    fn set_service_start_tone(&self, tone: Tone);
 }
 
 /// Applies one read result to the UM service card.
@@ -350,7 +268,6 @@ pub fn apply_service<S: ServiceSurface>(surface: &S, view: &ServiceView) {
     surface.set_service_detail(&view.detail);
     surface.set_service_tone(view.tone);
     surface.set_service_checked_at(&view.checked_at);
-    surface.set_service_can_start(view.can_start);
     surface.set_service_gateway_missing(view.gateway_missing);
     surface.set_service_gateway_detail(&view.gateway_detail);
     surface.set_service_can_start_gateway(view.can_start_gateway);

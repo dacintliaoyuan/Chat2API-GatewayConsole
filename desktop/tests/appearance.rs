@@ -80,14 +80,19 @@ fn appearance_defaults_are_expanded_system_motion_and_no_transparency() {
     assert!(window.get_motion_enabled(), "Theme 动效开关默认开启");
     assert!(!window.get_reduce_transparency(), "默认不降低透明度");
     assert!(
+        window.get_card_shadow_color().alpha() > 0,
+        "默认卡片阴影必须带透明度，实际 alpha {}",
+        window.get_card_shadow_color().alpha()
+    );
+    assert!(
         window.get_transparency_note_visible(),
-        "降低透明度必须说明当前界面无透明度效果"
+        "降低透明度必须说明它的视觉效果"
     );
     assert!(
         window
             .get_transparency_note_text()
-            .contains("当前界面无透明度效果，开关已保存"),
-        "透明度说明必须如实写明开关只保存、无视觉效果，实际 {}",
+            .contains("降低透明度会关闭卡片阴影、浮层阴影和半透明徽标底色"),
+        "透明度说明必须如实写明真实效果，实际 {}",
         window.get_transparency_note_text()
     );
 }
@@ -120,6 +125,11 @@ fn saved_appearance_is_applied_to_the_window() {
     assert!(!window.get_allow_motion(), "减少动效必须关闭界面动效");
     assert!(!window.get_motion_enabled());
     assert!(window.get_reduce_transparency());
+    assert_eq!(
+        window.get_card_shadow_color().alpha(),
+        0,
+        "保存的降低透明度必须在应用时关闭卡片阴影"
+    );
 
     // 跟随系统动效时，系统关闭动效也必须关闭界面动效。
     apply_settings(&window, &DesktopConfig::default(), false);
@@ -249,7 +259,7 @@ fn motion_segments_disable_the_page_fade_and_follow_the_system() {
 }
 
 #[test]
-fn transparency_toggle_reports_and_keeps_the_no_effect_note() {
+fn transparency_toggle_reports_and_removes_the_semi_transparent_layers() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
@@ -265,6 +275,11 @@ fn transparency_toggle_reports_and_keeps_the_no_effect_note() {
     click(&window, x, y);
     assert_eq!(*toggled.borrow(), vec![true], "点击开关必须上报降低透明度");
     assert!(window.get_reduce_transparency());
+    assert_eq!(
+        window.get_card_shadow_color().alpha(),
+        0,
+        "降低透明度必须让卡片阴影变为不透明"
+    );
     assert!(
         window.get_transparency_note_visible(),
         "降低透明度必须保留说明"
@@ -272,14 +287,18 @@ fn transparency_toggle_reports_and_keeps_the_no_effect_note() {
     assert!(
         window
             .get_transparency_note_text()
-            .contains("当前界面无透明度效果，开关已保存"),
-        "开关不能伪造不存在的透明度效果，实际 {}",
+            .contains("降低透明度会关闭卡片阴影、浮层阴影和半透明徽标底色"),
+        "说明必须写出真实效果，实际 {}",
         window.get_transparency_note_text()
     );
 
     click(&window, x, y);
     assert_eq!(*toggled.borrow(), vec![true, false]);
     assert!(!window.get_reduce_transparency());
+    assert!(
+        window.get_card_shadow_color().alpha() > 0,
+        "关闭降低透明度必须恢复卡片阴影"
+    );
 }
 
 #[test]

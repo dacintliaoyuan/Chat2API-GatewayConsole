@@ -184,6 +184,39 @@ fn missing_readings_say_unavailable_instead_of_zero() {
 }
 
 #[test]
+fn missing_input_and_output_tokens_say_unavailable_with_the_ledger_reason() {
+    let tmp = common::TempDir::new("request-detail-missing-tokens");
+    let ledger = tmp.path().join("usage.jsonl");
+    let missing = json!({
+        "time": "2026-11-20T00:01:00+08:00",
+        "service": "chat2api",
+        "model": "fixture-model",
+        "stream": true,
+        "status": "ok",
+        "duration_ms": 900,
+        "usage_source": "none",
+        "protocol": "chat",
+        "request_id": null,
+    });
+    write_rows(&ledger, &[missing]);
+    let now = time("2026-11-20T19:00:00+08:00");
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
+    let row = page.rows.first().expect("one ledger row");
+    let detail = request_detail(row, None);
+
+    assert!(
+        detail.contains("输入  不可用（上游没有报告 input Token（写端记为 0 表示未知））"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("输出  不可用（上游没有报告 output Token（写端记为 0 表示未知））"),
+        "{detail}"
+    );
+    assert!(!detail.contains("输入  —"), "{detail}");
+    assert!(!detail.contains("输出  —"), "{detail}");
+}
+
+#[test]
 fn retry_steps_expand_with_each_retry_and_logs_keep_only_this_request() {
     let tmp = common::TempDir::new("request-detail-retries");
     let ledger = tmp.path().join("usage.jsonl");

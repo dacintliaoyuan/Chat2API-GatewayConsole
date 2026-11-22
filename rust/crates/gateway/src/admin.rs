@@ -1250,32 +1250,7 @@ fn parse_log_row(offset: u64, text: &str) -> Value {
 }
 
 fn redact_log_text(text: &str) -> String {
-    let mut output = String::new();
-    let mut rest = text;
-    loop {
-        let lowered = rest.to_ascii_lowercase();
-        let mut best: Option<(usize, usize)> = None;
-        for marker in ["bearer ", "token=", "password=", "api_key=", "cookie="] {
-            if let Some(index) = lowered.find(marker) {
-                let end = index + marker.len();
-                let value_end = rest[end..]
-                    .find(char::is_whitespace)
-                    .map(|offset| end + offset)
-                    .unwrap_or(rest.len());
-                if best.map_or(true, |(start, _)| index < start) {
-                    best = Some((index, value_end));
-                }
-            }
-        }
-        let Some((start, end)) = best else {
-            output.push_str(rest);
-            break;
-        };
-        output.push_str(&rest[..start]);
-        output.push_str("[redacted]");
-        rest = &rest[end..];
-    }
-    output
+    crate::login::history::redact_secrets(text)
         .chars()
         .filter(|character| !character.is_control() || *character == '\t')
         .collect()

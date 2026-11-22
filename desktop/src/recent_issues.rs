@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde_json::Value;
 use um_console::local_um::desktop_requests;
 
+use crate::config::{RequestResult, TimeRange};
 use crate::models::{CatalogView, ProbeView};
 use crate::overview::Tone;
 use crate::um_service::ServiceView;
@@ -19,10 +20,10 @@ use crate::um_service::ServiceView;
 /// Where 查看证据 jumps: the request page's result filter and time window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IssueQuery {
-    /// The request result index: 2 failed, 3 truncated, 4 client disconnected.
-    pub result: i32,
-    /// The request time-range index; 0 is 今天.
-    pub window: i32,
+    /// The request result the request page filters to.
+    pub result: RequestResult,
+    /// The request time range the jump applies; 今天 is the recent-issues scope.
+    pub window: TimeRange,
 }
 
 /// One row of the recent-issues card.
@@ -197,13 +198,22 @@ impl IssueRow {
             .unwrap_or(0)
     }
 
-    fn request(title: &str, count: i64, detail: String, tone: Tone, result: i32) -> Self {
+    fn request(
+        title: &str,
+        count: i64,
+        detail: String,
+        tone: Tone,
+        result: RequestResult,
+    ) -> Self {
         Self {
             title: title.to_string(),
             count: format!("{count} 次"),
             detail,
             tone,
-            evidence: Some(IssueQuery { result, window: 0 }),
+            evidence: Some(IssueQuery {
+                result,
+                window: TimeRange::Today,
+            }),
             evidence_note: String::new(),
         }
     }
@@ -285,7 +295,13 @@ fn request_issues(
         if unknown > 0 {
             detail.push_str(&format!("；另有 {unknown} 条结果未确认，未计入失败"));
         }
-        rows.push(IssueRow::request("请求失败", failed, detail, Tone::Bad, 2));
+        rows.push(IssueRow::request(
+            "请求失败",
+            failed,
+            detail,
+            Tone::Bad,
+            RequestResult::Failed,
+        ));
     }
     let truncated = count("truncated");
     if truncated > 0 {
@@ -294,7 +310,7 @@ fn request_issues(
             truncated,
             format!("今天账本记录了 {truncated} 次截断：HTTP 200 但回复未完成，按失败计{partial}"),
             Tone::Bad,
-            3,
+            RequestResult::Truncated,
         ));
     }
     let disconnected = count("client_disconnected");
@@ -306,7 +322,7 @@ fn request_issues(
                 "今天账本记录了 {disconnected} 次客户端在回复完成前断开；不推断为主动取消{partial}"
             ),
             Tone::Warn,
-            4,
+            RequestResult::ClientDisconnected,
         ));
     }
 }

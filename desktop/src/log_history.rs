@@ -119,113 +119,8 @@ impl HistoryRange {
 
 /// The history level filter. An empty selection means every level, including the
 /// ungraded `unknown` and `raw` rows; selecting levels narrows the gateway query.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LevelSelection(u8);
-
-impl LevelSelection {
-    pub const ERROR: u8 = 1;
-    pub const WARN: u8 = 2;
-    pub const INFO: u8 = 4;
-    pub const DEBUG: u8 = 8;
-
-    pub fn from_flags(error: bool, warn: bool, info: bool, debug: bool) -> Self {
-        let mut mask = 0;
-        if error {
-            mask |= Self::ERROR;
-        }
-        if warn {
-            mask |= Self::WARN;
-        }
-        if info {
-            mask |= Self::INFO;
-        }
-        if debug {
-            mask |= Self::DEBUG;
-        }
-        Self(mask)
-    }
-
-    pub fn from_mask(mask: u8) -> Self {
-        Self(mask & (Self::ERROR | Self::WARN | Self::INFO | Self::DEBUG))
-    }
-
-    pub fn mask(self) -> u8 {
-        self.0
-    }
-
-    pub fn flags(self) -> (bool, bool, bool, bool) {
-        (
-            self.0 & Self::ERROR != 0,
-            self.0 & Self::WARN != 0,
-            self.0 & Self::INFO != 0,
-            self.0 & Self::DEBUG != 0,
-        )
-    }
-
-    pub fn toggle(self, level: &str) -> Self {
-        let bit = match level.to_ascii_lowercase().as_str() {
-            "error" => Self::ERROR,
-            "warn" | "warning" => Self::WARN,
-            "info" => Self::INFO,
-            "debug" => Self::DEBUG,
-            _ => return self,
-        };
-        Self(self.0 ^ bit)
-    }
-
-    pub fn matches(self, level: &str) -> bool {
-        if self.0 == 0 {
-            return true;
-        }
-        match level.to_ascii_lowercase().as_str() {
-            "error" => self.0 & Self::ERROR != 0,
-            "warn" | "warning" => self.0 & Self::WARN != 0,
-            "info" => self.0 & Self::INFO != 0,
-            "debug" => self.0 & Self::DEBUG != 0,
-            _ => false,
-        }
-    }
-
-    /// The repeated `level` values in the gateway's closed-set order.
-    pub fn query_levels(self) -> Vec<&'static str> {
-        let mut levels = Vec::new();
-        if self.0 & Self::ERROR != 0 {
-            levels.push("error");
-        }
-        if self.0 & Self::WARN != 0 {
-            levels.push("warn");
-        }
-        if self.0 & Self::INFO != 0 {
-            levels.push("info");
-        }
-        if self.0 & Self::DEBUG != 0 {
-            levels.push("debug");
-        }
-        levels
-    }
-
-    /// The legacy single-level value kept in `desktop.json`: a multi-selection
-    /// cannot be represented, so it saves `All` and the gateway still filters.
-    pub fn log_level(self) -> crate::config::LogLevel {
-        match self.0 {
-            Self::ERROR => crate::config::LogLevel::Error,
-            Self::WARN => crate::config::LogLevel::Warn,
-            Self::INFO => crate::config::LogLevel::Info,
-            Self::DEBUG => crate::config::LogLevel::Raw,
-            _ => crate::config::LogLevel::All,
-        }
-    }
-
-    pub fn from_log_level(level: crate::config::LogLevel) -> Self {
-        match level {
-            crate::config::LogLevel::Error => Self::from_mask(Self::ERROR),
-            crate::config::LogLevel::Warn => Self::from_mask(Self::WARN),
-            crate::config::LogLevel::Info => Self::from_mask(Self::INFO),
-            crate::config::LogLevel::Raw => Self::from_mask(Self::DEBUG),
-            crate::config::LogLevel::All => Self::default(),
-        }
-    }
-}
+/// The saved setting and the query filter are the same bitmask.
+pub use crate::config::LogLevels as LevelSelection;
 
 /// One `/admin/um/logs` request. The keyword is applied by the App after the
 /// page arrives, because the gateway read face has no keyword parameter.
@@ -245,7 +140,7 @@ impl HistoryQuery {
         if let Some(since) = self.range.since(now) {
             parts.push(format!("since={since}"));
         }
-        for level in self.levels.query_levels() {
+        for level in self.levels.keys() {
             parts.push(format!("level={level}"));
         }
         if !self.source.is_empty() {

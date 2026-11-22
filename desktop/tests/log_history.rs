@@ -112,11 +112,21 @@ fn the_five_ranges_and_gateway_sources_are_the_history_filter_surface() {
     window.set_log_source_options(ModelRc::from([
         SharedString::from("全部来源"),
         "chat2api".into(),
-        "edge".into(),
     ]));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_log_source_options().row_count(), 3);
+    assert_eq!(window.get_log_source_options().row_count(), 2);
     assert_eq!(window.get_log_source_current().as_str(), "全部来源");
+    assert!(
+        window.get_log_source_note_visible(),
+        "the history source filter must explain the one real source"
+    );
+    assert!(
+        window
+            .get_log_source_note_text()
+            .contains("本机实例只有 chat2api 来源"),
+        "实际 {}",
+        window.get_log_source_note_text()
+    );
 
     let ranges = Rc::new(Cell::new(0));
     window.on_select_log_range({
@@ -277,7 +287,7 @@ fn level_selection_is_multi_select_and_unfiled_rows_show_when_empty() {
     assert!(errors_warn.matches("error"));
     assert!(errors_warn.matches("warn"));
     assert!(!errors_warn.matches("info"));
-    assert_eq!(errors_warn.query_levels(), vec!["error", "warn"]);
+    assert_eq!(errors_warn.keys(), vec!["error", "warn"]);
 }
 
 #[test]

@@ -26,10 +26,6 @@ ALLOW: frozenset[str] = frozenset({
     "desktop/ui/theme.slint",
     # The Lucide-backed icon map is new and follows the desktop UI's LF style.
     "desktop/ui/icons.slint",
-    # The recent-issues card files are new and follow the desktop Rust sources'
-    # LF style.
-    "desktop/src/recent_issues.rs",
-    "desktop/tests/recent_issues.rs",
 })
 
 

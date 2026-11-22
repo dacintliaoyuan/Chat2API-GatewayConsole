@@ -239,55 +239,120 @@ impl LogRange {
     }
 }
 
-/// The log page's single level filter.
+/// The log page's level filter as a bitmask. An empty selection shows every
+/// level, including ungraded rows; selecting levels narrows the gateway query.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum LogLevel {
-    #[default]
-    All,
-    Info,
-    Warn,
-    Error,
-    Raw,
-}
+pub struct LogLevels(u8);
 
-impl LogLevel {
-    pub fn index(self) -> i32 {
-        match self {
-            Self::All => 0,
-            Self::Info => 1,
-            Self::Warn => 2,
-            Self::Error => 3,
-            Self::Raw => 4,
+impl LogLevels {
+    pub const ERROR: u8 = 1;
+    pub const WARN: u8 = 2;
+    pub const INFO: u8 = 4;
+    pub const DEBUG: u8 = 8;
+
+    pub fn from_flags(error: bool, warn: bool, info: bool, debug: bool) -> Self {
+        let mut mask = 0;
+        if error {
+            mask |= Self::ERROR;
+        }
+        if warn {
+            mask |= Self::WARN;
+        }
+        if info {
+            mask |= Self::INFO;
+        }
+        if debug {
+            mask |= Self::DEBUG;
+        }
+        Self(mask)
+    }
+
+    pub fn from_mask(mask: u8) -> Self {
+        Self(mask & (Self::ERROR | Self::WARN | Self::INFO | Self::DEBUG))
+    }
+
+    pub fn mask(self) -> u8 {
+        self.0
+    }
+
+    pub fn flags(self) -> (bool, bool, bool, bool) {
+        (
+            self.0 & Self::ERROR != 0,
+            self.0 & Self::WARN != 0,
+            self.0 & Self::INFO != 0,
+            self.0 & Self::DEBUG != 0,
+        )
+    }
+
+    pub fn toggle(self, level: &str) -> Self {
+        let bit = match level.to_ascii_lowercase().as_str() {
+            "error" => Self::ERROR,
+            "warn" | "warning" => Self::WARN,
+            "info" => Self::INFO,
+            "debug" => Self::DEBUG,
+            _ => return self,
+        };
+        Self(self.0 ^ bit)
+    }
+
+    pub fn matches(self, level: &str) -> bool {
+        if self.0 == 0 {
+            return true;
+        }
+        match level.to_ascii_lowercase().as_str() {
+            "error" => self.0 & Self::ERROR != 0,
+            "warn" | "warning" => self.0 & Self::WARN != 0,
+            "info" => self.0 & Self::INFO != 0,
+            "debug" => self.0 & Self::DEBUG != 0,
+            _ => false,
         }
     }
 
-    pub fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Info,
-            2 => Self::Warn,
-            3 => Self::Error,
-            4 => Self::Raw,
-            _ => Self::All,
+    /// The saved values in the gateway's closed-set order.
+    pub fn keys(self) -> Vec<&'static str> {
+        let mut levels = Vec::new();
+        if self.0 & Self::ERROR != 0 {
+            levels.push("error");
         }
+        if self.0 & Self::WARN != 0 {
+            levels.push("warn");
+        }
+        if self.0 & Self::INFO != 0 {
+            levels.push("info");
+        }
+        if self.0 & Self::DEBUG != 0 {
+            levels.push("debug");
+        }
+        levels
     }
 
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Error => "error",
-            Self::Raw => "raw",
-        }
-    }
-
-    pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "all" => Some(Self::All),
-            "info" => Some(Self::Info),
-            "warn" => Some(Self::Warn),
-            "error" => Some(Self::Error),
-            "raw" => Some(Self::Raw),
+    /// Reads the saved value. The current document stores an array of level
+    /// names; an older document stored one of `all/info/warn/error/raw`, and both
+    /// keep their meaning.
+    pub fn parse_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::String(text) => match text.as_str() {
+                "all" => Some(Self::default()),
+                "info" => Some(Self::from_mask(Self::INFO)),
+                "warn" => Some(Self::from_mask(Self::WARN)),
+                "error" => Some(Self::from_mask(Self::ERROR)),
+                "raw" => Some(Self::from_mask(Self::DEBUG)),
+                _ => None,
+            },
+            Value::Array(items) => {
+                let mut levels = Self::default();
+                for item in items {
+                    let bit = match item.as_str()? {
+                        "error" => Self::ERROR,
+                        "warn" => Self::WARN,
+                        "info" => Self::INFO,
+                        "debug" => Self::DEBUG,
+                        _ => return None,
+                    };
+                    levels.0 |= bit;
+                }
+                Some(levels)
+            }
             _ => None,
         }
     }
@@ -388,7 +453,7 @@ pub struct Settings {
     pub request_result: RequestResult,
     pub request_search: String,
     pub log_range: LogRange,
-    pub log_level: LogLevel,
+    pub log_level: LogLevels,
     pub log_keyword: String,
     pub sidebar: SidebarMode,
     pub reduced_motion: MotionPreference,
@@ -591,18 +656,18 @@ fn parse_settings(body: &Value) -> (Settings, Vec<String>) {
             Some(parsed) => settings.log_range = parsed,
             None => warnings.push(invalid_setting(
                 "log_range",
-                "live、today、7d 或 30d",
+                "live、today、24h、7d、30d 或 all",
                 "live",
             )),
         }
     }
     if let Some(value) = body.get("log_level") {
-        match value.as_str().and_then(LogLevel::parse) {
+        match LogLevels::parse_value(value) {
             Some(parsed) => settings.log_level = parsed,
             None => warnings.push(invalid_setting(
                 "log_level",
-                "all、info、warn、error 或 raw",
-                "all",
+                "级别数组（error、warn、info、debug）或旧单值 all、info、warn、error、raw",
+                "全部级别",
             )),
         }
     }
@@ -689,7 +754,7 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
         "request_result": settings.request_result.key(),
         "request_search": settings.request_search,
         "log_range": settings.log_range.key(),
-        "log_level": settings.log_level.key(),
+        "log_level": settings.log_level.keys(),
         "log_keyword": settings.log_keyword,
         "sidebar": settings.sidebar.key(),
         "reduced_motion": settings.reduced_motion.key(),
@@ -765,7 +830,11 @@ pub fn apply_settings(window: &MainWindow, config: &DesktopConfig, system_allows
     window.set_request_result(settings.request_result.index());
     window.set_request_keyword(settings.request_search.clone().into());
     window.set_log_period(settings.log_range.index());
-    window.set_log_filter_level(settings.log_level.index());
+    let (error, warn, info, debug) = settings.log_level.flags();
+    window.set_log_level_error(error);
+    window.set_log_level_warn(warn);
+    window.set_log_level_info(info);
+    window.set_log_level_debug(debug);
     window.set_log_filter_keyword(settings.log_keyword.clone().into());
     window.set_sidebar_mode(settings.sidebar.index());
     window.set_motion_mode(settings.reduced_motion.index());
@@ -783,7 +852,12 @@ pub fn settings_from_window(window: &MainWindow) -> Settings {
         request_result: RequestResult::from_index(window.get_request_result()),
         request_search: window.get_request_keyword().to_string(),
         log_range: LogRange::from_index(window.get_log_period()),
-        log_level: LogLevel::from_index(window.get_log_filter_level()),
+        log_level: LogLevels::from_flags(
+            window.get_log_level_error(),
+            window.get_log_level_warn(),
+            window.get_log_level_info(),
+            window.get_log_level_debug(),
+        ),
         log_keyword: window.get_log_filter_keyword().to_string(),
         ..Settings::default()
     }

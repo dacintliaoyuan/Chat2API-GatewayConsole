@@ -425,6 +425,44 @@ fn the_admin_log_history_filters_time_levels_source_and_pages_earlier() {
 }
 
 #[test]
+fn the_admin_log_history_redacts_secrets_and_keeps_tabs() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let log = temp.write(
+        "gateway.log",
+        &format!(
+            "{}\n{}\n",
+            json!({
+                "time": 1000,
+                "level": "info",
+                "service": "chat2api",
+                "event": "note",
+                "message": "password=hunter2 bearer abc",
+            }),
+            "plain token=xyz\tkept",
+        ),
+    );
+    let gateway = start_local_gateway_with(&stub, &temp, |config| {
+        config.service_log = Some(log.clone());
+    });
+
+    let body = admin_get(&gateway, "/admin/um/logs").json();
+    let lines = body["lines"].as_array().expect("lines");
+    assert_eq!(lines.len(), 2, "{body}");
+    let structured = lines[0]["text"].as_str().expect("structured text");
+    assert!(structured.contains("[redacted]"), "{structured}");
+    assert!(!structured.contains("hunter2"), "{structured}");
+    assert!(!structured.contains("abc"), "{structured}");
+    let plain = lines[1]["text"].as_str().expect("plain text");
+    assert!(plain.contains("[redacted]"), "{plain}");
+    assert!(
+        plain.contains('\t'),
+        "tabs must survive the control filter: {plain:?}"
+    );
+    assert!(!plain.contains("xyz"), "{plain}");
+}
+
+#[test]
 fn the_admin_maintenance_read_is_explicitly_unavailable() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
