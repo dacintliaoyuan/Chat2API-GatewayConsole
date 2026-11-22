@@ -569,3 +569,28 @@ fn the_filter_action_reads_the_two_fields() {
         Some(("3".to_string(), "restored".to_string()))
     );
 }
+
+#[test]
+fn a_query_longer_than_the_gateway_bound_is_truncated_like_the_gateway() {
+    let long_reason = "a".repeat(120);
+    let payload = payload(json!([round_with(
+        1,
+        Some(long_reason.as_str()),
+        Some("restored"),
+        Some("explicit"),
+        None
+    )]));
+    let query = LoginRoundsQuery {
+        round: String::new(),
+        q: format!("{long_reason}b"),
+    };
+    let view = parse_login_rounds(&payload, &query).expect("truncated query");
+    assert_eq!(rows(view), vec!["1"]);
+
+    let url = query_url("http://127.0.0.1:7999", &query).expect("query url");
+    assert!(
+        url.contains(&format!("q={}&limit=200", "a".repeat(120))),
+        "{url}"
+    );
+    assert!(!url.contains(&format!("q={}b", "a".repeat(120))), "{url}");
+}
