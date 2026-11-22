@@ -26,8 +26,8 @@ use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel,
 };
 use um_desktop::account::{
-    self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
-    AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
+    self, account_view, apply_account, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState,
+    FormError, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::clipboard;
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
@@ -41,13 +41,10 @@ use um_desktop::instance::{self, InstanceError};
 use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
-use um_desktop::overview::{
-    self, FaultRow as FaultHistoryRow, FaultSurface, HttpProbe, Overview, Tone,
-};
+use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
+use um_desktop::ui::*;
 use um_desktop::usage::{self, Coverage, Range, UsageView};
-
-slint::include_modules!();
 
 static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -124,84 +121,6 @@ fn clock(at: Option<i64>) -> String {
 
 fn clock_now() -> String {
     clock(Some(chrono::Local::now().timestamp_millis()))
-}
-
-impl AccountSurface for MainWindow {
-    fn set_saved_account(&self, value: &str) {
-        self.set_account_saved(value.into());
-    }
-
-    fn set_saved_detail(&self, value: &str) {
-        self.set_account_saved_detail(value.into());
-    }
-
-    fn set_can_clear(&self, value: bool) {
-        self.set_account_can_clear(value);
-    }
-
-    fn set_can_continue_login(&self, value: bool) {
-        self.set_account_can_continue(value);
-    }
-
-    fn set_overview_label(&self, value: &str) {
-        self.set_account_label(value.into());
-    }
-
-    fn set_overview_detail(&self, value: &str) {
-        self.set_account_detail(value.into());
-    }
-
-    fn set_overview_tone(&self, tone: Tone) {
-        self.set_account_tone(status_tone(tone));
-    }
-
-    fn set_overview_pulse(&self, value: bool) {
-        self.set_account_pulse(value);
-    }
-
-    fn set_login_status(&self, value: &str) {
-        self.set_login_status(value.into());
-    }
-
-    fn set_credential_status(&self, value: &str) {
-        self.set_credential_status(value.into());
-    }
-}
-
-impl FaultSurface for MainWindow {
-    fn set_fault_status(&self, status: &str) {
-        self.set_upstream_fault_status(status.into());
-    }
-
-    fn set_fault_tone(&self, tone: Tone) {
-        self.set_upstream_fault_tone(status_tone(tone));
-    }
-
-    fn set_fault_check(&self, check: &str) {
-        self.set_upstream_fault_check(check.into());
-    }
-
-    fn set_fault_active(&self, active: Option<&FaultHistoryRow>) {
-        self.set_upstream_fault_active(active.is_some());
-        let (title, detail) = match active {
-            Some(row) => (row.title.as_str(), row.detail.as_str()),
-            None => ("", ""),
-        };
-        self.set_upstream_fault_active_title(title.into());
-        self.set_upstream_fault_active_detail(detail.into());
-    }
-
-    fn set_fault_history(&self, rows: &[FaultHistoryRow]) {
-        let rows: Vec<FaultRow> = rows
-            .iter()
-            .map(|row| FaultRow {
-                title: row.title.as_str().into(),
-                detail: row.detail.as_str().into(),
-                evidence: row.evidence.as_str().into(),
-            })
-            .collect();
-        self.set_upstream_fault_history(ModelRc::from(Rc::new(VecModel::from(rows))));
-    }
 }
 
 fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved: &LoadOutcome) {
@@ -848,6 +767,29 @@ fn hide_now(window: &MainWindow) {
     let _ = window.hide();
 }
 
+/// Persists every page setting the window currently shows. A failed write keeps
+/// the captured values in memory and reports the reason on the settings status line.
+fn persist_window_settings(
+    window: &MainWindow,
+    path: Option<&Path>,
+    config: &Mutex<DesktopConfig>,
+    applied: &str,
+) {
+    let mut config = config
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match config::save_window_settings(path, &mut config, window) {
+        Ok(()) => {
+            window.set_settings_status(applied.into());
+            window.set_settings_tone(status_tone(Tone::Good));
+        }
+        Err(message) => {
+            window.set_settings_status(message.into());
+            window.set_settings_tone(status_tone(Tone::Warn));
+        }
+    }
+}
+
 fn show_now(window: &MainWindow) {
     let _ = window.show();
     window.window().set_minimized(false);
@@ -921,29 +863,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window = MainWindow::new()?;
     slintplot::register!(window);
-    window.set_allow_motion(allow_motion());
     let config_path = config::default_config_path();
     let (loaded_config, settings_status, settings_tone) = match &config_path {
-        Ok(path) => match config::load_from(path) {
-            ConfigLoadOutcome::Missing => (
-                DesktopConfig::default(),
-                "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关".to_string(),
-                Tone::Neutral,
-            ),
-            ConfigLoadOutcome::Loaded(config) => (
-                config,
-                format!(
-                    "已加载配置：{}；启动时接入已有实例或拉起本实例网关",
-                    path.display()
+        Ok(path) => {
+            let (outcome, warnings) = config::load_from_with_warnings(path);
+            match outcome {
+                ConfigLoadOutcome::Missing => (
+                    DesktopConfig::default(),
+                    "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关"
+                        .to_string(),
+                    Tone::Neutral,
                 ),
-                Tone::Good,
-            ),
-            ConfigLoadOutcome::Invalid(reason) => (
-                DesktopConfig::default(),
-                format!("配置不可用：{reason}；使用默认端口 7999"),
-                Tone::Bad,
-            ),
-        },
+                ConfigLoadOutcome::Loaded(config) if warnings.is_empty() => (
+                    config,
+                    format!(
+                        "已加载配置：{}；启动时接入已有实例或拉起本实例网关",
+                        path.display()
+                    ),
+                    Tone::Good,
+                ),
+                ConfigLoadOutcome::Loaded(config) => (
+                    config,
+                    format!(
+                        "已加载配置：{}；以下设置已回默认：{}",
+                        path.display(),
+                        warnings.join("；")
+                    ),
+                    Tone::Warn,
+                ),
+                ConfigLoadOutcome::Invalid(reason) => (
+                    DesktopConfig::default(),
+                    format!("配置不可用：{reason}；使用默认端口 7999"),
+                    Tone::Bad,
+                ),
+            }
+        }
         Err(reason) => (DesktopConfig::default(), reason.clone(), Tone::Bad),
     };
     let app_data_root = config_path
@@ -966,6 +920,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(status_tone(settings_tone));
     window.set_theme_mode(theme_mode_index(loaded_config.theme));
+    config::apply_settings(&window, &loaded_config, allow_motion());
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -1927,7 +1882,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut config = config
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let next = DesktopConfig { model_api_port: port, ..*config };
+                    let next = DesktopConfig {
+                        model_api_port: port,
+                        ..config.clone()
+                    };
                     config::save_to(path, &next)?;
                     *config = next;
                     Ok(())
@@ -1992,6 +1950,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let theme_config = Arc::clone(&current_config);
+    let theme_path_for_handler = theme_path.clone();
     let weak_theme = window.as_weak();
     window.on_theme_mode_changed(move |index| {
         let Some(window) = weak_theme.upgrade() else {
@@ -2002,7 +1961,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut config = theme_config
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match config::apply_theme(theme_path.as_deref(), &mut config, theme) {
+        match config::apply_theme(theme_path_for_handler.as_deref(), &mut config, theme) {
             Ok(()) => {
                 window.set_settings_status(format!("外观：{}", theme_label(theme)).into());
                 window.set_settings_tone(status_tone(Tone::Good));
@@ -2011,6 +1970,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window.set_settings_status(message.into());
                 window.set_settings_tone(status_tone(Tone::Warn));
             }
+        }
+    });
+
+    // Page filters and the auto-refresh interval are user settings; the UI
+    // reports every change through one callback so a restart opens the same view.
+    let settings_path = theme_path.clone();
+    let settings_config = Arc::clone(&current_config);
+    let weak_settings = window.as_weak();
+    window.on_settings_changed(move || {
+        if let Some(window) = weak_settings.upgrade() {
+            persist_window_settings(
+                &window,
+                settings_path.as_deref(),
+                &settings_config,
+                "设置已更新",
+            );
         }
     });
 
