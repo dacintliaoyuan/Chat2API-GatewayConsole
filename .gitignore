@@ -47,7 +47,9 @@ web/docs/
 .env.*
 !.env.example
 *.zip
-.zcode/
+.zcode/*
+# The workspace hook config is shared with the repository; workflow artifacts stay local.
+!.zcode/config.json
 
 # #72 cutover parity fixtures deliberately carry the production ledger and
 # browser-profile lock names; they are isolated test data, not runtime state.

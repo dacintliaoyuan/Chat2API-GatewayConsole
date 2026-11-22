@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PostToolUse": [
+        {
+          "matcher": "Edit|Write",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "cmd.exe",
+              "args": [
+                "/c",
+                "C:/Users/dacint/.agents/skills/impeccable/scripts/impeccable.cmd",
+                "hook"
+              ],
+              "timeoutMs": 5000,
+              "statusMessage": "Checking UI changes"
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "process",
+              "command": "cmd.exe",
+              "args": [
+                "/c",
+                "C:/Users/dacint/.agents/skills/impeccable/scripts/impeccable.cmd",
+                "hook"
+              ],
+              "timeoutMs": 30000,
+              "statusMessage": "Design deep pass"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
