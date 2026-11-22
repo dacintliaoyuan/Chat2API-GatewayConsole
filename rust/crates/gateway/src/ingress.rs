@@ -221,13 +221,16 @@ struct QueuedRequest {
 }
 
 impl QueuedRequest {
-    fn new(request: &Request, body: Vec<u8>) -> Self {
+    fn from_validated(request: Request) -> Self {
+        let BodyRead::Complete(body) = request.body else {
+            unreachable!("ingress validated the body before dispatch");
+        };
         Self {
-            method: request.method.clone(),
-            target: request.target.clone(),
-            headers: request.headers.clone(),
+            method: request.method,
+            target: request.target,
+            headers: request.headers,
             body,
-            request_id: request.request_id.clone(),
+            request_id: request.request_id,
         }
     }
 
@@ -554,15 +557,6 @@ fn handle_forward(
 ) -> io::Result<bool> {
     let protocol = error_protocol(request.path());
     let request_id = request.request_id.clone();
-    let Some(body) = body_bytes(&request) else {
-        return write_error(
-            client,
-            GatewayError::invalid_request("Incomplete request body"),
-            protocol,
-            &request_id,
-        );
-    };
-    let queued = QueuedRequest::new(&request, body.to_vec());
     let queueable = request.path().starts_with("/v1/") || request.path().starts_with("/api/");
     if queueable {
         match desired_state(state) {
@@ -593,6 +587,7 @@ fn handle_forward(
             );
         }
     }
+    let queued = QueuedRequest::from_validated(request);
     if let Some((mut worker, worker_port)) = try_connect_worker(&state.config) {
         let outcome = forward_to_worker(client, &mut worker, &queued, worker_port)?;
         return Ok(outcome.close);
@@ -647,7 +642,8 @@ fn handle_health(
             &request_id,
         );
     };
-    let queued = QueuedRequest::new(&request, Vec::new());
+    let mut queued = QueuedRequest::from_validated(request);
+    queued.body = Vec::new();
     let outcome = forward_to_worker(client, &mut worker, &queued, worker_port)?;
     Ok(outcome.close)
 }
@@ -682,15 +678,7 @@ fn handle_admin_shutdown(
             );
         }
     }
-    let Some(body) = body_bytes(&request) else {
-        return write_error(
-            client,
-            GatewayError::invalid_request("Incomplete request body"),
-            protocol,
-            &request_id,
-        );
-    };
-    let queued = QueuedRequest::new(&request, body.to_vec());
+    let queued = QueuedRequest::from_validated(request);
     state.stopping.store(true, Ordering::SeqCst);
     match try_connect_worker(&state.config) {
         Some((mut worker, worker_port)) => {
@@ -945,9 +933,23 @@ fn forward_to_worker(
     request: &QueuedRequest,
     worker_port: u16,
 ) -> io::Result<ForwardOutcome> {
-    let bytes = serialize_request(request, worker_port);
-    let written = write_request_bytes(worker, &bytes).unwrap_or(0);
-    if written < bytes.len() {
+    let head = match serialize_request_head(request, worker_port) {
+        Ok(head) => head,
+        Err(_) => {
+            let protocol = error_protocol(request.path());
+            let _ = write_memory_pressure(client, protocol, &request.request_id);
+            return Ok(ForwardOutcome {
+                close: true,
+                upstream_status: None,
+            });
+        }
+    };
+    let written = write_request_bytes(worker, &head).unwrap_or(0);
+    // Once any header bytes were sent, preserve the worker-loss semantics:
+    // an incomplete body must not put this request back on the recovery queue.
+    let request_sent = written == head.len()
+        && write_request_bytes(worker, &request.body).is_ok_and(|count| count == request.body.len());
+    if !request_sent {
         let error = GatewayError::gateway_worker_lost(written > 0);
         let close = write_error(
             client,
@@ -1000,11 +1002,22 @@ fn write_request_bytes(worker: &mut TcpStream, bytes: &[u8]) -> io::Result<usize
     Ok(written)
 }
 
-fn serialize_request(request: &QueuedRequest, worker_port: u16) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(256 + request.body.len());
-    bytes.extend_from_slice(
-        format!("{} {} HTTP/1.1\r\n", request.method, request.target).as_bytes(),
-    );
+fn serialize_request_head(request: &QueuedRequest, worker_port: u16) -> io::Result<Vec<u8>> {
+    // The parser bounds the input head. Allow space for the request line
+    // delimiters and any synthesized Host, Content-Length and Connection.
+    let capacity = request.method.len()
+        + request.target.len()
+        + 128
+        + request
+            .headers
+            .iter()
+            .map(|header| header.name.len() + header.value.len() + 4)
+            .sum::<usize>();
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| io::ErrorKind::OutOfMemory)?;
+    write!(bytes, "{} {} HTTP/1.1\r\n", request.method, request.target)?;
     let mut has_host = false;
     let mut has_length = false;
     for header in request.headers.iter() {
@@ -1026,21 +1039,19 @@ fn serialize_request(request: &QueuedRequest, worker_port: u16) -> Vec<u8> {
         bytes.extend_from_slice(b"\r\n");
     }
     if !has_host {
-        bytes.extend_from_slice(format!("Host: 127.0.0.1:{worker_port}\r\n").as_bytes());
+        write!(bytes, "Host: 127.0.0.1:{worker_port}\r\n")?;
     }
     if !has_length {
-        bytes.extend_from_slice(format!("Content-Length: {}\r\n", request.body.len()).as_bytes());
+        write!(bytes, "Content-Length: {}\r\n", request.body.len())?;
     }
     bytes.extend_from_slice(b"Connection: close\r\n\r\n");
-    bytes.extend_from_slice(&request.body);
-    bytes
+    Ok(bytes)
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection" | "keep-alive" | "proxy-connection" | "te" | "trailer" | "upgrade" | "expect"
-    )
+    ["connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade", "expect"]
+        .iter()
+        .any(|header| name.eq_ignore_ascii_case(header))
 }
 
 struct ResponseHead {
@@ -1341,13 +1352,6 @@ fn copy_until_eof(
 
 fn find_crlf(bytes: &[u8]) -> Option<usize> {
     bytes.windows(2).position(|window| window == b"\r\n")
-}
-
-fn body_bytes(request: &Request) -> Option<&[u8]> {
-    match &request.body {
-        BodyRead::Complete(bytes) => Some(bytes),
-        _ => None,
-    }
 }
 
 fn write_error(
