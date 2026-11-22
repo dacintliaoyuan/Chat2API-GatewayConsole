@@ -391,7 +391,7 @@ fn login_issue(login: &LoginRounds, rows: &mut Vec<IssueRow>, failures: &mut Vec
         detail: parts.join(" · "),
         tone: Tone::Warn,
         evidence: None,
-        evidence_note: "证据不在请求页：登录轮次没有独立页面".to_string(),
+        evidence_note: "证据不在请求页：登录轮次在设置页".to_string(),
     });
 }
 

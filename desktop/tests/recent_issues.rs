@@ -349,7 +349,7 @@ fn failed_and_manual_takeover_login_rounds_are_counted_with_the_latest_reason() 
     assert!(row.detail.contains("process_exit"), "{:?}", row.detail);
     assert_eq!(row.evidence, None);
     assert!(
-        row.evidence_note.contains("没有独立页面"),
+        row.evidence_note.contains("设置页"),
         "{:?}",
         row.evidence_note
     );
