@@ -7,7 +7,11 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc, VecModel};
 
+use crate::access_info::AccessInfoSurface;
 use crate::account::{AccountSurface, VerifySurface};
+use crate::login_rounds::{
+    LoginRoundRow as LoginRoundViewRow, LoginRoundsSurface,
+};
 use crate::maintenance::{MaintenanceSurface, MenuRow, RecordsView};
 use crate::models::{
     CatalogSurface, ModelRow as ModelViewRow, ProbeHistoryRow as ProbeHistoryViewRow,
@@ -187,6 +191,106 @@ impl ServiceSurface for MainWindow {
             Tone::Bad => 2,
             Tone::Neutral => 3,
         });
+    }
+}
+
+impl LoginRoundsSurface for MainWindow {
+    fn set_rounds(&self, rows: &[LoginRoundViewRow]) {
+        let rows: Vec<LoginRoundRow> = rows
+            .iter()
+            .map(|row| LoginRoundRow {
+                key: row.key.as_str().into(),
+                at: row.at.as_str().into(),
+                round: row.round.as_str().into(),
+                state: row.state.as_str().into(),
+                state_tone: tone_index(row.state_tone),
+                mode: row.mode.as_str().into(),
+                trigger: row.trigger.as_str().into(),
+                submit: row.submit.as_str().into(),
+                outcome: row.outcome.as_str().into(),
+                reason: row.reason.as_str().into(),
+                upstream: row.upstream.as_str().into(),
+                detail: row.detail.as_str().into(),
+            })
+            .collect();
+        self.set_login_rounds(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_status(&self, status: &str) {
+        self.set_login_rounds_status(status.into());
+    }
+
+    fn set_tone(&self, tone: Tone) {
+        self.set_login_rounds_tone(tone_index(tone));
+    }
+
+    fn set_scope(&self, scope: &str) {
+        self.set_login_rounds_scope(scope.into());
+    }
+
+    fn set_empty_text(&self, text: &str) {
+        self.set_login_rounds_empty_text(text.into());
+    }
+
+    fn set_table_visible(&self, visible: bool) {
+        self.set_login_rounds_table_visible(visible);
+    }
+
+    fn set_truncated(&self, truncated: bool) {
+        self.set_login_rounds_truncated(truncated);
+    }
+
+    fn set_loading(&self, loading: bool) {
+        self.set_login_rounds_loading(loading);
+    }
+
+    fn selected_round(&self) -> String {
+        self.get_login_rounds_selected().to_string()
+    }
+
+    fn set_selected_round(&self, key: &str) {
+        self.set_login_rounds_selected(key.into());
+    }
+
+    fn set_detail(&self, title: &str, body: &str) {
+        self.set_login_rounds_detail_title(title.into());
+        self.set_login_rounds_detail(body.into());
+    }
+}
+
+impl AccessInfoSurface for MainWindow {
+    fn set_access_address(&self, address: &str) {
+        self.set_access_address(address.into());
+    }
+
+    fn set_access_full_base_url(&self, base_url: &str) {
+        self.set_access_full_base_url(base_url.into());
+    }
+
+    fn set_access_interface_type(&self, interface_type: &str) {
+        self.set_access_interface_type(interface_type.into());
+    }
+
+    fn set_access_hints(&self, hints: &[String]) {
+        let hints: Vec<slint::SharedString> =
+            hints.iter().map(|hint| hint.as_str().into()).collect();
+        self.set_access_hints(ModelRc::from(Rc::new(VecModel::from(hints))));
+    }
+
+    fn set_access_status(&self, status: &str) {
+        self.set_access_status(status.into());
+    }
+
+    fn set_access_tone(&self, tone: Tone) {
+        self.set_access_tone(tone_index(tone));
+    }
+
+    fn set_access_address_note(&self, note: &str) {
+        self.set_access_address_note(note.into());
+    }
+
+    fn set_access_address_available(&self, available: bool) {
+        self.set_access_address_available(available);
     }
 }
 

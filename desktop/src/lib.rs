@@ -6,6 +6,7 @@
 //! seams and the state machines stay platform independent so `cargo test` can
 //! exercise them.
 
+pub mod access_info;
 pub mod account;
 pub mod clipboard;
 pub mod config;
@@ -13,6 +14,7 @@ pub mod dwm;
 pub mod gateway;
 pub mod instance;
 pub mod log_history;
+pub mod login_rounds;
 pub mod logs;
 pub mod logstream;
 pub mod maintenance;
