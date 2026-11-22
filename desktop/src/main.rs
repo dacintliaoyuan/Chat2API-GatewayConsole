@@ -30,7 +30,9 @@ use um_desktop::account::{
     FormError, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::clipboard;
-use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
+use um_desktop::config::{
+    self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, MotionPreference, SidebarMode, ThemeMode,
+};
 use um_desktop::dwm;
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
@@ -111,6 +113,20 @@ fn theme_label(theme: ThemeMode) -> &'static str {
         ThemeMode::System => "跟随系统",
         ThemeMode::Light => "浅色",
         ThemeMode::Dark => "深色",
+    }
+}
+
+fn sidebar_label(mode: SidebarMode) -> &'static str {
+    match mode {
+        SidebarMode::Expanded => "侧栏展开",
+        SidebarMode::IconsOnly => "侧栏仅图标",
+    }
+}
+
+fn motion_label(preference: MotionPreference) -> &'static str {
+    match preference {
+        MotionPreference::System => "动效跟随系统",
+        MotionPreference::Reduced => "减少动效",
     }
 }
 
@@ -2080,6 +2096,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match config::apply_theme(theme_path_for_handler.as_deref(), &mut config, theme) {
             Ok(()) => {
                 window.set_settings_status(format!("外观：{}", theme_label(theme)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    // Sidebar, motion and transparency are user settings with their own visible
+    // controls; each choice reaches the window first and then the saved config.
+    let sidebar_config = Arc::clone(&current_config);
+    let sidebar_path = theme_path.clone();
+    let weak_sidebar = window.as_weak();
+    window.on_sidebar_mode_changed(move |index| {
+        let Some(window) = weak_sidebar.upgrade() else {
+            return;
+        };
+        let mode = SidebarMode::from_index(index);
+        window.set_sidebar_mode(mode.index());
+        let mut config = sidebar_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_sidebar(sidebar_path.as_deref(), &mut config, mode) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", sidebar_label(mode)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    let motion_config = Arc::clone(&current_config);
+    let motion_path = theme_path.clone();
+    let weak_motion = window.as_weak();
+    window.on_motion_mode_changed(move |index| {
+        let Some(window) = weak_motion.upgrade() else {
+            return;
+        };
+        let preference = MotionPreference::from_index(index);
+        window.set_motion_mode(preference.index());
+        let mut config = motion_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_motion(motion_path.as_deref(), &mut config, preference) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", motion_label(preference)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    let transparency_config = Arc::clone(&current_config);
+    let transparency_path = theme_path.clone();
+    let weak_transparency = window.as_weak();
+    window.on_transparency_changed(move |reduce| {
+        let Some(window) = weak_transparency.upgrade() else {
+            return;
+        };
+        window.set_reduce_transparency(reduce);
+        let mut config = transparency_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_reduce_transparency(transparency_path.as_deref(), &mut config, reduce) {
+            Ok(()) => {
+                let status = if reduce {
+                    "外观：降低透明度已保存（当前界面无透明度效果）"
+                } else {
+                    "外观：透明度已恢复"
+                };
+                window.set_settings_status(status.into());
                 window.set_settings_tone(status_tone(Tone::Good));
             }
             Err(message) => {

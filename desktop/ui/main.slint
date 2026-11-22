@@ -150,6 +150,9 @@ component TextDetails inherits Panel {
 // neutral step instead of a blue outline.
 component Card inherits Panel {
     in property <length> inset: 16px;
+    // A shorter vertical inset keeps a card with extra settings rows compact
+    // without changing the shared horizontal alignment.
+    in property <length> inset-y: root.inset;
     in property <length> gap: 10px;
     in property <bool> clickable: false;
     callback activated();
@@ -166,7 +169,10 @@ component Card inherits Panel {
     drop-shadow-blur: 3px;
     drop-shadow-color: Theme.card-shadow;
     content := VerticalLayout {
-        padding: root.inset;
+        padding-top: root.inset-y;
+        padding-bottom: root.inset-y;
+        padding-left: root.inset;
+        padding-right: root.inset;
         spacing: root.gap;
         @children
     }
@@ -291,7 +297,10 @@ export component MainWindow inherits Window {
     default-font-size: 12px;
     // Keep the shortcut handler reachable when no control owns focus.
     forward-focus: root-focus;
-    private property <bool> compact: root.width < 800px;
+    private property <bool> compact: root.sidebar-mode == 1 || root.width < 800px;
+    // The appearance card switches to one column below the width where three
+    // label + control rows still fit side by side.
+    private property <bool> appearance-narrow: root.width < 985px;
     // The card stays after "稍后登录": skipping the first-run prompt must not
     // remove the explanation or the way back to the account form.
     private property <bool> login-visible: root.account-label != "已登录"
@@ -442,12 +451,42 @@ export component MainWindow inherits Window {
     in property <bool> usage-loading: true;
     in property <string> usage-status;
     in property <int> usage-tone: 3;
-    in property <bool> allow-motion: true;
+    // Test seam: the shell copies the Windows animation preference into this
+    // property. A saved "reduced" choice wins over it.
+    in property <bool> system-allows-motion: true;
+    in-out property <int> motion-mode: 0;
+    out property <bool> allow-motion: root.motion-mode == 1 ? false : root.system-allows-motion;
+    // The saved appearance choice: 0 expands the rail, 1 keeps icons only.
+    in-out property <int> sidebar-mode: 0;
+    in-out property <bool> reduce-transparency: false;
+    callback sidebar-mode-changed(int);
+    callback motion-mode-changed(int);
+    callback transparency-changed(bool);
     // The saved appearance choice: 0 follows the system, 1 light, 2 dark.
     in-out property <int> theme-mode <=> Theme.theme-mode;
     // Test seam: the headless tests stand in for the Windows app theme.
     in-out property <bool> system-dark <=> Theme.system-dark;
     out property <bool> theme-dark: Theme.dark;
+    // Test seams: the rail geometry and the effective appearance choices.
+    out property <length> rail-width: rail.width;
+    out property <bool> sidebar-compact: root.compact;
+    out property <bool> sidebar-labels-visible: !root.compact;
+    out property <bool> sidebar-tooltips-visible: root.compact;
+    out property <bool> motion-enabled: Theme.motion;
+    out property <bool> transparency-note-visible: appearance-hint.visible;
+    out property <string> transparency-note-text: appearance-hint.text;
+    out property <length> sidebar-mode-x: sidebar-mode-control.absolute-position.x;
+    out property <length> sidebar-mode-y: sidebar-mode-control.absolute-position.y;
+    out property <length> sidebar-mode-width: sidebar-mode-control.width;
+    out property <length> sidebar-mode-height: sidebar-mode-control.height;
+    out property <length> motion-mode-x: motion-mode-control.absolute-position.x;
+    out property <length> motion-mode-y: motion-mode-control.absolute-position.y;
+    out property <length> motion-mode-width: motion-mode-control.width;
+    out property <length> motion-mode-height: motion-mode-control.height;
+    out property <length> transparency-toggle-x: transparency-toggle.absolute-position.x;
+    out property <length> transparency-toggle-y: transparency-toggle.absolute-position.y;
+    out property <length> transparency-toggle-width: transparency-toggle.width;
+    out property <length> transparency-toggle-height: transparency-toggle.height;
     // Test seam: lets the interaction tests switch chart modes without pixels.
     in-out property <bool> usage-show-line: false;
     in-out property <bool> usage-show-requests: false;
@@ -1167,7 +1206,7 @@ export component MainWindow inherits Window {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
         alignment: stretch;
-        Rectangle {
+        rail := Rectangle {
             width: root.compact ? 84px : 196px;
             animate width { duration: Theme.motion ? 150ms : 0ms; easing: ease-in-out; }
             background: Theme.rail;
@@ -1988,12 +2027,13 @@ export component MainWindow inherits Window {
                     }
                     appearance-card := Card {
                         inset: 16px;
+                        inset-y: 12px;
                         gap: 12px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 12px;
                             appearance-title := SectionLabel { text: "外观"; }
-                            appearance-hint := Hint { text: "跟随系统时会随 Windows 应用主题切换，手动选择会覆盖系统设置。"; }
+                            appearance-hint := Hint { text: "跟随系统时会随 Windows 应用主题切换，手动选择会覆盖系统设置。当前界面无透明度效果，开关已保存。"; }
                             appearance-row := SettingRow {
                                 label: "主题";
                                 Rectangle { horizontal-stretch: 1; }
@@ -2007,6 +2047,67 @@ export component MainWindow inherits Window {
                                     ];
                                     current-index <=> root.theme-mode;
                                     selected(index) => { root.theme-mode-changed(index); }
+                                }
+                            }
+                            // The three secondary appearance choices sit in one row
+                            // when the card has room and stack at narrow widths.
+                            appearance-options := GridLayout {
+                                spacing: 8px;
+                                appearance-sidebar-row := SettingRow {
+                                    row: 0;
+                                    col: 0;
+                                    height: 34px;
+                                    width: root.appearance-narrow
+                                        ? (root.compact ? root.width - 148px : root.width - 276px)
+                                        : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
+                                    label: "侧栏";
+                                    Rectangle { horizontal-stretch: 1; }
+                                    sidebar-mode-control := Segmented {
+                                        width: root.appearance-narrow ? 260px : 120px;
+                                        label: "侧栏";
+                                        options: [
+                                            { text: "展开" },
+                                            { text: "仅图标" },
+                                        ];
+                                        current-index <=> root.sidebar-mode;
+                                        selected(index) => { root.sidebar-mode-changed(index); }
+                                    }
+                                }
+                                appearance-motion-row := SettingRow {
+                                    row: root.appearance-narrow ? 1 : 0;
+                                    col: root.appearance-narrow ? 0 : 1;
+                                    height: 34px;
+                                    width: root.appearance-narrow
+                                        ? (root.compact ? root.width - 148px : root.width - 276px)
+                                        : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
+                                    label: "界面动效";
+                                    Rectangle { horizontal-stretch: 1; }
+                                    motion-mode-control := Segmented {
+                                        width: root.appearance-narrow ? 260px : 120px;
+                                        label: "界面动效";
+                                        options: [
+                                            { text: "跟随系统" },
+                                            { text: "减少动效" },
+                                        ];
+                                        current-index <=> root.motion-mode;
+                                        selected(index) => { root.motion-mode-changed(index); }
+                                    }
+                                }
+                                appearance-transparency-row := SettingRow {
+                                    row: root.appearance-narrow ? 2 : 0;
+                                    col: root.appearance-narrow ? 0 : 2;
+                                    height: 34px;
+                                    width: root.appearance-narrow
+                                        ? (root.compact ? root.width - 148px : root.width - 276px)
+                                        : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
+                                    label: "透明度";
+                                    Rectangle { horizontal-stretch: 1; }
+                                    transparency-toggle := Toggle {
+                                        label: "降低透明度";
+                                        cross-axis-self-alignment: center;
+                                        checked <=> root.reduce-transparency;
+                                        toggled => { root.transparency-changed(root.reduce-transparency); }
+                                    }
                                 }
                             }
                         }
