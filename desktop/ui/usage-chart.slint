@@ -143,18 +143,20 @@ export component RequestAnalytics inherits Panel {
         padding: 12px;
         spacing: 8px;
 
-        cards := HorizontalLayout {
+        // Equal fixed widths keep the cards the same size; at compact width
+        // three cards per row avoid squeezing the labels into vertical text.
+        cards := FlexboxLayout {
+            flex-wrap: wrap;
             spacing: 8px;
-            // Equal fixed widths keep the five cards the same size; the
-            // content-based stretch alone made the short cards narrower.
             for metric in root.metrics : Rectangle {
-                width: (root.width - 24px - 32px) / 5;
-                horizontal-stretch: 1;
+                width: root.compact
+                    ? (root.width - 24px - 16px) / 3
+                    : (root.width - 24px - 32px) / 5;
                 height: 62px;
                 border-radius: 8px;
                 background: Theme.surface-2;
                 VerticalLayout {
-                    padding: root.compact ? 6px : 8px;
+                    padding: 8px;
                     spacing: 2px;
                     Hint { text: metric.label; }
                     DataText {
@@ -174,14 +176,14 @@ export component RequestAnalytics inherits Panel {
             Heading { text: "请求趋势"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
-                width: 196px;
+                width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
                 current-index: root.metric;
                 selected(index) => { root.metric = index; }
             }
             Segmented {
-                width: 148px;
+                width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
                 current-index: root.split-by-model ? 1 : 0;
