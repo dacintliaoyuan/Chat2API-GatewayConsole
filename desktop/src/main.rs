@@ -53,6 +53,7 @@ use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
+use um_desktop::recent_issues;
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::ui::*;
 use um_desktop::um_service;
@@ -1522,6 +1523,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // carries the reason. Submit and stop are immediate loopback actions.
     let probe_batch: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
     let probe_client = Arc::new(models::HttpProbeClient::new());
+    // The overview's recent-issues card reads the last probe snapshot; a failed
+    // read keeps its reason in `ProbeView` and is never folded into zero.
+    let probe_state: Arc<Mutex<Option<models::ProbeView>>> = Arc::new(Mutex::new(None));
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);
@@ -1529,6 +1533,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token_path = paths.control_token.clone();
         let catalog_state = Arc::clone(&catalog_state);
         let batch_state = Arc::clone(&probe_batch);
+        let probe_state = Arc::clone(&probe_state);
         std::thread::spawn(move || {
             let client = models::HttpProbeClient::new();
             let mut last_view: Option<models::ProbeView> = None;
@@ -1570,6 +1575,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(reason) => models::probe_failure(reason, last_view.as_ref()),
                 };
+                *probe_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
                 let weak = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = weak.upgrade() {
@@ -1671,6 +1679,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_admin = Arc::clone(&auth_admin);
         let service_api = Arc::clone(&service_api);
         let service_state = Arc::clone(&service_state);
+        let catalog_state = Arc::clone(&catalog_state);
+        let probe_state = Arc::clone(&probe_state);
+        let usage_log = paths.usage_log.clone();
+        let login_reader = Arc::new(recent_issues::HttpLoginRoundsReader::new());
         let records_api = Arc::clone(&records_api);
         std::thread::spawn(move || {
             let mut has_success = false;
@@ -1678,6 +1690,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_faults: Option<overview::FaultHistory> = None;
             let mut last_service: Option<um_service::ServiceView> = None;
             let mut last_menu: Option<maintenance::Menu> = None;
+            let mut last_issues: Option<recent_issues::RecentIssues> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1759,9 +1772,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service.clone());
                     let weak = weak.clone();
+                    let applied = service.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
-                            um_service::apply_service(&window, &service);
+                            um_service::apply_service(&window, &applied);
+                        }
+                    });
+                }
+                // The recent-issues card reads the ledger, the login-round
+                // history and the read faces above. A failed read keeps its
+                // reason and is never folded into zero; a legal empty read
+                // becomes 近期无问题.
+                let catalog = catalog_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let probe_view = probe_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let login = if matches!(&gateway.state, GatewayState::Running { .. }) {
+                    match load_control_token(&control_token_path) {
+                        Ok(token) => {
+                            recent_issues::read_login_rounds(&*login_reader, &base, token.expose())
+                        }
+                        Err(error) => recent_issues::LoginRounds::Unavailable(error),
+                    }
+                } else {
+                    recent_issues::LoginRounds::Unavailable(format!(
+                        "本实例网关未运行：{}",
+                        gateway.state.detail()
+                    ))
+                };
+                let issues = recent_issues::read_recent_issues(
+                    &usage_log,
+                    chrono::Utc::now().timestamp_millis(),
+                    &login,
+                    Some(&service),
+                    catalog.as_ref(),
+                    probe_view.as_ref(),
+                );
+                if last_issues.as_ref() != Some(&issues) {
+                    last_issues = Some(issues.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            recent_issues::apply_recent_issues(&window, &issues);
                         }
                     });
                 }

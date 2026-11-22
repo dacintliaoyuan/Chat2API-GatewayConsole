@@ -36,6 +36,19 @@ export struct FaultRow {
     evidence: string,
 }
 
+// One row of the overview recent-issues card (#151). `evidence-result` is the
+// request-page result index the 查看证据 jump applies; -1 disables the jump and
+// `evidence-note` carries the reason.
+export struct IssueRow {
+    title: string,
+    count: string,
+    detail: string,
+    tone: int,
+    evidence-result: int,
+    evidence-window: int,
+    evidence-note: string,
+}
+
 // One maintenance-menu row. `reason` stays empty while the action is enabled; a
 // closed row keeps the concrete reason instead of disappearing. The confirm copy
 // is the second step of the same action.
@@ -610,6 +623,13 @@ export component MainWindow inherits Window {
         root.show-fault-evidence && root.upstream-fault-history.length > 0;
     out property <bool> upstream-fault-evidence-toggle-visible:
         root.upstream-fault-history.length > 0;
+    // The recent-issues card reads the ledger's request results, the gateway's
+    // login rounds, the UM service card and the catalog/probe read faces. A row
+    // without a request-page evidence target keeps its reason and disables the
+    // 查看证据 jump instead of disappearing.
+    in property <[IssueRow]> recent-issues: [];
+    in property <string> recent-issues-status: "读取中";
+    in property <int> recent-issues-tone: 3;
     in property <string> account-label: "读取中";
     in property <string> account-detail;
     in property <int> account-tone: 3;
@@ -1093,6 +1113,32 @@ export component MainWindow inherits Window {
         fault-evidence-toggle.absolute-position.y;
     out property <length> upstream-fault-evidence-toggle-width: fault-evidence-toggle.width;
     out property <length> upstream-fault-evidence-toggle-height: fault-evidence-toggle.height;
+    // Test seams: the recent-issues card's rows, the 查看证据 jump target and
+    // the disabled reason. The first two rows are enough to assert both an
+    // enabled request row and a disabled source row.
+    out property <int> recent-issue-count: root.recent-issues.length;
+    out property <string> recent-issues-status-text: root.recent-issues-status;
+    out property <int> recent-issues-tone-value: root.recent-issues-tone;
+    out property <length> recent-issues-card-height: recent-issues-card.height;
+    out property <length> recent-issue-list-x: recent-issue-list.absolute-position.x;
+    out property <length> recent-issue-list-y: recent-issue-list.absolute-position.y;
+    out property <length> recent-issue-list-width: recent-issue-list.width;
+    out property <length> recent-issue-row-height: 28px;
+    out property <length> recent-issue-evidence-width: 92px;
+    out property <bool> recent-issue-evidence-enabled-0:
+        root.recent-issues.length > 0 && root.recent-issues[0].evidence-result >= 0;
+    out property <string> recent-issue-evidence-note-0:
+        root.recent-issues.length > 0 ? root.recent-issues[0].evidence-note : "";
+    out property <string> recent-issue-title-0:
+        root.recent-issues.length > 0 ? root.recent-issues[0].title : "";
+    out property <string> recent-issue-count-text-0:
+        root.recent-issues.length > 0 ? root.recent-issues[0].count : "";
+    out property <string> recent-issue-detail-0:
+        root.recent-issues.length > 0 ? root.recent-issues[0].detail : "";
+    out property <bool> recent-issue-evidence-enabled-1:
+        root.recent-issues.length > 1 && root.recent-issues[1].evidence-result >= 0;
+    out property <string> recent-issue-evidence-note-1:
+        root.recent-issues.length > 1 ? root.recent-issues[1].evidence-note : "";
     // Test seams: the UM service card's start controls and geometry.
     out property <length> um-service-card-height: state-card.height;
     out property <bool> um-service-start-visible: start-um-service.visible;
@@ -1640,6 +1686,21 @@ export component MainWindow inherits Window {
         // frame between the old page disappearing and the new one appearing.
         root.page-opacity = 0.35;
         page-out-timer.start();
+    }
+    // 查看证据 on a request row jumps to the request page with that row's
+    // result filter; the other rows carry no request-page evidence and their
+    // button stays disabled with the reason.
+    public function jump-to-issue(index: int) {
+        if (index < 0 || index >= root.recent-issues.length) { return; }
+        if (root.recent-issues[index].evidence-result < 0) { return; }
+        root.page = 1;
+        root.request-period = root.recent-issues[index].evidence-window;
+        root.request-result = root.recent-issues[index].evidence-result;
+        root.request-keyword = "";
+        root.request-model-filter = "";
+        root.request-model-index = 0;
+        root.request-scroll-y = 0px;
+        root.query-requests(0);
     }
     // Clear the previous result before asking the shell, so copying the same URL
     // twice still starts a fresh two-second feedback window.
@@ -2354,6 +2415,76 @@ export component MainWindow inherits Window {
                                 icon: "check";
                                 enabled: !root.verify-busy;
                                 clicked => { root.verify-login(); }
+                            }
+                        }
+                    }
+                    // The recent-issues card covers the six classes the local
+                    // console reports. Request rows jump to the request page with
+                    // the matching result filter; login, service and catalog/test
+                    // rows disable the jump and keep the reason. A clean read
+                    // says 近期无问题 instead of drawing an empty card.
+                    recent-issues-card := Card {
+                        gap: 10px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                SectionLabel {
+                                    text: "近期问题";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                Hint {
+                                    text: root.recent-issues-status;
+                                    color: Theme.status_ink(root.recent-issues-tone);
+                                    vertical-alignment: center;
+                                }
+                            }
+                            recent-issue-list := VerticalLayout {
+                                width: 100%;
+                                spacing: 8px;
+                                alignment: start;
+                                for row[index] in root.recent-issues : VerticalLayout {
+                                    spacing: 3px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        height: 28px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+                                        StatusDot { tone: row.tone; }
+                                        Text {
+                                            text: row.title;
+                                            color: Theme.ink;
+                                            font-weight: 600;
+                                            font-size: 13px;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                        }
+                                        DataText {
+                                            text: row.count;
+                                            vertical-alignment: center;
+                                        }
+                                        ActionButton {
+                                            label: "查看证据";
+                                            quiet: true;
+                                            width: 92px;
+                                            height: 24px;
+                                            enabled: row.evidence-result >= 0;
+                                            clicked => {
+                                                if (row.evidence-result >= 0) {
+                                                    root.jump-to-issue(index);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Hint { text: row.detail; }
+                                    if row.evidence-result < 0 && !row.evidence-note.is-empty : Hint {
+                                        text: row.evidence-note;
+                                        color: Theme.status_ink(1);
+                                    }
+                                }
                             }
                         }
                     }
