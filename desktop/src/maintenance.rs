@@ -6,10 +6,76 @@
 //! disappearing. The app instance has no `console-state.sqlite3` maintenance-record
 //! source, so the records area says 不适用 instead of rendering an empty table.
 
+use std::time::Duration;
+
+use serde_json::Value;
+
 use crate::account::{self, AuthRead, AuthState};
 use crate::gateway::GatewayState;
 use crate::overview::Tone;
 use crate::um_service::ServiceView;
+
+/// The Beijing offset used to format record times, so the rows stay readable on
+/// every machine and the tests have one fixed clock.
+fn beijing() -> chrono::FixedOffset {
+    chrono::FixedOffset::east_opt(8 * 3600).expect("valid Beijing UTC offset")
+}
+
+fn clock(at: Option<i64>, format: &str, missing: &str) -> String {
+    use chrono::TimeZone;
+    at.and_then(|at| beijing().timestamp_millis_opt(at).single())
+        .map(|time| time.format(format).to_string())
+        .unwrap_or_else(|| missing.to_string())
+}
+
+/// The web console's elapsed copy: milliseconds, seconds or minutes+seconds.
+fn elapsed(millis: i64) -> String {
+    if millis < 0 {
+        return "—".to_string();
+    }
+    if millis < 1000 {
+        return format!("{millis} 毫秒");
+    }
+    let seconds = millis as f64 / 1000.0;
+    if seconds < 60.0 {
+        if seconds < 10.0 {
+            let text = format!("{seconds:.1}");
+            return format!("{} 秒", text.trim_end_matches(".0"));
+        }
+        return format!("{} 秒", seconds.round() as i64);
+    }
+    let minutes = (seconds / 60.0).floor() as i64;
+    format!(
+        "{minutes} 分 {} 秒",
+        (seconds - minutes as f64 * 60.0).round() as i64
+    )
+}
+
+fn action_label(action: &str) -> String {
+    match action {
+        "account.um_status" => "读取 UM 状态".to_string(),
+        "account.um_verify" | "verify" => "核验登录".to_string(),
+        "account.login" | "login" => "检查并按需登录".to_string(),
+        "service.start" | "start" => "启动 UM 服务".to_string(),
+        "service.stop" | "stop" => "停止 UM 服务".to_string(),
+        "service.restart" | "restart" => "重启 UM 服务".to_string(),
+        "" => "未知操作".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// One state word and tone. An unknown state is 未知, never a blank cell.
+fn state_label(state: &str) -> (&'static str, Tone) {
+    match state {
+        "queued" => ("排队中", Tone::Neutral),
+        "running" => ("执行中", Tone::Neutral),
+        "succeeded" => ("成功", Tone::Good),
+        "failed" => ("失败", Tone::Bad),
+        "cancelled" => ("已取消", Tone::Neutral),
+        "interrupted" => ("已中断", Tone::Warn),
+        _ => ("未知", Tone::Neutral),
+    }
+}
 
 /// The app instance has no maintenance-record source; the area says so instead of
 /// showing an empty table.
@@ -133,18 +199,35 @@ pub struct MenuRow {
 /// One maintenance-record row. The app instance has no source yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordRow {
+    pub key: String,
     pub at: String,
     pub action: String,
+    pub state: String,
+    pub state_tone: Tone,
     pub result: String,
+    pub took: String,
+    pub steps: Vec<RecordStep>,
+}
+
+/// One step of a maintenance record, expanded under its row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordStep {
+    pub at: String,
+    pub note: String,
 }
 
 /// The maintenance-record area. `not_applicable` keeps the UI from drawing a
-/// table when no source exists.
+/// table when no source exists; `failed` keeps a read failure from becoming an
+/// empty table; `empty` marks a source that legally returned no rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordsView {
     pub status: String,
     pub tone: Tone,
     pub not_applicable: bool,
+    pub empty: bool,
+    pub failed: bool,
+    /// The concrete gateway reason behind a not-applicable or failed read.
+    pub detail: String,
     pub rows: Vec<RecordRow>,
 }
 
@@ -209,12 +292,17 @@ impl MenuState {
 
 /// Builds the five rows and the records area for one state.
 pub fn menu(state: &MenuState) -> Menu {
+    menu_with_records(state, records())
+}
+
+/// Builds the five rows plus one records read.
+pub fn menu_with_records(state: &MenuState, records: RecordsView) -> Menu {
     Menu {
         items: Action::ALL
             .into_iter()
             .map(|action| row(state, action))
             .collect(),
-        records: records(),
+        records,
     }
 }
 
@@ -277,7 +365,203 @@ pub fn records() -> RecordsView {
         status: RECORDS_NOT_APPLICABLE.to_string(),
         tone: Tone::Neutral,
         not_applicable: true,
+        empty: false,
+        failed: false,
+        detail: String::new(),
         rows: Vec::new(),
+    }
+}
+
+impl RecordsView {
+    /// A read failure keeps its reason and is never folded into an empty table.
+    pub fn failure(reason: impl Into<String>) -> Self {
+        Self {
+            status: format!("维护记录读取失败：{}", reason.into()),
+            tone: Tone::Bad,
+            not_applicable: false,
+            empty: false,
+            failed: true,
+            detail: String::new(),
+            rows: Vec::new(),
+        }
+    }
+}
+
+/// Classifies one gateway `/admin/um/maintenance` payload into the records area.
+///
+/// `status: "unavailable"` is the gateway declaring that this instance has no
+/// record source: the area says 不适用 with the gateway's reason. Any other shape
+/// must carry a `rows` array; a malformed payload is a read failure, not an empty
+/// table.
+pub fn records_from(payload: &Value) -> RecordsView {
+    let Some(object) = payload.as_object() else {
+        return RecordsView::failure("数据格式无效：顶层不是对象");
+    };
+    if object.get("status").and_then(Value::as_str) == Some("unavailable") {
+        return RecordsView {
+            status: RECORDS_NOT_APPLICABLE.to_string(),
+            tone: Tone::Neutral,
+            not_applicable: true,
+            empty: false,
+            failed: false,
+            detail: object
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            rows: Vec::new(),
+        };
+    }
+    let rows = match object.get("rows") {
+        Some(Value::Array(rows)) => rows,
+        Some(_) => return RecordsView::failure("数据格式无效：rows 不是数组"),
+        None => {
+            let coverage = object.get("coverage");
+            if coverage.and_then(|coverage| coverage.get("status")).and_then(Value::as_str)
+                == Some("unavailable")
+            {
+                let reason = coverage
+                    .and_then(|coverage| coverage.get("error"))
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        coverage
+                            .and_then(|coverage| coverage.get("note"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or("维护记录来源不可用");
+                return RecordsView::failure(format!("维护记录来源不可用：{reason}"));
+            }
+            return RecordsView::failure("数据格式无效：缺少 rows");
+        }
+    };
+    let mut parsed = Vec::with_capacity(rows.len());
+    for row in rows {
+        match record_row(row) {
+            Some(row) => parsed.push(row),
+            None => return RecordsView::failure("数据格式无效：记录行不是对象"),
+        }
+    }
+    let scope = object
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let empty = parsed.is_empty();
+    RecordsView {
+        status: if empty {
+            "读取范围内没有维护操作记录。".to_string()
+        } else if scope.is_empty() {
+            format!("最近 {} 条维护操作记录", parsed.len())
+        } else {
+            scope
+        },
+        tone: Tone::Neutral,
+        not_applicable: false,
+        empty,
+        failed: false,
+        detail: String::new(),
+        rows: parsed,
+    }
+}
+
+fn record_row(row: &Value) -> Option<RecordRow> {
+    let object = row.as_object()?;
+    let at = object.get("at").and_then(Value::as_i64);
+    let finished = object.get("finishedAt").and_then(Value::as_i64);
+    let (state, state_tone) = state_label(object.get("state").and_then(Value::as_str).unwrap_or(""));
+    let took = match (at, finished) {
+        (Some(at), Some(finished)) if finished >= at => elapsed(finished - at),
+        _ => "—".to_string(),
+    };
+    let steps = object
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .filter_map(|step| {
+                    let step = step.as_object()?;
+                    Some(RecordStep {
+                        at: clock(step.get("at").and_then(Value::as_i64), "%H:%M:%S", "—"),
+                        note: step
+                            .get("note")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(RecordRow {
+        key: object
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        at: clock(at, "%m-%d %H:%M:%S", "时间未知"),
+        action: action_label(object.get("action").and_then(Value::as_str).unwrap_or("")),
+        state: state.to_string(),
+        state_tone,
+        result: object
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        took,
+        steps,
+    })
+}
+
+/// The gateway's maintenance-record read surface.
+pub trait RecordsApi {
+    fn get_json(&self, url: &str, token: &str) -> Result<Value, String>;
+}
+
+pub struct HttpRecordsApi {
+    agent: ureq::Agent,
+}
+
+impl HttpRecordsApi {
+    pub fn new() -> Self {
+        Self::with_timeout(Duration::from_millis(2000))
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new().timeout(timeout).build(),
+        }
+    }
+}
+
+impl Default for HttpRecordsApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RecordsApi for HttpRecordsApi {
+    fn get_json(&self, url: &str, token: &str) -> Result<Value, String> {
+        let response = self
+            .agent
+            .get(url)
+            .set("X-Admin-Control", token)
+            .call()
+            .map_err(|error| format!("{url}: {error}"))?;
+        response
+            .into_json::<Value>()
+            .map_err(|error| format!("{url}: 维护记录不是有效 JSON：{error}"))
+    }
+}
+
+/// Reads the gateway's maintenance records. A read failure keeps its reason and
+/// never becomes an empty table.
+pub fn read_records(api: &dyn RecordsApi, base: &str, token: &str) -> RecordsView {
+    let url = format!("{}/admin/um/maintenance", base.trim_end_matches('/'));
+    match api.get_json(&url, token) {
+        Ok(payload) => records_from(&payload),
+        Err(error) => RecordsView::failure(error),
     }
 }
 
@@ -328,6 +612,7 @@ pub fn delegated_status(action: Action) -> (String, Tone) {
 pub trait MaintenanceSurface {
     fn set_menu_rows(&self, rows: &[MenuRow]);
     fn set_records(&self, records: &RecordsView);
+    fn set_records_detail(&self, detail: &str);
     fn set_status(&self, status: &str, tone: Tone);
 }
 
@@ -335,6 +620,11 @@ pub trait MaintenanceSurface {
 pub fn apply_menu<S: MaintenanceSurface>(surface: &S, menu: &Menu) {
     surface.set_menu_rows(&menu.items);
     surface.set_records(&menu.records);
+}
+
+/// Applies one records read to the overview.
+pub fn apply_records<S: MaintenanceSurface>(surface: &S, records: &RecordsView) {
+    surface.set_records(records);
 }
 
 /// Applies one finished action to the menu's status line.
