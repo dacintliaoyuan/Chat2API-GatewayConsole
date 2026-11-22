@@ -44,7 +44,10 @@ use um_desktop::log_history::{
     self, append_history_rows, HistoryClient, HistoryQuery, HistoryRange, HttpHistoryClient,
     LevelSelection,
 };
-use um_desktop::logstream::{format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine};
+use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
+use um_desktop::logstream::{
+    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
+};
 use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
@@ -61,6 +64,7 @@ static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
 static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
+static LOGIN_ROUNDS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -1289,6 +1293,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
     let upstream_faults_path = paths.upstream_faults.clone();
+    // The settings page's UM login-round table (#159). The gateway already
+    // writes the history; this read only loads it when the gateway becomes
+    // running, after a port change, and on every filter or manual refresh. A
+    // failed read keeps its reason and never becomes an empty table.
+    let login_rounds_state: Arc<Mutex<Option<LoginRoundsView>>> =
+        Arc::new(Mutex::new(None));
+    let login_rounds_query: Arc<Mutex<LoginRoundsQuery>> =
+        Arc::new(Mutex::new(LoginRoundsQuery::default()));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&login_rounds_state);
+        let query = Arc::clone(&login_rounds_query);
+        std::thread::spawn(move || {
+            let reader = login_rounds::HttpLoginRounds::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut last_state: Option<GatewayState> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = LOGIN_ROUNDS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let transition = last_state.as_ref() != Some(&gateway.state)
+                    || last_port != Some(port);
+                if epoch == last_epoch && !transition {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                last_state = Some(gateway.state.clone());
+                let query = query
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let view = if !running {
+                    LoginRoundsView::unavailable(format!(
+                        "本实例网关未就绪：{}",
+                        gateway.state.detail()
+                    ))
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => login_rounds::read(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                            &query,
+                        ),
+                        Err(error) => LoginRoundsView::failed(error),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        login_rounds::apply_login_rounds(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
     // The settings page's UM model catalog. Every read is strict (`fresh=1`):
     // it runs when the gateway first becomes running, after a restart or port
     // change, and on every manual refresh. A failed read keeps the previous rows
@@ -2145,6 +2219,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             window.set_page(page);
             if page == 3 {
                 REFRESH_LOGS.store(true, Ordering::SeqCst);
+            } else if page == 2 {
+                // Opening the settings page reads the login-round table once;
+                // the reader thread skips a duplicate read while the gateway is
+                // unchanged.
+                LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
             } else if page == 1 {
                 // Re-entering the request page re-reads the ledger; the
                 // generation guard in `load_requests` drops stale results.
@@ -2213,6 +2292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         window.set_settings_status("正在重新检查网关与账号状态…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
         let probe = HttpProbe::new();
         let auth_admin = Arc::clone(&settings_auth_admin);
         let gateway_status = Arc::clone(&settings_gateway_status);
@@ -2260,6 +2340,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let history_client: Arc<dyn HistoryClient> = Arc::new(HttpHistoryClient::new());
+    // The login-round filters and the card's own refresh only re-read the
+    // gateway history; they never probe the upstream or start a login.
+    let weak_login_rounds = window.as_weak();
+    let login_rounds_filter = Arc::clone(&login_rounds_query);
+    window.on_filter_login_rounds(move |round, query| {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            window.set_login_rounds_loading(true);
+            window.set_login_rounds_status("正在读取登录轮次…".into());
+            window.set_login_rounds_tone(status_tone(Tone::Neutral));
+        }
+        *login_rounds_filter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = LoginRoundsQuery {
+            round: round.to_string(),
+            q: query.to_string(),
+        };
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_login_rounds = window.as_weak();
+    window.on_refresh_login_rounds(move || {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            window.set_login_rounds_loading(true);
+            window.set_login_rounds_status("正在读取登录轮次…".into());
+            window.set_login_rounds_tone(status_tone(Tone::Neutral));
+        }
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_login_rounds = window.as_weak();
+    let login_rounds_for_open = Arc::clone(&login_rounds_state);
+    window.on_open_login_round(move |key| {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            let state = login_rounds_for_open
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            login_rounds::open_round(&window, state.as_ref(), key.as_str());
+        }
+    });
     let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
     let history_token = paths.control_token.clone();
 
