@@ -27,7 +27,7 @@ use slint::{
 };
 use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState,
-    FormError, HttpAuthAdmin, LoadOutcome,
+    FormError, HttpAuthAdmin, LoadOutcome, OnDemandLogin, VerifyOutcome,
 };
 use um_desktop::clipboard;
 use um_desktop::config::{
@@ -58,6 +58,7 @@ static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
 static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 
@@ -570,6 +571,63 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
         .collect()
 }
 
+fn apply_request_page(window: &MainWindow, page: &usage::RequestPage) {
+    let mut models = vec![String::from("全部模型")];
+    models.extend(page.models.iter().cloned());
+    let selected = window.get_request_model_filter().to_string();
+    let model_index = if selected.is_empty() {
+        0
+    } else {
+        models
+            .iter()
+            .position(|model| model == &selected)
+            .map_or(0, |index| index as i32)
+    };
+    let model_options = models
+        .iter()
+        .map(|model| model.as_str().into())
+        .collect::<Vec<slint::SharedString>>();
+    window.set_request_model_options(ModelRc::from(model_options.as_slice()));
+    window.set_request_model_index(model_index);
+    let rows = page
+        .rows
+        .iter()
+        .map(|row| RequestRow {
+            id: row.key.clone().into(),
+            at: row.at.clone().into(),
+            model: row.model.clone().into(),
+            outcome: row.result.clone().into(),
+            tone: match row.result.as_str() {
+                "成功" => status_tone(Tone::Good),
+                "失败" | "截断" => status_tone(Tone::Bad),
+                "客户端断开" => status_tone(Tone::Warn),
+                _ => status_tone(Tone::Neutral),
+            },
+            summary: format!(
+                "耗时 {} · ID {}",
+                row.duration,
+                row.request_id.as_deref().unwrap_or("—")
+            )
+            .into(),
+            first_token: row.first_token.clone().into(),
+            detail: "".into(),
+        })
+        .collect::<Vec<_>>();
+    let count = rows.len();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    apply_request_analytics(window, page);
+    if count == 0 || !page.message.is_empty() {
+        window.set_request_status(page.message.clone().into());
+    } else {
+        window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
+    }
+    window.set_request_tone(coverage_tone(page.coverage));
+    window.set_older_requests(page.earlier.is_some());
+    if page.coverage != Coverage::Unavailable {
+        window.set_request_updated_at(clock_now().into());
+    }
+}
+
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
     let cards = page.summary.cards();
     // The compact request page folds the five cards into two readable lines;
@@ -671,20 +729,34 @@ fn load_requests(
     };
     let result = window.get_request_result();
     let keyword = window.get_request_keyword().to_string();
+    let model = window.get_request_model_filter().to_string();
     let scroll = window.get_request_scroll_y();
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
     if !refresh {
         window.set_selected_request("".into());
-        window.set_request_scroll_y(0.0);
+        // Filter changes keep the reader where they were; only a page jump
+        // starts at the top of the new page.
+        if mode == RequestLoad::Page {
+            window.set_request_scroll_y(0.0);
+        }
         window.set_request_status("正在读取请求记录…".into());
         window.set_request_tone(3);
         window.set_older_requests(false);
         window.set_newer_requests(false);
     }
     std::thread::spawn(move || {
-        let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
+        let model = if model.is_empty() { None } else { Some(model) };
+        let page = usage::read_requests(
+            &ledger,
+            range,
+            model.as_deref(),
+            result,
+            &keyword,
+            cursor.as_deref(),
+            now,
+        );
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return; };
             let mut nav = nav.lock().expect("request navigation poisoned");
@@ -698,47 +770,18 @@ fn load_requests(
                     summary: nav.summary.clone(),
                     model_speeds: nav.model_speeds.clone(),
                     chart: nav.chart.clone(),
+                    models: nav.models.clone(),
                 };
                 usage::keep_previous_page_on_failure(&previous, page)
             } else {
                 page
             };
-            let rows = page.rows.iter().map(|row| RequestRow {
-                id: row.key.clone().into(),
-                at: row.at.clone().into(),
-                model: row.model.clone().into(),
-                outcome: row.result.clone().into(),
-                tone: match row.result.as_str() {
-                    "成功" => status_tone(Tone::Good),
-                    "失败" => status_tone(Tone::Bad),
-                    _ => status_tone(Tone::Warn),
-                },
-                summary: format!(
-                    "耗时 {} · ID {}",
-                    row.duration,
-                    row.request_id.as_deref().unwrap_or("—")
-                )
-                .into(),
-                first_token: row.first_token.clone().into(),
-                detail: "".into(),
-            }).collect::<Vec<_>>();
-            let count = rows.len();
-            window.set_requests(ModelRc::from(rows.as_slice()));
-            apply_request_analytics(&window, &page);
-            if count == 0 || !page.message.is_empty() {
-                window.set_request_status(page.message.into());
-            } else {
-                window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
-            }
-            window.set_request_tone(coverage_tone(page.coverage));
-            window.set_older_requests(page.earlier.is_some());
+            apply_request_page(&window, &page);
             window.set_newer_requests(nav.pages.len() > 1);
-            if page.coverage != Coverage::Unavailable {
-                window.set_request_updated_at(clock_now().into());
-            }
             nav.summary = page.summary.clone();
             nav.model_speeds = page.model_speeds.clone();
             nav.chart = page.chart.clone();
+            nav.models = page.models.clone();
             nav.rows = page.rows;
             nav.earlier = page.earlier;
             if refresh {
@@ -977,9 +1020,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let saved_state = Arc::new(Mutex::new(saved_credentials.clone()));
     let auth_state: Arc<Mutex<Option<AuthRead>>> = Arc::new(Mutex::new(None));
+    let verify_state: Arc<Mutex<Option<VerifyOutcome>>> = Arc::new(Mutex::new(None));
     let account_form = Rc::new(RefCell::new(AccountForm::new(None)));
     let initial_account = account_view(&saved_credentials, None);
     apply_account(&window, &initial_account);
+    account::apply_verify(&window, &account::verify_view(None));
 
     let program = resolve_gateway_binary(gateway_bin_override(), &app_dir());
     let mut supervisor = GatewaySupervisor::new(
@@ -1999,6 +2044,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_admin_continue = Arc::clone(&auth_admin);
     let saved_continue = Arc::clone(&saved_state);
     let auth_continue = Arc::clone(&auth_state);
+    let verify_continue = Arc::clone(&verify_state);
     let current_port_continue = Arc::clone(&current_port);
     window.on_continue_login(move || {
         let Some(window) = weak_continue.upgrade() else {
@@ -2008,7 +2054,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
         window.set_account_busy(true);
-        window.set_login_status("正在打开 Edge 登录窗口…".into());
+        window.set_login_status("正在核验当前凭据…".into());
         window.set_login_tone(status_tone(Tone::Warn));
         let base = format!(
             "http://127.0.0.1:{}",
@@ -2018,38 +2064,115 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_admin = Arc::clone(&auth_admin_continue);
         let saved_state = Arc::clone(&saved_continue);
         let auth_state = Arc::clone(&auth_continue);
+        let verify_state = Arc::clone(&verify_continue);
         let weak = window.as_weak();
         std::thread::spawn(move || {
-            let result = match load_control_token(&token_path) {
-                Ok(token) => auth_admin.start_visible_login(&base, &token),
-                Err(error) => Err(error),
+            let current_status = auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .and_then(|auth| match auth {
+                    AuthRead::Status(status) => Some(status.clone()),
+                    AuthRead::Unavailable(_) => None,
+                });
+            let outcome = match load_control_token(&token_path) {
+                Ok(token) => {
+                    account::on_demand_login(&*auth_admin, &base, &token, current_status.as_ref())
+                }
+                Err(error) => OnDemandLogin::VerifyUnavailable(error),
             };
             LOGIN_IN_FLIGHT.store(false, Ordering::SeqCst);
-            let auth = match result {
-                Ok(status) => AuthRead::Status(status),
-                Err(error) => AuthRead::Unavailable(error),
-            };
-            *auth_state
+            let previous_auth = auth_state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let auth = match &outcome {
+                OnDemandLogin::LoginStarted { status, .. } => {
+                    Some(AuthRead::Status(status.clone()))
+                }
+                OnDemandLogin::AlreadyValid {
+                    status: Some(status),
+                    ..
+                } => Some(AuthRead::Status(status.clone())),
+                _ => previous_auth,
+            };
+            if let Some(auth) = &auth {
+                *auth_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+            }
+            // A failed verify keeps its own reason in the card; a manual
+            // takeover that never ran a verify leaves the card untouched.
+            let stored = match &outcome {
+                OnDemandLogin::VerifyUnavailable(error) => {
+                    Some(VerifyOutcome::Unavailable(error.clone()))
+                }
+                _ => outcome.report().cloned().map(VerifyOutcome::Report),
+            };
+            if let Some(stored) = stored {
+                *verify_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stored);
+            }
+            let verify_view = {
+                let stored = verify_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                account::verify_view(stored.as_ref())
+            };
             let saved = saved_state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
-            let view = account_view(&saved, Some(&auth));
-            let (message, tone) = match &auth {
-                AuthRead::Status(status) => match status.state {
-                    AuthState::Valid | AuthState::LoggingIn => (String::new(), Tone::Good),
-                    _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
-                },
-                AuthRead::Unavailable(reason) => (format!("无法打开可见登录：{reason}"), Tone::Bad),
-            };
+            let view = account_view(&saved, auth.as_ref());
+            let (message, tone) = account::on_demand_message(&outcome);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     window.set_account_busy(false);
                     apply_account(&window, &view);
+                    account::apply_verify(&window, &verify_view);
                     window.set_login_status(message.into());
                     window.set_login_tone(status_tone(tone));
+                }
+            });
+        });
+    });
+
+    let weak_verify = window.as_weak();
+    let verify_admin = Arc::clone(&auth_admin);
+    let verify_token_path = paths.control_token.clone();
+    let verify_store = Arc::clone(&verify_state);
+    let verify_port = Arc::clone(&current_port);
+    window.on_verify_login(move || {
+        let Some(window) = weak_verify.upgrade() else {
+            return;
+        };
+        if VERIFY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        window.set_verify_busy(true);
+        let base = format!("http://127.0.0.1:{}", verify_port.load(Ordering::SeqCst));
+        let token_path = verify_token_path.clone();
+        let auth_admin = Arc::clone(&verify_admin);
+        let verify_store = Arc::clone(&verify_store);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let outcome = match load_control_token(&token_path) {
+                Ok(token) => match auth_admin.verify(&base, &token) {
+                    Ok(report) => VerifyOutcome::Report(report),
+                    Err(error) => VerifyOutcome::Unavailable(error),
+                },
+                Err(error) => VerifyOutcome::Unavailable(error),
+            };
+            VERIFY_IN_FLIGHT.store(false, Ordering::SeqCst);
+            *verify_store
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome.clone());
+            let view = account::verify_view(Some(&outcome));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_verify_busy(false);
+                    account::apply_verify(&window, &view);
                 }
             });
         });

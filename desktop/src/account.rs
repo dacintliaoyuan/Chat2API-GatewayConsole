@@ -10,6 +10,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use chrono::TimeZone;
 use serde_json::Value;
 
 use crate::gateway::ControlToken;
@@ -379,6 +380,201 @@ pub fn manual_reason_label(reason: &str) -> String {
     }
 }
 
+/// The gateway's verdict from `/admin/auth/verify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyVerdict {
+    Valid,
+    Rejected,
+    NeedsLogin,
+    Unknown,
+}
+
+impl VerifyVerdict {
+    pub fn from_gateway(value: &str) -> Self {
+        match value {
+            "valid" => Self::Valid,
+            "rejected" => Self::Rejected,
+            "needs_login" => Self::NeedsLogin,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// One `/admin/auth/verify` answer, reduced to the fields the app displays.
+///
+/// The probe never publishes a credential or changes the gateway's auth state; a
+/// failed verify therefore keeps its own reason instead of becoming a login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyReport {
+    pub verdict: VerifyVerdict,
+    pub reason: Option<String>,
+    pub upstream_status: Option<u16>,
+    /// Unix epoch seconds reported by the gateway.
+    pub checked_epoch: i64,
+    pub note: Option<String>,
+}
+
+impl VerifyReport {
+    pub fn parse(body: &Value) -> Result<Self, String> {
+        let object = body
+            .as_object()
+            .ok_or_else(|| "核验结果不是 JSON 对象".to_string())?;
+        let verify = object
+            .get("verify")
+            .and_then(Value::as_str)
+            .filter(|verify| !verify.is_empty())
+            .ok_or_else(|| "核验结果缺少 verify".to_string())?;
+        let checked_epoch = object
+            .get("checked_epoch")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "核验结果缺少 checked_epoch".to_string())?;
+        let upstream_status = object
+            .get("upstream_status")
+            .and_then(Value::as_u64)
+            .and_then(|status| u16::try_from(status).ok());
+        Ok(Self {
+            verdict: VerifyVerdict::from_gateway(verify),
+            reason: text_field(object.get("reason")),
+            upstream_status,
+            checked_epoch: i64::try_from(checked_epoch)
+                .map_err(|_| "核验结果的 checked_epoch 超出范围".to_string())?,
+            note: text_field(object.get("note")),
+        })
+    }
+
+    /// The concrete verify reason, explained for the page.
+    pub fn reason_label(&self) -> Option<String> {
+        self.reason.as_deref().map(verify_reason_label)
+    }
+}
+
+/// Explains a gateway verify reason without echoing credentials.
+pub fn verify_reason_label(reason: &str) -> String {
+    match reason {
+        "no_local_credential" => "本实例没有可核验的 UM 凭据".to_string(),
+        "upstream_rejected" => "上游拒绝了当前凭据".to_string(),
+        "timeout" => "核验上游时超时".to_string(),
+        "network_error" => "无法连接上游".to_string(),
+        "upstream_5xx" => "上游返回 5xx".to_string(),
+        "unexpected_status" => "上游返回非预期状态".to_string(),
+        "invalid_catalog_shape" => "上游模型目录结构不符合预期".to_string(),
+        "credential_changed" => "核验期间凭据已变化".to_string(),
+        other => format!("核验原因：{other}"),
+    }
+}
+
+/// One verify call: the gateway's report or why it is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    Report(VerifyReport),
+    Unavailable(String),
+}
+
+impl VerifyReport {
+    /// The concrete reason plus the upstream status when the gateway reported one.
+    fn reason_detail(&self) -> String {
+        match (self.reason_label(), self.upstream_status) {
+            (Some(label), Some(status)) => format!("{label}（HTTP {status}）"),
+            (Some(label), None) => label,
+            (None, Some(status)) => format!("上游核验结果：HTTP {status}"),
+            (None, None) => self
+                .note
+                .clone()
+                .unwrap_or_else(|| "核验没有给出可用结论".to_string()),
+        }
+    }
+}
+
+/// What the overview's 「最近核验」 card shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyView {
+    /// Empty until the first probe.
+    pub at: String,
+    pub result: String,
+    pub detail: String,
+    pub tone: Tone,
+    pub action_label: String,
+}
+
+/// Maps one verify outcome to the card. A failed verify keeps its own result
+/// and reason; it never becomes a passed verification.
+pub fn verify_view(outcome: Option<&VerifyOutcome>) -> VerifyView {
+    match outcome {
+        None => VerifyView {
+            at: String::new(),
+            result: "从未核验".to_string(),
+            detail: "还没有向上游确认过当前登录凭据。".to_string(),
+            tone: Tone::Neutral,
+            action_label: "立即核验".to_string(),
+        },
+        Some(VerifyOutcome::Unavailable(reason)) => VerifyView {
+            at: String::new(),
+            result: "结果未知".to_string(),
+            detail: reason.clone(),
+            tone: Tone::Warn,
+            action_label: "重新核验".to_string(),
+        },
+        Some(VerifyOutcome::Report(report)) => {
+            let at = format!("核验于 {}", verify_clock(report.checked_epoch));
+            let (result, detail, tone) = match report.verdict {
+                VerifyVerdict::Valid => (
+                    "通过".to_string(),
+                    "上游确认当前登录有效（未调用模型）".to_string(),
+                    Tone::Good,
+                ),
+                VerifyVerdict::Rejected | VerifyVerdict::NeedsLogin => {
+                    ("未通过".to_string(), report.reason_detail(), Tone::Bad)
+                }
+                VerifyVerdict::Unknown => {
+                    ("结果未知".to_string(), report.reason_detail(), Tone::Warn)
+                }
+            };
+            VerifyView {
+                at,
+                result,
+                detail,
+                tone,
+                action_label: "重新核验".to_string(),
+            }
+        }
+    }
+}
+
+fn verify_clock(epoch_seconds: i64) -> String {
+    chrono::Local
+        .timestamp_opt(epoch_seconds, 0)
+        .single()
+        .map(|time| time.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "—".to_string())
+}
+
+/// The window fields the 「最近核验」 card owns.
+pub trait VerifySurface {
+    fn set_verify_at_label(&self, value: &str);
+    fn set_verify_result_label(&self, value: &str);
+    fn set_verify_detail_text(&self, value: &str);
+    fn set_verify_tone_index(&self, tone: Tone);
+    fn set_verify_action_text(&self, value: &str);
+}
+
+pub fn apply_verify(surface: &dyn VerifySurface, view: &VerifyView) {
+    surface.set_verify_at_label(&view.at);
+    surface.set_verify_result_label(&view.result);
+    surface.set_verify_detail_text(&view.detail);
+    surface.set_verify_tone_index(view.tone);
+    surface.set_verify_action_text(&view.action_label);
+}
+
+/// Whether the gateway is waiting for an operator to finish a manual step.
+///
+/// `duo_prompt_waiting` is progress in the same round, not a takeover, so it
+/// must not open another window or skip the on-demand verify.
+pub fn manual_takeover_status(status: &AuthStatus) -> bool {
+    let awaiting_duo = status.phase.as_deref() == Some("awaiting_duo")
+        || status.manual_reason.as_deref() == Some("duo_prompt_waiting");
+    status.manual_reason.is_some() && !awaiting_duo
+}
+
 /// Whether a save must open the visible Edge for the first login.
 ///
 /// A running automatic re-login (`logging_in`) is never started again; the app only
@@ -406,9 +602,147 @@ pub fn first_login(
     }
 }
 
+/// What one 「按需登录」 click did.
+///
+/// A valid verify only refreshes the displayed state; the visible window opens
+/// only when the verify rejects the current credential. ADR 0011 keeps the manual
+/// takeover on the explicit visible login and never submits credentials here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnDemandLogin {
+    /// Verify passed; no window was opened and the auth state was re-read.
+    AlreadyValid {
+        report: VerifyReport,
+        status: Option<AuthStatus>,
+    },
+    /// Verify rejected the credential and one visible login round was started.
+    LoginStarted {
+        report: Option<VerifyReport>,
+        status: AuthStatus,
+    },
+    /// Verify could not decide; no window was opened.
+    Inconclusive(VerifyReport),
+    /// The verify call itself failed; no window was opened.
+    VerifyUnavailable(String),
+    /// Verify rejected the credential but the visible login could not start.
+    LoginUnavailable {
+        report: Option<VerifyReport>,
+        error: String,
+    },
+}
+
+impl OnDemandLogin {
+    pub fn report(&self) -> Option<&VerifyReport> {
+        match self {
+            Self::AlreadyValid { report, .. } => Some(report),
+            Self::LoginStarted { report, .. } | Self::LoginUnavailable { report, .. } => {
+                report.as_ref()
+            }
+            Self::Inconclusive(report) => Some(report),
+            Self::VerifyUnavailable(_) => None,
+        }
+    }
+}
+
+/// Runs the on-demand login: verify first, and only a rejected credential opens
+/// the visible window. A manual takeover is the operator's explicit choice, so it
+/// opens the window without a verify that could skip it.
+pub fn on_demand_login(
+    auth_admin: &dyn AuthAdmin,
+    base_url: &str,
+    token: &ControlToken,
+    status: Option<&AuthStatus>,
+) -> OnDemandLogin {
+    if status.is_some_and(manual_takeover_status) {
+        return match auth_admin.start_visible_login(base_url, token) {
+            Ok(status) => OnDemandLogin::LoginStarted {
+                report: None,
+                status,
+            },
+            Err(error) => OnDemandLogin::LoginUnavailable {
+                report: None,
+                error,
+            },
+        };
+    }
+    let report = match auth_admin.verify(base_url, token) {
+        Ok(report) => report,
+        Err(error) => return OnDemandLogin::VerifyUnavailable(error),
+    };
+    match report.verdict {
+        VerifyVerdict::Valid => {
+            // The credential is valid, so no login round is started; only the
+            // displayed status is refreshed.
+            let status = auth_admin.read_status(base_url, token).ok();
+            OnDemandLogin::AlreadyValid { report, status }
+        }
+        VerifyVerdict::Rejected | VerifyVerdict::NeedsLogin => {
+            match auth_admin.start_visible_login(base_url, token) {
+                Ok(status) => OnDemandLogin::LoginStarted {
+                    report: Some(report),
+                    status,
+                },
+                Err(error) => OnDemandLogin::LoginUnavailable {
+                    report: Some(report),
+                    error,
+                },
+            }
+        }
+        VerifyVerdict::Unknown => OnDemandLogin::Inconclusive(report),
+    }
+}
+
+/// The status line for one on-demand login, with its reason kept visible.
+pub fn on_demand_message(outcome: &OnDemandLogin) -> (String, Tone) {
+    match outcome {
+        OnDemandLogin::AlreadyValid { .. } => {
+            ("核验通过：当前凭据有效，无需登录".to_string(), Tone::Good)
+        }
+        OnDemandLogin::LoginStarted {
+            report: Some(report),
+            ..
+        } => (
+            format!(
+                "核验未通过：{}；已打开可见登录窗口",
+                on_demand_reason(report)
+            ),
+            Tone::Warn,
+        ),
+        OnDemandLogin::LoginStarted { report: None, .. } => {
+            ("正在打开可见登录窗口…".to_string(), Tone::Warn)
+        }
+        OnDemandLogin::Inconclusive(report) => (
+            format!("暂时无法核验：{}；未打开登录窗口", on_demand_reason(report)),
+            Tone::Warn,
+        ),
+        OnDemandLogin::VerifyUnavailable(error) => (format!("无法核验：{error}"), Tone::Bad),
+        OnDemandLogin::LoginUnavailable {
+            report: Some(report),
+            error,
+        } => (
+            format!(
+                "核验未通过：{}；打开可见登录失败：{error}",
+                on_demand_reason(report)
+            ),
+            Tone::Bad,
+        ),
+        OnDemandLogin::LoginUnavailable {
+            report: None,
+            error,
+        } => (format!("打开可见登录失败：{error}"), Tone::Bad),
+    }
+}
+
+fn on_demand_reason(report: &VerifyReport) -> String {
+    report
+        .reason_label()
+        .unwrap_or_else(|| "核验没有给出可用结论".to_string())
+}
+
 /// The gateway's control-token auth face.
 pub trait AuthAdmin: Send + Sync {
     fn read_status(&self, base_url: &str, token: &ControlToken) -> Result<AuthStatus, String>;
+    /// One single-shot `/admin/auth/verify` probe; it never changes the auth state.
+    fn verify(&self, base_url: &str, token: &ControlToken) -> Result<VerifyReport, String>;
     fn start_visible_login(
         &self,
         base_url: &str,
@@ -452,6 +786,20 @@ impl HttpAuthAdmin {
             .map_err(|error| admin_error(&url, error))?;
         parse_response(&url, response)
     }
+
+    fn verify_probe(&self, base_url: &str, token: &ControlToken) -> Result<VerifyReport, String> {
+        let url = format!("{}/admin/auth/verify", base_url.trim_end_matches('/'));
+        let response = self
+            .agent
+            .get(&url)
+            .set("X-Admin-Control", token.expose())
+            .call()
+            .map_err(|error| admin_error(&url, error))?;
+        let body: Value = response
+            .into_json()
+            .map_err(|error| format!("{url}: 核验结果不是有效 JSON：{error}"))?;
+        VerifyReport::parse(&body).map_err(|error| format!("{url}: {error}"))
+    }
 }
 
 impl Default for HttpAuthAdmin {
@@ -463,6 +811,10 @@ impl Default for HttpAuthAdmin {
 impl AuthAdmin for HttpAuthAdmin {
     fn read_status(&self, base_url: &str, token: &ControlToken) -> Result<AuthStatus, String> {
         self.read(base_url, token)
+    }
+
+    fn verify(&self, base_url: &str, token: &ControlToken) -> Result<VerifyReport, String> {
+        self.verify_probe(base_url, token)
     }
 
     fn start_visible_login(
@@ -542,6 +894,9 @@ pub struct AccountView {
     pub state_tone: Tone,
     pub can_clear: bool,
     pub can_continue_login: bool,
+    /// ADR 0011: a manual-takeover state opens the visible window directly
+    /// instead of running the on-demand verify first.
+    pub manual_takeover: bool,
     /// True when the gateway is logged in or already in a login round, so stale
     /// failure text from an earlier round must be cleared from both the overview
     /// `login-status` and the settings `credential-status`.
@@ -564,6 +919,7 @@ pub trait AccountSurface {
     fn set_saved_detail(&self, value: &str);
     fn set_can_clear(&self, value: bool);
     fn set_can_continue_login(&self, value: bool);
+    fn set_manual_takeover(&self, value: bool);
     fn set_overview_label(&self, value: &str);
     fn set_overview_detail(&self, value: &str);
     fn set_overview_tone(&self, tone: Tone);
@@ -582,6 +938,7 @@ pub fn apply_account(surface: &dyn AccountSurface, view: &AccountView) {
     surface.set_saved_detail(&view.saved_detail);
     surface.set_can_clear(view.can_clear);
     surface.set_can_continue_login(view.can_continue_login);
+    surface.set_manual_takeover(view.manual_takeover);
     surface.set_overview_label(&view.overview_label);
     surface.set_overview_detail(&view.overview_detail);
     surface.set_overview_tone(view.overview_tone);
@@ -659,6 +1016,10 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         }
     };
     let can_continue_login = can_continue && matches!(saved, LoadOutcome::Loaded(_));
+    let manual_takeover = matches!(
+        auth,
+        Some(AuthRead::Status(status)) if manual_takeover_status(status)
+    );
     // The status dot pulses only while a read or a login round is in flight;
     // the shell consumes this flag instead of matching display text.
     let pulse = match auth {
@@ -682,6 +1043,7 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
         state_tone,
         can_clear,
         can_continue_login,
+        manual_takeover,
         clears_old_failure,
         overview_label,
         overview_detail,

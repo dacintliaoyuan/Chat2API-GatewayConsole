@@ -1645,20 +1645,27 @@ fn the_request_filter_rows_align_the_range_result_search_and_refresh() {
     );
 
     assert!(
-        (window.get_request_result_x() - page_left).abs() < 1.0,
-        "the result row starts at the page edge"
+        (window.get_request_model_x() - page_left).abs() < 1.0,
+        "the model row starts at the page edge"
+    );
+    assert!(
+        window.get_request_result_x()
+            > window.get_request_model_x() + window.get_request_model_width(),
+        "the result filter follows the model filter"
     );
     assert!(
         (window.get_request_result_y() - window.get_request_search_y()).abs() < 1.0
             && (window.get_request_search_y() - window.get_request_query_y()).abs() < 1.0,
-        "result, search and query share the second filter row"
+        "model, result, search and query share the second filter row"
     );
     assert!(
-        window.get_request_result_y() > window.get_request_period_y() + window.get_request_period_height(),
+        window.get_request_result_y()
+            > window.get_request_period_y() + window.get_request_period_height(),
         "the second filter row sits below the range row"
     );
     assert!(
-        window.get_request_search_x() > window.get_request_result_x() + window.get_request_result_width(),
+        window.get_request_search_x()
+            > window.get_request_result_x() + window.get_request_result_width(),
         "search follows the result filter"
     );
     assert!(
