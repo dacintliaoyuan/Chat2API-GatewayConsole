@@ -281,6 +281,14 @@ pub struct UsageRecord<'a> {
     pub first_token_ms: Option<u64>,
 }
 
+/// Records the elapsed time to the first substantive streamed output exactly once.
+/// Prelude metadata and terminal-only streams never call this.
+pub fn mark_first_token(started_at: Instant, first_token_ms: &mut Option<u64>) {
+    if first_token_ms.is_none() {
+        *first_token_ms = Some((Instant::now() - started_at).as_millis() as u64);
+    }
+}
+
 /// The append-only share ledger.
 pub struct Ledger {
     path: Option<PathBuf>,

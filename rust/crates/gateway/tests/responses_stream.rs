@@ -620,6 +620,10 @@ fn messages_stream_events_follow_the_python_shape_and_order() {
     assert_eq!(rows[0]["status"], json!("ok"));
     assert_eq!(rows[0]["input_tokens"], json!(7));
     assert_eq!(rows[0]["output_tokens"], json!(2));
+    assert!(
+        rows[0]["first_token_ms"].as_u64().is_some(),
+        "the first substantive text delta records the first token time"
+    );
 }
 
 #[test]
@@ -877,4 +881,93 @@ fn the_stream_starts_with_created_and_a_json_response_has_the_same_shape() {
     assert!(sse_payloads(&body)
         .iter()
         .any(|payload| { payload["response"]["status"] == json!("in_progress") }));
+}
+
+#[test]
+fn a_terminal_only_chat_stream_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-responses-terminal-only-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::now(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":0,\"total_tokens\":10}}\n\n"
+                    .to_vec(),
+            ),
+            ChatChunk::now(b"data: [DONE]\n\n".to_vec()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let raw = start_stream(&gateway);
+    assert!(event_names(&raw)
+        .iter()
+        .any(|name| name == "response.completed"));
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "a terminal-only stream never produced substantive output"
+    );
+}
+
+fn terminal_only_anthropic_events() -> Vec<Vec<u8>> {
+    vec![
+        event(
+            "message_start",
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1", "type": "message", "role": "assistant",
+                    "model": "m", "content": [], "stop_reason": null,
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 7, "output_tokens": 0},
+                },
+            }),
+        ),
+        event(
+            "message_delta",
+            json!({"type": "message_delta",
+                   "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+                   "usage": {"output_tokens": 0}}),
+        ),
+        event("message_stop", json!({"type": "message_stop"})),
+    ]
+}
+
+#[test]
+fn a_terminal_only_messages_stream_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-responses-messages-terminal-only-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: terminal_only_anthropic_events()
+            .into_iter()
+            .map(ChatChunk::now)
+            .collect(),
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &image_request()).expect("stream request");
+    let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
+    let names = event_names(&raw);
+    assert!(names.iter().any(|name| name == "response.completed"));
+    assert!(!names
+        .iter()
+        .any(|name| name == "response.output_text.delta"));
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "a terminal-only messages stream never produced substantive output"
+    );
 }

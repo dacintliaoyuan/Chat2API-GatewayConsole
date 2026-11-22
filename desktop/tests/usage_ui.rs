@@ -368,29 +368,13 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
             value: "10.0 Token/秒".into(),
             detail: "Token/秒 · 整次平均".into(),
         },
+        main_ui::RequestMetric {
+            label: "首字耗时".into(),
+            value: "120 ms".into(),
+            detail: "请求开始到首个输出".into(),
+        },
     ];
     window.set_request_metrics(ModelRc::from(metrics.as_slice()));
-    let points = vec![
-        main_ui::RequestPoint {
-            label: "10:00".into(),
-            token_value: "1,200".into(),
-            request_value: "60".into(),
-            speed_value: "10.0".into(),
-            token_count: 1200.0,
-            request_count: 60.0,
-            speed_count: 10.0,
-        },
-        main_ui::RequestPoint {
-            label: "11:00".into(),
-            token_value: "200".into(),
-            request_value: "10".into(),
-            speed_value: "10.0".into(),
-            token_count: 200.0,
-            request_count: 10.0,
-            speed_count: 10.0,
-        },
-    ];
-    window.set_request_chart_points(ModelRc::from(points.as_slice()));
     window.set_request_chart_labels(ModelRc::from([SharedString::from("10:00"), "11:00".into()]));
     window.set_request_chart_token_counts(ModelRc::from([1200.0, 200.0]));
     window.set_request_chart_request_counts(ModelRc::from([60.0, 10.0]));
@@ -434,7 +418,15 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 
-    assert_eq!(window.get_request_metrics().row_count(), 4);
+    assert_eq!(window.get_request_metrics().row_count(), 5);
+    assert_eq!(
+        window.get_request_metrics().row_data(4).map(|card| card.label),
+        Some("首字耗时".into())
+    );
+    assert_eq!(
+        window.get_request_metrics().row_data(4).map(|card| card.value),
+        Some("120 ms".into())
+    );
     assert_eq!(window.get_request_model_row_count(), 2);
     assert_eq!(window.get_request_model_first().as_str(), "alpha");
     assert_eq!(window.get_request_model_speed().as_str(), "10.0");

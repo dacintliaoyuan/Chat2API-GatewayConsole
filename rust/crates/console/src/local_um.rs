@@ -738,16 +738,23 @@ fn total_reading(event: &Event) -> Reading {
 }
 
 /// Average first-token latency over the rows that recorded it. Rows written
-/// before the field existed stay missing instead of being counted as zero.
+/// before the field existed stay missing instead of being counted as zero, and a
+/// negative value is unknown like the per-row reading rather than a sample.
 fn first_token_reading(events: &[&Event]) -> Reading {
     let values: Vec<i64> = events
         .iter()
-        .filter_map(|event| event.first_token_ms)
+        .filter_map(|event| event.first_token_ms.filter(|value| *value >= 0))
         .collect();
     if events.is_empty() {
         return Reading::missing("所选时间没有请求");
     }
     if values.is_empty() {
+        if events
+            .iter()
+            .any(|event| event.first_token_ms.is_some_and(|value| value < 0))
+        {
+            return Reading::unknown("首字耗时字段为负，不可解析");
+        }
         return Reading::missing("账本没有记录首字耗时，不推算");
     }
     let average = values.iter().sum::<i64>() as f64 / values.len() as f64;
@@ -760,14 +767,24 @@ fn first_token_reading(events: &[&Event]) -> Reading {
     if values.len() == events.len() {
         reading
     } else {
-        Reading::estimate_float(
-            rounded,
-            &format!(
-                "按 {} 个记录了首字耗时的请求平均；{} 个旧记录缺字段",
-                values.len(),
-                events.len() - values.len()
-            ),
-        )
+        let invalid = events
+            .iter()
+            .filter(|event| event.first_token_ms.is_some_and(|value| value < 0))
+            .count();
+        let missing = events.len() - values.len() - invalid;
+        let mut reasons = Vec::new();
+        if invalid > 0 {
+            reasons.push(format!("{invalid} 个字段为负"));
+        }
+        if missing > 0 {
+            reasons.push(format!("{missing} 个旧记录缺字段"));
+        }
+        let note = format!(
+            "按 {} 个记录了首字耗时的请求平均；{}",
+            values.len(),
+            reasons.join("，")
+        );
+        Reading::estimate_float(rounded, &note)
     }
 }
 
@@ -980,10 +997,17 @@ fn cache_hit_rate_reading(events: &[&Event]) -> Reading {
         }
         return Reading::unknown("旧记录没有缓存报告状态（Q11 unknown）");
     }
-    let cached: i64 = reported
-        .iter()
-        .map(|event| event.cache_tokens.unwrap_or(0))
-        .sum();
+    let mut cached = 0i64;
+    let mut missing_cache = 0usize;
+    for event in &reported {
+        match event.cache_tokens {
+            Some(value) => cached += value,
+            None => missing_cache += 1,
+        }
+    }
+    if missing_cache == reported.len() {
+        return Reading::unknown("缓存报告状态为 reported 但缓存字段缺失");
+    }
     let inputs = reported
         .iter()
         .map(|event| event.input_tokens)
@@ -992,9 +1016,20 @@ fn cache_hit_rate_reading(events: &[&Event]) -> Reading {
         .map(|values| values.into_iter().sum::<i64>())
         .filter(|input| *input > 0);
     let Some(input) = input else {
-        return Reading::missing("报告缓存的请求输入 Token 合计非正，无法计算命中率");
+        return Reading::missing("报告缓存的请求输入 Token 缺失或合计非正，无法计算命中率");
     };
     let rate = (cached as f64 / input as f64 * 1000.0).round() / 10.0;
+    if missing_cache > 0 {
+        // A reported row without cached tokens may still have cached input, so
+        // the known total is a lower bound, not an estimate of the mean.
+        let mut reasons = vec![format!(
+            "{missing_cache} 个报告缓存的请求缺少缓存字段，命中率按下界计算"
+        )];
+        if reported.len() != events.len() {
+            reasons.push(format!("{} 个请求未报告缓存", events.len() - reported.len()));
+        }
+        return Reading::at_least_float(rate, &reasons.join("；"));
+    }
     if reported.len() == events.len() {
         Reading::exact_float(rate)
     } else {
@@ -2044,6 +2079,9 @@ fn encode_um_log_cursor(
     base64_encode(python_json(&payload).as_bytes())
 }
 
+/// #140 keeps the summary, model speeds and chart buckets over the whole filtered
+/// set here, not in the desktop client: the visible page is only 60 rows, so a
+/// client-side aggregate would change when the reader pages.
 pub fn um_requests(
     ledger: &Path,
     window: &str,

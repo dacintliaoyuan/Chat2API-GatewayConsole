@@ -804,6 +804,14 @@ fn process_event(
     }
     state.usage.observe_text(thinking_piece);
     state.usage.observe_text(text_piece);
+    let substantive = thinking_piece.is_some_and(|piece| !piece.is_empty())
+        || text_piece.is_some_and(|piece| !piece.is_empty())
+        || tool_action;
+    if substantive {
+        // Prelude overflow and terminal-only streams commit without any
+        // substantive output; only the first real delta starts the clock.
+        crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
+    }
 
     if state.committed {
         if write_chunk(stream, &wire).is_err() {
@@ -868,9 +876,6 @@ fn flush_prelude(
     let staged = std::mem::take(&mut state.staged);
     if write_chunk(stream, &staged).is_err() {
         return false;
-    }
-    if state.first_token_ms.is_none() {
-        state.first_token_ms = Some((Instant::now() - context.started_at).as_millis() as u64);
     }
     true
 }

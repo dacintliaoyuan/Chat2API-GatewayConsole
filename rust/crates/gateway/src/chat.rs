@@ -847,9 +847,7 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
     if write_chunk(stream, &staged).is_err() {
         return false;
     }
-    if state.first_token_ms.is_none() {
-        state.first_token_ms = Some((Instant::now() - context.started_at).as_millis() as u64);
-    }
+    crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
     true
 }
 

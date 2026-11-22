@@ -3,10 +3,9 @@ import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, Nav
 import { ChartEngine, ChartDataset, ChartTheme } from "@slintplot";
 import { AppIcon } from "icons.slint";
 export { ChartEngine }
-import { UsageChart, UsagePoint, RequestAnalytics, RequestMetric, RequestPoint, ModelSpeedRow } from "usage-chart.slint";
+import { UsageChart, UsagePoint, RequestAnalytics, RequestMetric, ModelSpeedRow } from "usage-chart.slint";
 export { UsagePoint }
 export { RequestMetric }
-export { RequestPoint }
 export { ModelSpeedRow }
 
 export struct LogRow {
@@ -333,7 +332,12 @@ export component MainWindow inherits Window {
         ChartTheme.grid-color = Theme.grid;
         ChartTheme.axis-color = Theme.edge;
         ChartTheme.font-size = 11px;
-        ChartTheme.animation-duration = root.allow-motion ? 420ms : 0ms;
+        // The request page is an analytics surface rather than the overview, so
+        // its bars settle at the 160 ms desktop step instead of the chart
+        // library's 420 ms default. The overview keeps 420 ms.
+        ChartTheme.animation-duration = root.allow-motion
+            ? (root.page == 1 ? 160ms : 420ms)
+            : 0ms;
     }
     in property <string> gateway-value: "检测中";
     in property <string> gateway-detail;
@@ -443,7 +447,6 @@ export component MainWindow inherits Window {
     in property <string> request-detail;
     in-out property <length> request-scroll-y: 0px;
     in property <[RequestMetric]> request-metrics;
-    in property <[RequestPoint]> request-chart-points;
     in property <[string]> request-chart-labels;
     in property <[float]> request-chart-token-counts;
     in property <[float]> request-chart-request-counts;
@@ -833,6 +836,7 @@ export component MainWindow inherits Window {
     changed page => {
         root.confirm-clear = false;
         root.confirm-quit = false;
+        root.apply-chart-theme();
         if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
@@ -1416,7 +1420,6 @@ export component MainWindow inherits Window {
                     width: 100%;
                     horizontal-stretch: 1;
                     metrics: root.request-metrics;
-                    points: root.request-chart-points;
                     labels: root.request-chart-labels;
                     token-counts: root.request-chart-token-counts;
                     request-counts: root.request-chart-request-counts;

@@ -11,7 +11,6 @@
 //! gateway performs the automatic re-login while the app only reads
 //! `/admin/auth/status`.
 
-mod dwm;
 mod tray;
 
 use std::cell::RefCell;
@@ -31,6 +30,7 @@ use um_desktop::account::{
 };
 use um_desktop::clipboard;
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
+use um_desktop::dwm;
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
     HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
@@ -571,84 +571,49 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
 }
 
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
-    let summary = &page.summary;
-    let speed = |value: &str| {
-        if value == "—" {
-            "—".to_string()
-        } else {
-            format!("{value} Token/秒")
-        }
-    };
-    let metrics = vec![
-        RequestMetric {
-            label: "Token".into(),
-            value: summary.token_total.clone().into(),
-            detail: format!("输入 {} · 输出 {}", summary.token_input, summary.token_output).into(),
-        },
-        RequestMetric {
-            label: "请求".into(),
-            value: summary.request_total.clone().into(),
-            detail: format!("失败 {}", summary.request_failed).into(),
-        },
-        RequestMetric {
-            label: "缓存命中率".into(),
-            value: summary.cache_hit_rate.clone().into(),
-            detail: "缓存读取 / 输入 Token".into(),
-        },
-        RequestMetric {
-            label: "输出速度".into(),
-            value: speed(&summary.speed).into(),
-            detail: if summary.speed_note.is_empty() {
-                "Token/秒 · 整次平均".into()
-            } else {
-                summary.speed_note.clone().into()
-            },
-        },
-    ];
-    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
-    let points = page
-        .chart
-        .points
-        .iter()
-        .map(|point| RequestPoint {
-            label: point.label.clone().into(),
-            token_value: point.tokens.clone().into(),
-            request_value: point.requests.clone().into(),
-            speed_value: point.speed.clone().into(),
-            token_count: point.token_count.map_or(f32::NAN, |value| value as f32),
-            request_count: point.request_count.map_or(f32::NAN, |value| value as f32),
-            speed_count: point.speed_count.map_or(f32::NAN, |value| value as f32),
+    let metrics = page
+        .summary
+        .cards()
+        .into_iter()
+        .map(|card| RequestMetric {
+            label: card.label.into(),
+            value: card.value.into(),
+            detail: card.detail.into(),
         })
         .collect::<Vec<_>>();
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
     window.set_request_chart_labels(ModelRc::from(
-        points
+        page.chart
+            .points
             .iter()
-            .map(|point| point.label.clone())
-            .collect::<Vec<_>>()
+            .map(|point| point.label.clone().into())
+            .collect::<Vec<slint::SharedString>>()
             .as_slice(),
     ));
     window.set_request_chart_token_counts(ModelRc::from(
-        points
+        page.chart
+            .points
             .iter()
-            .map(|point| point.token_count)
+            .map(|point| point.token_count.map_or(f32::NAN, |value| value as f32))
             .collect::<Vec<_>>()
             .as_slice(),
     ));
     window.set_request_chart_request_counts(ModelRc::from(
-        points
+        page.chart
+            .points
             .iter()
-            .map(|point| point.request_count)
+            .map(|point| point.request_count.map_or(f32::NAN, |value| value as f32))
             .collect::<Vec<_>>()
             .as_slice(),
     ));
     window.set_request_chart_speed_counts(ModelRc::from(
-        points
+        page.chart
+            .points
             .iter()
-            .map(|point| point.speed_count)
+            .map(|point| point.speed_count.map_or(f32::NAN, |value| value as f32))
             .collect::<Vec<_>>()
             .as_slice(),
     ));
-    window.set_request_chart_points(ModelRc::from(points.as_slice()));
     window.set_request_chart_token_series(ModelRc::from(model_series(page, 0).as_slice()));
     window.set_request_chart_request_series(ModelRc::from(model_series(page, 1).as_slice()));
     window.set_request_chart_speed_series(ModelRc::from(model_series(page, 2).as_slice()));
@@ -666,18 +631,6 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
     window.set_request_model_speeds(ModelRc::from(model_rows.as_slice()));
 }
 
-#[derive(Default)]
-struct RequestNav {
-    pages: Vec<Option<String>>,
-    earlier: Option<String>,
-    rows: Vec<usage::RequestRow>,
-    summary: usage::RequestSummary,
-    model_speeds: Vec<usage::ModelSpeed>,
-    chart: usage::RequestChart,
-    now: i64,
-    generation: u64,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RequestLoad {
     Query,
@@ -688,42 +641,25 @@ enum RequestLoad {
 fn load_requests(
     window: &MainWindow,
     ledger: &Path,
-    nav: &Arc<Mutex<RequestNav>>,
+    nav: &Arc<Mutex<usage::RequestNav>>,
     direction: i32,
     mode: RequestLoad,
 ) {
     let refresh = mode == RequestLoad::Refresh;
     let (cursor, now, generation) = {
         let mut nav = nav.lock().expect("request navigation poisoned");
-        if refresh {
+        let cursor = match mode {
             // A refresh re-reads the page the user is on; it never rewinds the
-            // page stack or changes the filters.
-            let Some(cursor) = nav.pages.last().cloned().flatten() else {
-                return;
-            };
-            nav.generation = nav.generation.wrapping_add(1);
-            (Some(cursor), nav.now, nav.generation)
-        } else {
-            match direction {
-                1 => match nav.earlier.take() {
-                    Some(cursor) => nav.pages.push(Some(cursor)),
-                    None => return,
-                },
-                -1 if nav.pages.len() > 1 => {
-                    nav.pages.pop();
-                    nav.earlier = None;
-                }
-                -1 => return,
-                _ => {
-                    nav.pages.clear();
-                    nav.pages.push(None);
-                    nav.earlier = None;
-                    nav.now = chrono::Utc::now().timestamp_millis();
-                }
-            }
-            nav.generation = nav.generation.wrapping_add(1);
-            (nav.pages.last().cloned().flatten(), nav.now, nav.generation)
-        }
+            // page stack or changes the filters. `Some(None)` is the legal
+            // first-page cursor, so only a missing page skips the request.
+            RequestLoad::Refresh => nav.refresh(),
+            RequestLoad::Query => nav.query(chrono::Utc::now().timestamp_millis()),
+            RequestLoad::Page => nav.page(direction),
+        };
+        let Some(cursor) = cursor else {
+            return;
+        };
+        (cursor, nav.now, nav.generation)
     };
     let range = Range::from_index(window.get_request_period());
     let result = window.get_request_result();
@@ -802,7 +738,12 @@ fn load_requests(
     });
 }
 
-fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<RequestNav>, key: &str) {
+fn show_request(
+    window: &MainWindow,
+    log: &Path,
+    nav: &Mutex<usage::RequestNav>,
+    key: &str,
+) {
     let nav = nav.lock().expect("request navigation poisoned");
     let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else {
         return;
@@ -1044,15 +985,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_state = Arc::clone(&auth_state);
         let auth_admin = Arc::clone(&auth_admin);
         std::thread::spawn(move || {
-            let mut last_success: Option<(u64, Overview, AccountView)> = None;
+            let mut has_success = false;
             let mut last_failure: Option<String> = None;
+            let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
+                let paused = PAUSED.load(Ordering::SeqCst);
+                let refresh = OVERVIEW_REFRESH.load(Ordering::SeqCst);
+                if !poller.should_read(paused, refresh) {
+                    // The Slint auto-refresh timer owns the cadence; this
+                    // reader only wakes for a new epoch or a resume.
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
                 let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
                 let supervision = gateway_status
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .card();
-                let refresh = OVERVIEW_REFRESH.load(Ordering::SeqCst);
                 let saved = saved_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1069,24 +1018,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
                 if overview.failures.is_empty() {
-                    let recovered = last_failure.take().is_some();
-                    if recovered
-                        || last_success
-                            .as_ref()
-                            .is_none_or(|(last_refresh, last_overview, last_account)| {
-                                *last_refresh != refresh
-                                    || *last_overview != overview
-                                    || *last_account != account
-                            })
-                    {
-                        last_success = Some((refresh, overview.clone(), account.clone()));
-                        let weak = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(window) = weak.upgrade() {
-                                apply_overview(&window, &overview, &account);
-                            }
-                        });
-                    }
+                    last_failure = None;
+                    has_success = true;
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            apply_overview(&window, &overview, &account);
+                        }
+                    });
                 } else {
                     // Keep the last good cards; the status line carries the
                     // refresh failure and the chart keeps its previous points.
@@ -1094,7 +1033,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if last_failure.as_deref() != Some(line.as_str()) {
                         last_failure = Some(line.clone());
                         let weak = weak.clone();
-                        if last_success.is_some() {
+                        if has_success {
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(window) = weak.upgrade() {
                                     window.set_status_line(line.into());
@@ -1110,11 +1049,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                std::thread::sleep(Duration::from_secs(if PAUSED.load(Ordering::SeqCst) {
-                    3
-                } else {
-                    1
-                }));
+                std::thread::sleep(Duration::from_millis(100));
             }
         });
     }
@@ -1226,7 +1161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let request_nav = Arc::new(Mutex::new(RequestNav::default()));
+    let request_nav = Arc::new(Mutex::new(usage::RequestNav::default()));
     let ledger = paths.usage_log.clone();
     let request_ledger = ledger.clone();
     let request_page_nav = Arc::clone(&request_nav);

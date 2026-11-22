@@ -2190,7 +2190,7 @@ fn handle_responses_stream_event(
         return false;
     }
     if substantive || terminal {
-        if !commit_responses_stream(stream, context, state) {
+        if !commit_responses_stream(stream, context, state, substantive) {
             state.status = "client_disconnected".to_string();
             return false;
         }
@@ -2220,6 +2220,7 @@ fn commit_responses_stream(
     stream: &mut TcpStream,
     context: &ResponsesContext<'_>,
     state: &mut ResponsesStreamState,
+    record_first_token: bool,
 ) -> bool {
     state.committed = true;
     let mut headers = vec![
@@ -2241,8 +2242,8 @@ fn commit_responses_stream(
     if write_chunk(stream, &prelude).is_err() {
         return false;
     }
-    if state.first_token_ms.is_none() {
-        state.first_token_ms = Some((Instant::now() - context.started_at).as_millis() as u64);
+    if record_first_token {
+        crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
     }
     true
 }

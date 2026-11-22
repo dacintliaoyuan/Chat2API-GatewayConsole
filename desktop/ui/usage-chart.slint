@@ -17,16 +17,6 @@ export struct RequestMetric {
     detail: string,
 }
 
-export struct RequestPoint {
-    label: string,
-    token-value: string,
-    request-value: string,
-    speed-value: string,
-    token-count: float,
-    request-count: float,
-    speed-count: float,
-}
-
 export struct ModelSpeedRow {
     model: string,
     requests: string,
@@ -35,14 +25,13 @@ export struct ModelSpeedRow {
     first-token: string,
 }
 
-// Request-page analytics: four metric cards, a Token/请求/速度 chart with an
+// Request-page analytics: five metric cards, a Token/请求/速度 chart with an
 // optional per-model split, and the per-model speed table.
 export component RequestAnalytics inherits Panel {
     // The request page gives the list the remaining height; at the minimum
     // window size this card may clip instead of pushing the status row down.
     min-height: 0px;
     in property <[RequestMetric]> metrics;
-    in property <[RequestPoint]> points;
     in property <[string]> labels;
     in property <[float]> token-counts;
     in property <[float]> request-counts;
@@ -54,8 +43,6 @@ export component RequestAnalytics inherits Panel {
     in-out property <int> metric: 0;
     in-out property <bool> split-by-model: false;
     in property <bool> allow-motion: true;
-    in property <string> status-text;
-    in property <color> status-tone: Theme.muted;
 
     out property <int> metric-index: root.metric;
     out property <bool> split: root.split-by-model;
@@ -187,11 +174,6 @@ export component RequestAnalytics inherits Panel {
                     text: "暂无模型速度数据";
                 }
             }
-        }
-
-        if !root.status-text.is-empty : Hint {
-            text: root.status-text;
-            color: root.status-tone;
         }
     }
 }

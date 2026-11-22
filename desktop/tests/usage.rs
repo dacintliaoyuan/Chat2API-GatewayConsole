@@ -6,7 +6,7 @@ use chrono::DateTime;
 use serde_json::{json, Value};
 use um_desktop::usage::{
     keep_previous_on_failure, keep_previous_page_on_failure, read_request_logs, read_requests,
-    read_usage, request_detail, Coverage, Range,
+    read_usage, request_detail, Coverage, Range, RequestNav, RequestSummary,
 };
 
 const REQUEST: &str = "f314e7d8c7526367baec95ac155b6406";
@@ -214,6 +214,67 @@ fn request_page_keeps_summary_model_speeds_chart_and_first_token_across_the_page
     assert_eq!(ten.speed_count, Some(10.0));
     assert_eq!(ten.models.len(), 2);
     assert_eq!(page.rows[0].first_token, "100 ms");
+}
+
+#[test]
+fn refreshing_the_first_request_page_still_issues_a_request() {
+    let mut nav = RequestNav::default();
+    assert!(
+        nav.refresh().is_none(),
+        "no page has been loaded, so there is nothing to refresh"
+    );
+    assert_eq!(nav.query(1000), Some(None));
+    assert_eq!(nav.pages, [None]);
+    assert_eq!(
+        nav.refresh(),
+        Some(None),
+        "the first page has no cursor but is still a request"
+    );
+    assert_eq!(nav.now, 1000, "refresh keeps the query snapshot time");
+    assert_eq!(nav.pages, [None], "refresh never rewinds the page stack");
+}
+
+#[test]
+fn paging_and_refresh_keep_the_page_stack_and_snapshot_time() {
+    let mut nav = RequestNav::default();
+    nav.query(1000);
+    nav.earlier = Some("cursor-1".into());
+    assert_eq!(nav.page(1), Some(Some("cursor-1".into())));
+    assert_eq!(nav.pages, [None, Some("cursor-1".into())]);
+    nav.earlier = Some("cursor-2".into());
+    assert_eq!(nav.page(1), Some(Some("cursor-2".into())));
+    assert_eq!(
+        nav.pages,
+        [None, Some("cursor-1".into()), Some("cursor-2".into())]
+    );
+
+    assert_eq!(nav.refresh(), Some(Some("cursor-2".into())));
+    assert_eq!(nav.now, 1000, "refresh keeps the query snapshot time");
+    assert_eq!(
+        nav.pages,
+        [None, Some("cursor-1".into()), Some("cursor-2".into())],
+        "refresh never rewinds the page stack"
+    );
+
+    assert_eq!(nav.page(-1), Some(Some("cursor-1".into())));
+    assert_eq!(nav.page(-1), Some(None), "the first page has no cursor");
+    assert_eq!(nav.page(-1), None, "the first page has no newer page");
+}
+
+#[test]
+fn request_metric_cards_include_first_token_and_keep_missing_as_a_dash() {
+    let summary = RequestSummary {
+        first_token: "120 ms".into(),
+        ..RequestSummary::default()
+    };
+    let cards = summary.cards();
+    assert_eq!(cards.len(), 5);
+    assert_eq!(cards[4].label, "首字耗时");
+    assert_eq!(cards[4].value, "120 ms");
+    assert_eq!(cards[4].detail, "请求开始到首个输出");
+
+    let missing = RequestSummary::default().cards();
+    assert_eq!(missing[4].value, "—");
 }
 
 #[test]

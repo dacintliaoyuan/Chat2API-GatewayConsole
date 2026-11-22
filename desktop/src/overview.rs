@@ -9,6 +9,38 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+/// Gates the background overview reader. The Slint auto-refresh timer owns the
+/// cadence and bumps the refresh epoch; the reader never polls on its own, stays
+/// quiet while the window is hidden or minimized, and reads once immediately when
+/// the window becomes visible again.
+#[derive(Debug, Default)]
+pub struct OverviewPoller {
+    seen_epoch: Option<u64>,
+    paused: bool,
+}
+
+impl OverviewPoller {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true for the initial read, for a new refresh epoch, and for the
+    /// first pass after a pause. A paused poller never reads, so an auto-refresh
+    /// tick queued before the window was hidden cannot land on the cards.
+    pub fn should_read(&mut self, paused: bool, epoch: u64) -> bool {
+        let resumed = self.paused && !paused;
+        self.paused = paused;
+        if paused {
+            return false;
+        }
+        if self.seen_epoch != Some(epoch) || resumed {
+            self.seen_epoch = Some(epoch);
+            return true;
+        }
+        false
+    }
+}
+
 pub trait Probe {
     fn get_json(&self, url: &str) -> Result<Value, String>;
 }

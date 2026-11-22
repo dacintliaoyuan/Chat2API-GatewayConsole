@@ -1,7 +1,9 @@
 use std::cell::RefCell;
 
 use serde_json::{json, Value};
-use um_desktop::overview::{read_overview, status_line, Card, Overview, Probe, Tone};
+use um_desktop::overview::{
+    read_overview, status_line, Card, Overview, OverviewPoller, Probe, Tone,
+};
 
 struct FakeProbe {
     gateway: Result<Value, String>,
@@ -197,4 +199,37 @@ fn status_line_lists_failures_instead_of_claiming_normal() {
     let line = status_line(&overview);
     assert!(line.contains("本实例网关"));
     assert!(!line.contains("状态正常"));
+}
+
+#[test]
+fn the_overview_reader_reads_only_on_a_new_epoch_and_after_resume() {
+    let mut poller = OverviewPoller::new();
+    assert!(
+        poller.should_read(false, 0),
+        "the initial read still loads the cards"
+    );
+    assert!(
+        !poller.should_read(false, 0),
+        "the reader never polls on its own once the first read landed"
+    );
+    assert!(
+        !poller.should_read(true, 0),
+        "a hidden or minimized window pauses the reader"
+    );
+    assert!(
+        !poller.should_read(true, 1),
+        "an epoch queued while hidden must not apply overview data"
+    );
+    assert!(
+        poller.should_read(false, 1),
+        "showing the window reads immediately even if the epoch already moved"
+    );
+    assert!(
+        !poller.should_read(false, 1),
+        "the resume read happens once"
+    );
+    assert!(
+        poller.should_read(false, 2),
+        "a manual refresh or an auto-refresh tick reads once"
+    );
 }

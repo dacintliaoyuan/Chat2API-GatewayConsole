@@ -111,6 +111,56 @@ impl Default for RequestSummary {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct MetricCard {
+    pub label: String,
+    pub value: String,
+    pub detail: String,
+}
+
+impl RequestSummary {
+    /// The five metric cards the request page shows. Missing values keep the
+    /// summary's `—` instead of being folded into zero.
+    pub fn cards(&self) -> Vec<MetricCard> {
+        let speed = if self.speed == "—" {
+            "—".to_string()
+        } else {
+            format!("{} Token/秒", self.speed)
+        };
+        vec![
+            MetricCard {
+                label: "Token".into(),
+                value: self.token_total.clone(),
+                detail: format!("输入 {} · 输出 {}", self.token_input, self.token_output),
+            },
+            MetricCard {
+                label: "请求".into(),
+                value: self.request_total.clone(),
+                detail: format!("失败 {}", self.request_failed),
+            },
+            MetricCard {
+                label: "缓存命中率".into(),
+                value: self.cache_hit_rate.clone(),
+                detail: "缓存读取 / 输入 Token".into(),
+            },
+            MetricCard {
+                label: "输出速度".into(),
+                value: speed,
+                detail: if self.speed_note.is_empty() {
+                    "Token/秒 · 整次平均".into()
+                } else {
+                    self.speed_note.clone()
+                },
+            },
+            MetricCard {
+                label: "首字耗时".into(),
+                value: self.first_token.clone(),
+                detail: "请求开始到首个输出".into(),
+            },
+        ]
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelSpeed {
     pub model: String,
     pub requests: String,
@@ -154,6 +204,62 @@ pub struct RequestPage {
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
     pub chart: RequestChart,
+}
+
+/// Page cursor stack and last good page for the request list. `pages` always
+/// holds the first page as `None`; a later page holds its cursor. Keeping the
+/// outer `Option` distinct from the inner cursor is what lets a refresh of the
+/// first page still issue a request.
+#[derive(Default)]
+pub struct RequestNav {
+    pub pages: Vec<Option<String>>,
+    pub earlier: Option<String>,
+    pub rows: Vec<RequestRow>,
+    pub summary: RequestSummary,
+    pub model_speeds: Vec<ModelSpeed>,
+    pub chart: RequestChart,
+    pub now: i64,
+    pub generation: u64,
+}
+
+impl RequestNav {
+    /// Starts a new query at the first page and snapshots the current time.
+    pub fn query(&mut self, now: i64) -> Option<Option<String>> {
+        self.pages.clear();
+        self.pages.push(None);
+        self.earlier = None;
+        self.now = now;
+        self.generation = self.generation.wrapping_add(1);
+        self.pages.last().cloned()
+    }
+
+    /// Moves one page older (`1`) or newer (`-1`). `None` means there is no
+    /// such page, so the caller must not issue a request.
+    pub fn page(&mut self, direction: i32) -> Option<Option<String>> {
+        match direction {
+            1 => match self.earlier.take() {
+                Some(cursor) => self.pages.push(Some(cursor)),
+                None => return None,
+            },
+            -1 if self.pages.len() > 1 => {
+                self.pages.pop();
+                self.earlier = None;
+            }
+            -1 => return None,
+            _ => return None,
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.pages.last().cloned()
+    }
+
+    /// Re-reads the current page at the same snapshot time. The first page is
+    /// `Some(None)`, a legal request with no cursor; only a missing page is
+    /// `None`.
+    pub fn refresh(&mut self) -> Option<Option<String>> {
+        let cursor = self.pages.last().cloned()?;
+        self.generation = self.generation.wrapping_add(1);
+        Some(cursor)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
