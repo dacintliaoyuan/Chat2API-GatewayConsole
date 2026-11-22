@@ -42,5 +42,6 @@ windows = { version = "0.62", features = [
 i-slint-backend-testing = "=1.19.0"
 
 [build-dependencies]
+embed-resource = "3"
 slint-build = "=1.19.0"
 slintplot = "=0.5.1"
