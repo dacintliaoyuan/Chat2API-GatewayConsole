@@ -352,26 +352,31 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
             label: "Token".into(),
             value: "1,400".into(),
             detail: "输入 700 · 输出 700".into(),
+            detail_tone: 0,
         },
         main_ui::RequestMetric {
             label: "请求".into(),
             value: "70".into(),
             detail: "失败 0".into(),
+            detail_tone: 0,
         },
         main_ui::RequestMetric {
             label: "缓存命中率".into(),
             value: "20.0%".into(),
             detail: "缓存读取 / 输入 Token".into(),
+            detail_tone: 0,
         },
         main_ui::RequestMetric {
             label: "输出速度".into(),
             value: "10.0 Token/秒".into(),
             detail: "Token/秒 · 整次平均".into(),
+            detail_tone: 0,
         },
         main_ui::RequestMetric {
             label: "首字耗时".into(),
             value: "120 ms".into(),
             detail: "请求开始到首个输出".into(),
+            detail_tone: 0,
         },
     ];
     window.set_request_metrics(ModelRc::from(metrics.as_slice()));

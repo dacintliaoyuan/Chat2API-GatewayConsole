@@ -58,7 +58,7 @@ export global Theme {
     // Secondary text on the rail uses the darker #63636a / #a0a0a8 pair so it
     // stays above 4.5:1 on both rail variants.
     out property <color> rail-muted: dark ? #a0a0a8 : #63636a;
-    out property <color> rail-selected: dark ? #2c2c2e : #e8f2ff;
+    out property <color> rail-selected: dark ? #0b2946 : #e8f2ff;
     out property <color> rail-hover: dark ? #262628 : #e4e4e9;
     out property <color> grid: dark ? #2c2c2e : #e4e4e7;
     out property <color> data: dark ? #f5f5f7 : #1d1d1f;
@@ -570,7 +570,11 @@ export component Toggle inherits Rectangle {
 
 export component NavItem inherits Rectangle {
     in property <string> label;
+    // The rail icon comes from the same Lucide set as every other control.
+    in property <string> icon: "";
     in property <bool> selected;
+    // The compact rail keeps only the icon; the tooltip carries the label.
+    in property <bool> compact: false;
     callback activate();
     height: Theme.control-height;
     border-radius: 6px;
@@ -588,11 +592,18 @@ export component NavItem inherits Rectangle {
         }
     }
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        alignment: start;
+        padding-left: root.compact ? 0px : 10px;
+        padding-right: root.compact ? 0px : 10px;
+        alignment: root.compact ? center : start;
         spacing: 8px;
-        Text {
+        if !root.icon.is-empty : AppIcon {
+            size: 16px;
+            kind: root.icon;
+            tint: root.selected ? Theme.accent-strong
+                : keyboard.has-focus ? Theme.rail-ink : Theme.rail-muted;
+            cross-axis-self-alignment: center;
+        }
+        if !root.compact : Text {
             text: root.label;
             color: root.selected ? Theme.accent-strong : keyboard.has-focus ? Theme.rail-ink : Theme.rail-muted;
             font-size: 12px;
@@ -601,6 +612,7 @@ export component NavItem inherits Rectangle {
             animate color { duration: Theme.quick; easing: ease-in-out; }
         }
     }
+    if !root.icon.is-empty && root.compact : Tooltip { text: @markdown("\{root.label}"); }
     pointer := TouchArea {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }

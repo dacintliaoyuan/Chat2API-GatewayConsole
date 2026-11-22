@@ -115,6 +115,8 @@ pub struct MetricCard {
     pub label: String,
     pub value: String,
     pub detail: String,
+    /// 0 keeps the muted detail ink; 2 marks a real failure count.
+    pub detail_tone: i32,
 }
 
 impl RequestSummary {
@@ -126,21 +128,27 @@ impl RequestSummary {
         } else {
             format!("{} Token/秒", self.speed)
         };
+        // The failure count is the one metric that reads as bad when it is real.
+        let failures = self.request_failed.trim();
+        let failed = failures != "0" && failures != "—" && !failures.is_empty();
         vec![
             MetricCard {
                 label: "Token".into(),
                 value: self.token_total.clone(),
                 detail: format!("入 {} · 出 {}", self.token_input, self.token_output),
+                detail_tone: 0,
             },
             MetricCard {
                 label: "请求".into(),
                 value: self.request_total.clone(),
                 detail: format!("失败 {}", self.request_failed),
+                detail_tone: if failed { 2 } else { 0 },
             },
             MetricCard {
                 label: "缓存命中率".into(),
                 value: self.cache_hit_rate.clone(),
                 detail: "缓存读取 / 输入 Token".into(),
+                detail_tone: 0,
             },
             MetricCard {
                 label: "输出速度".into(),
@@ -150,11 +158,13 @@ impl RequestSummary {
                 } else {
                     self.speed_note.clone()
                 },
+                detail_tone: 0,
             },
             MetricCard {
                 label: "首字耗时".into(),
                 value: self.first_token.clone(),
                 detail: "请求开始到首个输出".into(),
+                detail_tone: 0,
             },
         ]
     }

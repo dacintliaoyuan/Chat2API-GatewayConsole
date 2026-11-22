@@ -32,6 +32,9 @@ export struct RequestRow {
 export struct NavEntry {
     label: string,
     page: int,
+    icon: string,
+    // Entries in the same group sit together; a group change gets a gap.
+    group: int,
 }
 
 component StateCell inherits VerticalLayout {
@@ -288,11 +291,11 @@ export component MainWindow inherits Window {
     // The rail and the page title read from the same table, so a page has one
     // name and one number everywhere.
     private property <[NavEntry]> nav-entries: [
-        { label: "总览", page: 0 },
-        { label: "请求诊断", page: 1 },
-        { label: "运行日志", page: 3 },
-        { label: "设置", page: 2 },
-        { label: "帮助", page: 4 },
+        { label: "总览", page: 0, icon: "dashboard", group: 0 },
+        { label: "请求诊断", page: 1, icon: "search", group: 0 },
+        { label: "运行日志", page: 3, icon: "scroll-text", group: 0 },
+        { label: "设置", page: 2, icon: "settings", group: 1 },
+        { label: "帮助", page: 4, icon: "help", group: 1 },
     ];
     private property <[string]> page-titles: ["总览", "请求诊断", "设置", "运行日志", "帮助"];
     // The account cell always carries a detail line so the three state columns
@@ -475,6 +478,11 @@ export component MainWindow inherits Window {
     private property <bool> v1-copied;
     in property <bool> port-busy;
     in property <string> settings-status;
+    // A failed gateway offers one recovery action; restart interrupts in-flight
+    // requests, so it asks once before acting.
+    callback restart-gateway();
+    in-out property <bool> confirm-restart: false;
+    in-out property <bool> gateway-restarting: false;
     in property <int> settings-tone: 3;
     in property <string> config-path;
     in property <string> instance-path;
@@ -692,6 +700,17 @@ export component MainWindow inherits Window {
     out property <int> request-chart-series-count: request-analytics.series-count;
     out property <int> request-model-row-count: request-analytics.model-row-count;
     out property <bool> request-details-open: request-analytics.details-open;
+    // Test seams: the address chips and the restart confirmation.
+    out property <bool> overview-address-visible: overview-address.visible;
+    out property <bool> overview-v1-visible: overview-v1.visible;
+    out property <length> restart-gateway-x: restart-gateway.absolute-position.x;
+    out property <length> restart-gateway-y: restart-gateway.absolute-position.y;
+    out property <length> restart-gateway-width: restart-gateway.width;
+    out property <length> restart-gateway-height: restart-gateway.height;
+    out property <length> restart-confirm-x: restart-confirm.absolute-position.x;
+    out property <length> restart-confirm-y: restart-confirm.absolute-position.y;
+    out property <length> restart-confirm-width: restart-confirm.width;
+    out property <length> restart-confirm-height: restart-confirm.height;
     out property <length> request-details-toggle-x: request-analytics.details-toggle-x;
     out property <length> request-details-toggle-y: request-analytics.details-toggle-y;
     out property <length> request-details-toggle-width: request-analytics.details-toggle-width;
@@ -920,6 +939,13 @@ export component MainWindow inherits Window {
     }
     // The inline clear confirmation returns to the normal row after three
     // seconds without a second click.
+    // The inline restart confirmation expires after three seconds, like the
+    // credential clear.
+    restart-confirm-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => { root.confirm-restart = false; }
+    }
     clear-confirm-timer := Timer {
         interval: 3s;
         running: false;
@@ -1118,10 +1144,17 @@ export component MainWindow inherits Window {
                         animate opacity { duration: Theme.motion ? 150ms : 0ms; easing: ease-in-out; }
                     }
                 }
-                for entry in root.nav-entries : NavItem {
-                    label: entry.label;
-                    selected: root.page == entry.page;
-                    activate => { root.navigate-to(entry.page); }
+                for entry in root.nav-entries : VerticalLayout {
+                    spacing: 0px;
+                    // A 12 px gap separates the 观测 group from 设置.
+                    if entry.group == 1 && entry.page == 2 : Rectangle { height: 12px; }
+                    NavItem {
+                        label: entry.label;
+                        icon: entry.icon;
+                        compact: root.compact;
+                        selected: root.page == entry.page;
+                        activate => { root.navigate-to(entry.page); }
+                    }
                 }
                 Rectangle { vertical-stretch: 1; }
                 Hint { text: root.compact ? "托盘运行" : "关窗后继续运行"; color: Theme.rail-muted; visible: root.tray-available; }
@@ -1198,7 +1231,7 @@ export component MainWindow inherits Window {
                 overview-address := CopyChip {
                     label: root.base-url;
                     copied: root.base-copied;
-                    visible: !root.active-address.is-empty;
+                    visible: root.page == 0 && !root.active-address.is-empty;
                     cross-axis-self-alignment: center;
                     opacity: root.page-opacity;
                     animate opacity { duration: Theme.glide; easing: ease-out; }
@@ -1207,7 +1240,7 @@ export component MainWindow inherits Window {
                 overview-v1 := CopyChip {
                     label: "/v1";
                     copied: root.v1-copied;
-                    visible: !root.active-address.is-empty;
+                    visible: root.page == 0 && !root.active-address.is-empty;
                     cross-axis-self-alignment: center;
                     opacity: root.page-opacity;
                     animate opacity { duration: Theme.glide; easing: ease-out; }
@@ -1474,9 +1507,9 @@ export component MainWindow inherits Window {
                     spacing: root.compact && !root.selected-request.is-empty ? 0px : 12px;
                     request-list-pane := VerticalLayout {
                     horizontal-stretch: 0;
-                    // At compact width the page scrolls; keep the list tall
-                    // enough to read several rows instead of collapsing it.
-                    min-height: root.compact ? 320px : 0px;
+                    // The page scrolls; the list keeps a readable height at
+                    // every width instead of collapsing to one row.
+                    min-height: root.compact ? 320px : 240px;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
                     width: root.compact
@@ -1931,6 +1964,52 @@ export component MainWindow inherits Window {
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.settings-status;
                                 color: Theme.status_ink(root.settings-tone);
+                            }
+                            // A gateway that is down gets one recovery action; the
+                            // restart asks once because it interrupts in-flight requests.
+                            gateway-restart-row := HorizontalLayout {
+                                visible: root.gateway-tone == 2;
+                                height: self.visible ? self.preferred-height : 0px;
+                                spacing: 8px;
+                                restart-gateway := ActionButton {
+                                    visible: !root.confirm-restart && !root.gateway-restarting;
+                                    label: "重启网关";
+                                    icon: "refresh";
+                                    quiet: true;
+                                    enabled: !root.port-busy;
+                                    clicked => {
+                                        root.confirm-restart = true;
+                                        restart-confirm-timer.start();
+                                    }
+                                }
+                                if root.gateway-restarting : Hint {
+                                    text: "正在重启本实例网关…";
+                                    color: Theme.status_ink(1);
+                                    vertical-alignment: center;
+                                }
+                                if root.confirm-restart : Hint {
+                                    text: "确认重启？会中断在途请求";
+                                    color: Theme.bad-text;
+                                    vertical-alignment: center;
+                                }
+                                // Always instantiated so the confirmation keeps a
+                                // testable geometry; only visible while asking.
+                                restart-confirm := ActionButton {
+                                    visible: root.confirm-restart;
+                                    height: root.confirm-restart ? self.preferred-height : 0px;
+                                    label: "确认";
+                                    danger: true;
+                                    enabled: !root.gateway-restarting;
+                                    clicked => {
+                                        root.confirm-restart = false;
+                                        root.restart-gateway();
+                                    }
+                                }
+                                if root.confirm-restart : ActionButton {
+                                    label: "取消";
+                                    quiet: true;
+                                    clicked => { root.confirm-restart = false; }
+                                }
                             }
                             Divider { }
                             gateway-address-row := SettingRow {

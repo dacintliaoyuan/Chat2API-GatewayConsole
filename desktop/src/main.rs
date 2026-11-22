@@ -589,6 +589,7 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
             label: card.label.into(),
             value: card.value.into(),
             detail: card.detail.into(),
+            detail_tone: card.detail_tone,
         })
         .collect::<Vec<_>>();
     window.set_request_metrics(ModelRc::from(metrics.as_slice()));
@@ -1179,6 +1180,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.on_quit_requested(move || {
         if let Some(window) = weak_quit.upgrade() {
             request_quit(&window, &supervisor_quit, &status_quit);
+        }
+    });
+
+    // The settings page offers one recovery action for a down gateway; it goes
+    // through the same supervisor restart the credential and port changes use.
+    let weak_restart_gateway = window.as_weak();
+    let restart_gateway_supervisor = Arc::clone(&gateway_supervisor);
+    let restart_gateway_status = Arc::clone(&gateway_status);
+    window.on_restart_gateway(move || {
+        let Some(window) = weak_restart_gateway.upgrade() else {
+            return;
+        };
+        window.set_gateway_restarting(true);
+        window.set_settings_status("正在重启本实例网关…".into());
+        window.set_settings_tone(status_tone(Tone::Warn));
+        let restarted = {
+            let mut guard = restart_gateway_supervisor
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(supervisor) = guard.as_mut() else {
+                window.set_gateway_restarting(false);
+                window.set_settings_status("本实例网关未接入，无法重启".into());
+                window.set_settings_tone(status_tone(Tone::Bad));
+                return;
+            };
+            supervisor.restart(StopReason::UserRequested)
+        };
+        *restart_gateway_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
+        window.set_gateway_restarting(false);
+        match &restarted.state {
+            GatewayState::Running { .. } => {
+                window.set_settings_status("网关已重启".into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            GatewayState::StartFailed { reason }
+            | GatewayState::PortInUse { reason, .. }
+            | GatewayState::HealthTimeout { reason }
+            | GatewayState::StopFailed { reason }
+            | GatewayState::SetupFailed { reason } => {
+                window.set_settings_status(format!("重启失败：{reason}").into());
+                window.set_settings_tone(status_tone(Tone::Bad));
+            }
+            _ => {
+                window.set_settings_status("网关正在重启…".into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
         }
     });
 

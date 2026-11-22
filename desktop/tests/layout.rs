@@ -2235,3 +2235,60 @@ fn focusing_the_port_field_selects_the_whole_value() {
         "focusing the port field selects its whole value"
     );
 }
+
+#[test]
+fn the_address_chips_only_show_on_the_overview() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_overview_address_visible());
+    assert!(window.get_overview_v1_visible());
+    for page in [1, 3, 2, 4] {
+        window.set_page(page);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+        assert!(
+            !window.get_overview_address_visible() && !window.get_overview_v1_visible(),
+            "the address chips stay on the overview page"
+        );
+    }
+}
+
+#[test]
+fn restarting_the_gateway_asks_once_and_reports_the_outcome() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_gateway_tone(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let restarts = Rc::new(Cell::new(0));
+    window.on_restart_gateway({
+        let restarts = Rc::clone(&restarts);
+        move || restarts.set(restarts.get() + 1)
+    });
+    click(
+        &window,
+        window.get_restart_gateway_x() + window.get_restart_gateway_width() / 2.0,
+        window.get_restart_gateway_y() + window.get_restart_gateway_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_confirm_restart(), "the first click only asks");
+    assert_eq!(restarts.get(), 0, "the first click must not restart");
+    click(
+        &window,
+        window.get_restart_confirm_x() + window.get_restart_confirm_width() / 2.0,
+        window.get_restart_confirm_y() + window.get_restart_confirm_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(restarts.get(), 1, "the confirm restarts once");
+    assert!(!window.get_confirm_restart());
+}
+
+#[test]
+fn the_request_list_keeps_a_readable_height_at_the_default_size() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_request_list_height() >= 240.0,
+        "the request list keeps a readable height"
+    );
+}

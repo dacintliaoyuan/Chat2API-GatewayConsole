@@ -15,6 +15,8 @@ export struct RequestMetric {
     label: string,
     value: string,
     detail: string,
+    // 0 keeps the muted ink; 2 marks a real failure count.
+    detail-tone: int,
 }
 
 export struct ModelSpeedRow {
@@ -244,7 +246,12 @@ export component RequestAnalytics inherits Panel {
                     }
                     // The detail line elides in the card; the hover tooltip
                     // keeps the full input/output split readable.
-                    Hint { text: metric.detail; overflow: elide; wrap: no-wrap; }
+                    Hint {
+                        text: metric.detail;
+                        color: Theme.status_ink(metric.detail-tone);
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
                 }
                 metric-hover := TouchArea {}
                 Tooltip { text: @markdown("\{metric.detail}"); }
