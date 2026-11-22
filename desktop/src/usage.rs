@@ -136,7 +136,7 @@ impl RequestSummary {
                 label: "Token".into(),
                 value: self.token_total.clone(),
                 detail: format!("入 {} · 出 {}", self.token_input, self.token_output),
-                detail_tone: 0,
+                detail_tone: 3,
             },
             MetricCard {
                 label: "请求".into(),
@@ -148,7 +148,7 @@ impl RequestSummary {
                 label: "缓存命中率".into(),
                 value: self.cache_hit_rate.clone(),
                 detail: "缓存读取 / 输入 Token".into(),
-                detail_tone: 0,
+                detail_tone: 3,
             },
             MetricCard {
                 label: "输出速度".into(),
@@ -158,13 +158,13 @@ impl RequestSummary {
                 } else {
                     self.speed_note.clone()
                 },
-                detail_tone: 0,
+                detail_tone: 3,
             },
             MetricCard {
                 label: "首字耗时".into(),
                 value: self.first_token.clone(),
                 detail: "请求开始到首个输出".into(),
-                detail_tone: 0,
+                detail_tone: 3,
             },
         ]
     }
