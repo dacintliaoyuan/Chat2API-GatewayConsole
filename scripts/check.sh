@@ -46,8 +46,10 @@ run python scripts/check_process_kills.py
 run python scripts/check_desktop_ui.py
 run python scripts/check_docs_references.py
 run node web/scripts/backend-contract/check-generated.mjs
-run git -c core.whitespace=cr-at-eol diff --cached --check
-run git -c core.whitespace=cr-at-eol diff --check
+# Vendored third-party skill content keeps its upstream whitespace; the gate
+# covers our own files only.
+run git -c core.whitespace=cr-at-eol diff --cached --check -- . ':(exclude).agents/skills'
+run git -c core.whitespace=cr-at-eol diff --check -- . ':(exclude).agents/skills'
 web_run npx tsc --noEmit
 web_run npm run check:contracts
 web_run npm run check:logs
