@@ -637,6 +637,8 @@ export component MainWindow inherits Window {
     out property <length> port-input-width: port-input.width;
     out property <length> port-input-height: port-input.height;
     out property <bool> port-input-numeric: port-input.numeric;
+    out property <bool> port-input-focused: port-input.has-focus;
+    out property <bool> port-input-selected: port-input.input-selected;
     out property <bool> port-input-error-visible: port-error-hint.visible;
     out property <length> port-apply-x: port-apply.absolute-position.x;
     out property <length> port-apply-y: port-apply.absolute-position.y;

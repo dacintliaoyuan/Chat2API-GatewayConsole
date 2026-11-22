@@ -245,13 +245,15 @@ export component FocusAction inherits Rectangle {
     HorizontalLayout {
         padding-left: root.icon-only ? 0px : 10px;
         padding-right: root.icon-only ? 0px : 10px;
-        alignment: center;
+        alignment: start;
+        // Center the icon and the label on the cross axis so the glyph never
+        // rides above the text.
+        cross-axis-alignment: center;
         spacing: 6px;
         if !root.icon.is-empty : AppIcon {
             size: root.icon-only ? 17px : 15px;
             kind: root.icon;
             tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
-            cross-axis-self-alignment: center;
             transform-rotation: root.icon-rotation;
             animate transform-rotation {
                 duration: root.icon-rotation == 0deg ? 0ms : 150ms;
@@ -399,6 +401,7 @@ export component Field inherits VerticalLayout {
     in property <bool> enabled: true;
     in property <bool> invalid: false;
     out property <bool> has-focus: input.has-focus;
+    out property <bool> input-selected: input.has-selection;
     // Test seam: the clear control is only visible while the field has text.
     out property <bool> clear-visible: clear-button.visible;
     out property <length> clear-x: clear-button.absolute-position.x;
@@ -408,7 +411,16 @@ export component Field inherits VerticalLayout {
     callback accepted();
     callback edited(string);
     callback cleared();
-    public function take-focus() { input.focus(); }
+    public function take-focus() {
+        input.focus();
+        input.select-all();
+    }
+    // A click that moves focus into the field selects the whole value, so the
+    // first keystroke replaces it like the Magpie input.
+    in property <bool> focused: input.has-focus;
+    changed focused => {
+        if (input.has-focus) { input.select-all(); }
+    }
     spacing: root.label.is-empty ? 0px : 5px;
     if !root.label.is-empty : Text {
         text: root.label;

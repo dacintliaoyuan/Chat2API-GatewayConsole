@@ -2216,3 +2216,22 @@ fn the_um_cell_always_has_a_detail_line() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(window.get_account_state_detail_text(), "登录后可用");
 }
+
+#[test]
+fn focusing_the_port_field_selects_the_whole_value() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_port_input().as_str(), "7999");
+    click(
+        &window,
+        window.get_port_input_x() + window.get_port_input_width() / 2.0,
+        window.get_port_input_y() + window.get_port_input_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_port_input_focused(), "the click focuses the port field");
+    assert!(
+        window.get_port_input_selected(),
+        "focusing the port field selects its whole value"
+    );
+}
