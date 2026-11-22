@@ -451,6 +451,32 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
 }
 
 #[test]
+fn scrolling_the_compact_request_page_moves_the_viewport() {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(540.0, 420.0));
+    window.set_page(1);
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert_eq!(window.get_request_scroll_viewport_y(), 0.0);
+
+    window.window().dispatch_event(slint::platform::WindowEvent::PointerMoved {
+        position: LogicalPosition::new(300.0, 300.0),
+    });
+    window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+        position: LogicalPosition::new(300.0, 300.0),
+        delta_x: 0.0,
+        delta_y: -400.0,
+    });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert!(
+        window.get_request_scroll_viewport_y() < 0.0,
+        "the compact request page scrolls to reach the list below the analytics card"
+    );
+}
+
+#[test]
 fn the_empty_model_speed_hint_stays_inside_the_analytics_card() {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");
