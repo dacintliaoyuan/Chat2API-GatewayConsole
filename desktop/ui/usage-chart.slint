@@ -277,7 +277,7 @@ export component RequestAnalytics inherits Panel {
             height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
-            Hint { text: "所选范围"; vertical-alignment: center; }
+            Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
                 visible: !root.compact || root.details-open;

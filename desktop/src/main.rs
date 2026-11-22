@@ -604,7 +604,8 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
         page.chart
             .points
             .iter()
-            .map(|point| point.token_count.map_or(f32::NAN, |value| value as f32))
+            // The request chart plots the same 亿 scale as the overview.
+            .map(|point| point.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0))
             .collect::<Vec<_>>()
             .as_slice(),
     ));
