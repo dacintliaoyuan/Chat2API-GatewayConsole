@@ -1542,8 +1542,8 @@ export component MainWindow inherits Window {
                             // and its paging read as one surface.
                             HorizontalLayout {
                                 spacing: 8px; alignment: end;
-                                ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
-                                ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
+                                ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
+                                ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
                             }
                         }
                     }
@@ -1785,7 +1785,7 @@ export component MainWindow inherits Window {
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.account-saved-detail;
                             }
-                            if !root.account-detail.is-empty : Hint { text: root.account-detail; color: Theme.bad-text; }
+                            if !root.account-detail.is-empty : Hint { text: root.account-detail; color: Theme.status_ink(root.account-tone); }
                             account-actions := HorizontalLayout {
                                 height: root.account-form-visible ? 0px : self.preferred-height;
                                 spacing: 8px; alignment: start;

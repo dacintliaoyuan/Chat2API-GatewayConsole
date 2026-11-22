@@ -65,6 +65,8 @@ component ModelSpeedTable inherits VerticalLayout {
         <= self.absolute-position.y + self.height;
     spacing: 3px;
     SectionLabel { text: "模型速度"; }
+    // The columns carry their units so the numbers are not bare.
+    Hint { text: "速度 Token/秒 · 首字耗时 ms · 请求 次 · 输出 Token"; overflow: elide; wrap: no-wrap; }
     HorizontalLayout {
         spacing: 6px;
         Hint { text: "模型"; horizontal-stretch: 1; }
