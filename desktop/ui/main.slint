@@ -1837,7 +1837,10 @@ export component MainWindow inherits Window {
                     visible: root.page == 0;
                     cross-axis-self-alignment: center;
                     opacity: root.page-opacity;
-                    clicked => { root.maintenance-menu-open = !root.maintenance-menu-open; }
+                    clicked => {
+                        root.maintenance-menu-open = !root.maintenance-menu-open;
+                        if (!root.maintenance-menu-open) { root.maintenance-confirm = -1; }
+                    }
                 }
             }
 
@@ -3359,7 +3362,10 @@ export component MainWindow inherits Window {
                             icon: "close";
                             icon-only: true;
                             quiet: true;
-                            clicked => { root.maintenance-menu-open = false; }
+                            clicked => {
+                                root.maintenance-menu-open = false;
+                                root.maintenance-confirm = -1;
+                            }
                         }
                     }
                     Hint { text: "每项动作先显示影响，二次确认后才执行。"; }
