@@ -8,9 +8,10 @@
 //! inspect [`Headers::get_all`] before using the body.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,37 @@ use sha2::{Digest, Sha256};
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Upper bound read into memory; a larger declared body is refused by policy.
 pub const HARD_BODY_CAP: u64 = 1024 * 1024 * 1024;
+
+pub(crate) fn accept_connections(
+    shutdown: &AtomicBool,
+    mut accept: impl FnMut() -> io::Result<(TcpStream, SocketAddr)>,
+    mut start: impl FnMut(TcpStream, SocketAddr) -> io::Result<()>,
+    mut report: impl FnMut(&'static str, &io::Error),
+) {
+    let mut last_accept_error: Option<Instant> = None;
+    let mut last_spawn_error: Option<Instant> = None;
+    while !shutdown.load(Ordering::SeqCst) {
+        let (operation, error, last_error) = match accept() {
+            Ok((stream, peer)) => match start(stream, peer) {
+                Ok(()) => continue,
+                Err(error) => ("thread_spawn", error, &mut last_spawn_error),
+            },
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => ("accept", error, &mut last_accept_error),
+        };
+        if last_error.map_or(true, |at| at.elapsed() >= Duration::from_secs(5)) {
+            *last_error = Some(Instant::now());
+            report(operation, &error);
+        }
+        // Resource pressure can reject connections or thread creation while the
+        // bound socket remains usable. Back off without dropping that socket.
+        thread::sleep(Duration::from_millis(50));
+    }
+}
 
 /// One raw header occurrence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +299,21 @@ pub fn read_request_body(
     head: RequestHead,
     max_body: u64,
 ) -> io::Result<(Request, Vec<u8>)> {
+    read_request_body_with_reserve(stream, head, max_body, reserve_body_bytes)
+}
+
+fn reserve_body_bytes(buffer: &mut Vec<u8>, additional: usize) -> io::Result<()> {
+    buffer
+        .try_reserve(additional)
+        .map_err(|_| io::ErrorKind::OutOfMemory.into())
+}
+
+fn read_request_body_with_reserve(
+    stream: &mut TcpStream,
+    head: RequestHead,
+    max_body: u64,
+    mut reserve: impl FnMut(&mut Vec<u8>, usize) -> io::Result<()>,
+) -> io::Result<(Request, Vec<u8>)> {
     let RequestHead {
         method,
         target,
@@ -276,9 +323,7 @@ pub fn read_request_body(
         mut leftover,
     } = head;
     let mut buffer = [0u8; 4096];
-    let declared = headers
-        .get("Content-Length")
-        .map(|value| value.trim().to_string());
+    let declared = headers.get("Content-Length").map(str::trim);
     let mut trailing = Vec::new();
     let body = match declared {
         None => {
@@ -307,9 +352,15 @@ pub fn read_request_body(
                             leftover,
                         ));
                     }
+                    reserve(&mut leftover, read)?;
                     leftover.extend_from_slice(&buffer[..read]);
                 }
-                trailing = leftover.split_off(length);
+                if leftover.len() > length {
+                    let extra = &leftover[length..];
+                    reserve(&mut trailing, extra.len())?;
+                    trailing.extend_from_slice(extra);
+                    leftover.truncate(length);
+                }
                 BodyRead::Complete(leftover)
             }
         },
@@ -326,6 +377,91 @@ pub fn read_request_body(
         },
         trailing,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Shutdown, TcpListener};
+
+    use crate::{error::ErrorProtocol, server::write_memory_pressure};
+
+    #[test]
+    fn body_allocation_failure_is_a_request_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, peer) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        // Parse the head before sending the body so the test must drive a growth.
+        client
+            .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 4\r\n\r\n")
+            .unwrap();
+        let head = read_request_head(&mut stream, peer.ip()).unwrap().unwrap();
+        let request_id = head.request_id.clone();
+        client.write_all(b"test").unwrap();
+
+        let error = read_request_body_with_reserve(&mut stream, head, 4, |buffer, _| {
+            reserve_body_bytes(buffer, usize::MAX)
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+        write_memory_pressure(&mut stream, ErrorProtocol::OpenAi, &request_id).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+
+        let mut wire = String::new();
+        client.read_to_string(&mut wire).unwrap();
+        let (head, body) = wire.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 503"));
+        assert!(head.contains(&format!("X-Request-Id: {request_id}\r\n")));
+        assert!(head.contains(&format!("Content-Length: {}\r\n", body.len())));
+        assert!(head.ends_with("Connection: close"));
+        let body: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(body["error"]["code"], "gateway_memory_pressure");
+    }
+
+    #[test]
+    fn unavailable_accept_and_thread_keep_listener_running() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _first = TcpStream::connect(addr).unwrap();
+        let _second = TcpStream::connect(addr).unwrap();
+        let shutdown = AtomicBool::new(false);
+        let mut accept_calls = 0;
+        let mut start_calls = 0;
+        let mut failures = Vec::new();
+
+        accept_connections(
+            &shutdown,
+            || {
+                accept_calls += 1;
+                if accept_calls == 1 {
+                    return Err(io::Error::from_raw_os_error(10055));
+                }
+                listener.accept()
+            },
+            |_, _| {
+                start_calls += 1;
+                if start_calls == 1 {
+                    return Err(io::Error::from_raw_os_error(1455));
+                }
+                shutdown.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            |operation, error| failures.push((operation, error.raw_os_error())),
+        );
+
+        assert_eq!(accept_calls, 3);
+        assert_eq!(start_calls, 2);
+        assert_eq!(
+            failures,
+            [("accept", Some(10055)), ("thread_spawn", Some(1455))]
+        );
+    }
 }
 
 /// Read one request from `stream`; `Ok(None)` is a clean EOF between requests.

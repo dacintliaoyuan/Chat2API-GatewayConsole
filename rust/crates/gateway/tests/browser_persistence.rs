@@ -119,9 +119,36 @@ fn real_edge_replaces_credentials_and_submits_without_spurious_input_events() {
           <input id="locked" readonly value="read-only">
           <button id="submit">Sign in</button>
         </form>
+        <input id="protected-account" type="email" value="saved-fixture@example.test">
+        <p id="protected-replaced" hidden>protected account replaced once</p>
         <p id="accepted" hidden>accepted</p>
         <p id="invalid-input" hidden>unexpected empty or synthetic input</p>
         <script>
+          const protectedAccount = document.querySelector('#protected-account');
+          const accountValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+          const nativeMatches = protectedAccount.matches.bind(protectedAccount);
+          const nativeSelect = protectedAccount.select.bind(protectedAccount);
+          let prefillReadable = false;
+          let protectedInputs = 0;
+          Object.defineProperty(protectedAccount, 'value', {
+            get: () => prefillReadable ? accountValue.get.call(protectedAccount) : ''
+          });
+          protectedAccount.matches = selector =>
+            selector === ':-webkit-autofill' ? !prefillReadable : nativeMatches(selector);
+          protectedAccount.select = () => {
+            if (prefillReadable) nativeSelect();
+          };
+          protectedAccount.addEventListener('keydown', event => {
+            if (event.isTrusted) prefillReadable = true;
+          });
+          protectedAccount.addEventListener('input', event => {
+            prefillReadable = true;
+            protectedInputs++;
+            document.querySelector('#protected-replaced').hidden = !(
+              event.isTrusted && protectedInputs === 1 &&
+              protectedAccount.value === 'configured-fixture@example.test'
+            );
+          });
           const account = document.querySelector('#account');
           const password = document.querySelector('#password');
           let events = 0;
@@ -153,6 +180,13 @@ fn real_edge_replaces_credentials_and_submits_without_spurious_input_events() {
         .collect::<String>();
     let page = browser.page();
     page.goto(&format!("data:text/html,{encoded}")).unwrap();
+    assert_eq!(
+        page.credential_field(&["#protected-account"]),
+        CredentialField::ProtectedAutofill
+    );
+    page.fill(&["#protected-account"], "configured-fixture@example.test")
+        .expect("replace, rather than append to, the saved account");
+    assert!(page.any_visible(&["#protected-replaced"]));
     assert_eq!(page.credential_field(&["#account"]), CredentialField::Filled);
     assert_eq!(page.credential_field(&["#empty"]), CredentialField::Empty);
     assert_eq!(page.credential_field(&["#absent"]), CredentialField::Missing);

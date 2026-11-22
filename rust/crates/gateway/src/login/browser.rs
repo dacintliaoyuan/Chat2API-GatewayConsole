@@ -731,12 +731,40 @@ impl LoginPage for RealPage {
         // first would notify the page of an empty credential, and firing another
         // input/change afterwards can run validation again.
         let prepare = fill_prepare_expression(selectors);
-        let target = self.evaluate(&prepare)?;
-        let target = target
+        let prepared = self.evaluate(&prepare)?;
+        let target = prepared["target"]
             .as_str()
             .ok_or_else(|| "login field is missing, ambiguous or not editable".to_string())?;
-        let inserted = self.call("Input.insertText", json!({"text": value}));
-        let settled = self.evaluate(&fill_settle_expression(target, value));
+        let inserted = (|| {
+            #[cfg(windows)]
+            if prepared["protected"] == Value::Bool(true) {
+                // Edge commits protected autofill on trusted input. DOM
+                // select() before that can select an empty value, causing
+                // insertText to append to the newly committed credential.
+                self.call(
+                    "Input.dispatchKeyEvent",
+                    json!({"type": "rawKeyDown", "key": "a", "code": "KeyA",
+                           "windowsVirtualKeyCode": 65, "modifiers": 2, "commands": ["SelectAll"]}),
+                )?;
+                self.call(
+                    "Input.dispatchKeyEvent",
+                    json!({"type": "keyUp", "key": "a", "code": "KeyA",
+                           "windowsVirtualKeyCode": 65, "modifiers": 2}),
+                )?;
+                let focused = format!(
+                    "document.activeElement?.getAttribute('data-um-login-fill-target') === {}",
+                    json!(target)
+                );
+                if self.evaluate(&focused)? != Value::Bool(true) {
+                    return Err("login field lost focus before entry".to_string());
+                }
+            }
+            self.call("Input.insertText", json!({"text": value}))
+        })();
+        let settled = self.evaluate(&fill_settle_expression(
+            target,
+            inserted.as_ref().ok().map(|_| value),
+        ));
         inserted?;
         if settled? == Value::Bool(true) {
             Ok(())
@@ -1071,12 +1099,12 @@ fn fill_prepare_expression(selectors: &[&str]) -> String {
             if (!el.isConnected || document.activeElement !== el) return null;
             const target = Math.random().toString(36).slice(2);
             el.setAttribute('data-um-login-fill-target', target);
-            return target;
+            return {{target, protected: !el.value && el.matches(':-webkit-autofill')}};
         }})({selectors})"#
     )
 }
 
-fn fill_settle_expression(target: &str, value: &str) -> String {
+fn fill_settle_expression(target: &str, value: Option<&str>) -> String {
     let target = json!(target);
     let value = json!(value);
     format!(
@@ -1085,7 +1113,7 @@ fn fill_settle_expression(target: &str, value: &str) -> String {
             const matches = Array.from(document.querySelectorAll('[' + marker + ']'))
                 .filter(el => el.getAttribute(marker) === target);
             for (const el of matches) el.removeAttribute(marker);
-            return matches.length === 1 && matches[0].value === expected;
+            return expected !== null && matches.length === 1 && matches[0].value === expected;
         }})({target}, {value})"#
     )
 }

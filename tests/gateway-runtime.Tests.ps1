@@ -692,7 +692,8 @@ foreach ($scriptName in @(
         Assert-Equal ($ingressLaunch.ArgumentList -match '^--mode ingress --port 8000 --worker-port-file ') $true 'the ingress argument line matches the fixed CLI'
         Assert-Equal ($ingressLaunch.ArgumentList -match '--desired-state-file ') $true 'the ingress receives the desired-state file'
         Assert-Equal ($ingressLaunch.ArgumentList -match '--boot-id ') $true 'the ingress receives the boot id'
-        Assert-Equal ($ingressLaunch.ArgumentList -match '--control-token-file data/admin-control-token$') $true 'the ingress receives the control token file'
+        Assert-Equal ($ingressLaunch.ArgumentList -match '--control-token-file data/admin-control-token(?: |$)') $true 'the ingress receives the control token file'
+        Assert-Equal ($ingressLaunch.ArgumentList -match '--service-log chat2api/chat2api\.log(?: |$)') $true 'the ingress writes listener diagnostics to the chat2api service log'
         Assert-Equal ([IO.Path]::GetFullPath($ingressLaunch.WorkingDirectory)) $root 'the ingress runs from the repository root'
     } finally {
         Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue

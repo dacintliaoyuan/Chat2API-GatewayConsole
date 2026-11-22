@@ -7,6 +7,7 @@
 //! contracts. The gateway never starts `chat2api.py`, the broker or the display
 //! relay, and it never reads or writes production data on its own.
 
+use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,7 @@ use serde_json::{json, Value};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{handle_chat, ChatResult};
-use crate::config::{AuthMode, ConfigError, GatewayConfig, Role};
+use crate::config::{AuthMode, ConfigError, GatewayConfig, Role, RunMode};
 use crate::embeddings::handle_embeddings;
 use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::EventLog;
@@ -25,8 +26,8 @@ use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
 };
 use crate::http::{
-    random_hex, read_request_body, read_request_head, write_response, BodyRead, Headers, Request,
-    RequestHead, Response, HARD_BODY_CAP,
+    accept_connections, random_hex, read_request_body, read_request_head, write_response, BodyRead,
+    Headers, Request, RequestHead, Response, HARD_BODY_CAP,
 };
 use crate::ledger::Ledger;
 use crate::login::{
@@ -233,22 +234,30 @@ impl GatewayServer {
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
         let worker_state = Arc::clone(&state);
-        let handle = thread::spawn(move || {
-            while !worker_shutdown.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, peer)) => {
-                        let connection_state = Arc::clone(&worker_state);
-                        thread::spawn(move || {
-                            handle_connection(connection_state, stream, peer.ip());
-                        });
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let component = if config.run_mode == RunMode::Worker {
+            "worker"
+        } else {
+            "gateway"
+        };
+        let handle = thread::Builder::new()
+            .spawn(move || {
+                accept_connections(
+                    &worker_shutdown,
+                    || listener.accept(),
+                    |stream, peer| {
+                        let state = Arc::clone(&worker_state);
+                        thread::Builder::new()
+                            .spawn(move || handle_connection(state, stream, peer.ip()))?;
+                        Ok(())
+                    },
+                    |operation, error| {
+                        worker_state
+                            .event_log
+                            .listener_failure(component, operation, error);
+                    },
+                );
+            })
+            .map_err(ServerError::Io)?;
         let watcher = spawn_auth_watch(Arc::clone(&state), Arc::clone(&shutdown));
         Ok(ServerHandle {
             addr,
@@ -472,6 +481,10 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
         let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
         let request = match body_result {
             Ok((request, _trailing)) => request,
+            Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {
+                let _ = write_memory_pressure(&mut stream, error_protocol(&path), &request_id);
+                return;
+            }
             Err(error) if is_timeout_error(&error) => {
                 let response = with_error_headers(
                     GatewayError::request_timeout().response_for(error_protocol(&path)),
@@ -502,6 +515,27 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             return;
         }
     }
+}
+
+/// The request has not reached dispatch. Use static bodies so constructing
+/// this response cannot repeat the failed allocation.
+pub(crate) fn write_memory_pressure(
+    stream: &mut impl Write,
+    protocol: ErrorProtocol,
+    request_id: &str,
+) -> io::Result<()> {
+    const ERROR: &str = r#"{"message":"Gateway is temporarily low on memory","type":"overloaded_error","code":"gateway_memory_pressure","param":null}"#;
+    let prefix = match protocol {
+        ErrorProtocol::OpenAi => r#"{"error":"#,
+        ErrorProtocol::Anthropic => r#"{"type":"error","error":"#,
+    };
+    write!(
+        stream,
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json; charset=utf-8\r\n\
+         Content-Length: {}\r\nCache-Control: no-store\r\nX-Request-Id: {request_id}\r\n\
+         Connection: close\r\n\r\n{prefix}{ERROR}}}",
+        prefix.len() + ERROR.len() + 1
+    )
 }
 
 /// The methods implemented for a known API path; `None` keeps the path's

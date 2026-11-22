@@ -8,12 +8,12 @@
 //! `CHAT2API_SERVICE_LOG`; without it the event is not written.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{self, Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use chrono::{Local, SecondsFormat};
+use chrono::{Local, SecondsFormat, Utc};
 use serde_json::json;
 
 /// The retry counters of one logical request.
@@ -59,12 +59,35 @@ impl EventLog {
         }
     }
 
+    pub(crate) fn listener_failure(&self, component: &str, operation: &str, error: &io::Error) {
+        // Log just the operation and numeric OS error. Formatting into a fixed
+        // buffer keeps the diagnostic small even during allocation pressure.
+        let mut buffer = [0; 256];
+        let mut line = Cursor::new(buffer.as_mut_slice());
+        if writeln!(
+            line,
+            "{} WARNING listener_failure component={} operation={} kind={:?} os_error={:?}",
+            Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+            component,
+            operation,
+            error.kind(),
+            error.raw_os_error(),
+        )
+        .is_ok()
+        {
+            let len = line.position() as usize;
+            if self.append(&buffer[..len]).is_err() || self.path.is_none() {
+                let _ = io::stderr().lock().write_all(&buffer[..len]);
+            }
+        }
+    }
+
     /// Record one final failure. This is best-effort by design: the log is
     /// diagnostic, so an unwritable path must not mask the upstream outcome.
     pub fn final_failure(&self, failure: FinalFailure<'_>) {
-        let Some(path) = &self.path else {
+        if self.path.is_none() {
             return;
-        };
+        }
         let row = json!({
             "time": Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
             "service": "chat2api",
@@ -78,18 +101,26 @@ impl EventLog {
         });
         let mut line = serde_json::to_string(&row).unwrap_or_default();
         line.push('\n');
-        let result = (|| -> std::io::Result<()> {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent)?;
-                }
-            }
-            let _guard = self.lock.lock().expect("event log lock poisoned");
-            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-            file.write_all(line.as_bytes())
-        })();
-        if result.is_err() {
+        if self.append(line.as_bytes()).is_err() {
             eprintln!("[chat2api] service log write failed");
         }
+    }
+
+    fn append(&self, line: &[u8]) -> io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _guard = self.lock.lock().expect("event log lock poisoned");
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?
+            .write_all(line)
     }
 }

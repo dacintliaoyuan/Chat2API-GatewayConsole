@@ -26,13 +26,15 @@ use serde_json::{json, Value};
 
 use crate::config::{is_loopback_host, ConfigError};
 use crate::error::{ErrorProtocol, GatewayError};
+use crate::event_log::EventLog;
 use crate::gate::constant_time_eq;
 use crate::http::{
-    random_hex, read_request_body, read_request_head, write_response, write_response_head,
-    BodyRead, Headers, Request, Response, MAX_HEADER_BYTES,
+    accept_connections, random_hex, read_request_body, read_request_head, write_response,
+    write_response_head, BodyRead, Headers, Request, Response, MAX_HEADER_BYTES,
 };
 use crate::server::{
-    error_protocol, is_local_control_request, with_error_headers, ServerError, ServerHandle,
+    error_protocol, is_local_control_request, with_error_headers, write_memory_pressure,
+    ServerError, ServerHandle,
 };
 use crate::GatewayServer;
 
@@ -73,6 +75,8 @@ pub struct IngressConfig {
     pub queue_max_bytes: u64,
     /// The local control token file, when the ingress validates shutdown itself.
     pub control_token_file: Option<PathBuf>,
+    /// Append listener diagnostics to the local gateway service log.
+    pub service_log: Option<PathBuf>,
     pub poll_interval: Duration,
     pub connect_timeout: Duration,
     /// How long the ingress waits for the worker to exit after forwarding a
@@ -97,6 +101,7 @@ impl Default for IngressConfig {
             queue_max: DEFAULT_RECOVERY_QUEUE_MAX,
             queue_max_bytes: DEFAULT_RECOVERY_QUEUE_MAX_BYTES,
             control_token_file: None,
+            service_log: None,
             poll_interval: Duration::from_millis(DEFAULT_RECOVERY_POLL_MILLIS),
             connect_timeout: Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MILLIS),
             shutdown_wait: Duration::from_secs(DEFAULT_SHUTDOWN_WAIT_SECONDS),
@@ -355,6 +360,7 @@ impl IngressServer {
         listener.set_nonblocking(true).map_err(ServerError::Io)?;
         let addr = listener.local_addr().map_err(ServerError::Io)?;
         let shutdown = Arc::new(AtomicBool::new(false));
+        let event_log = EventLog::new(config.service_log.clone());
         let state = Arc::new(IngressState {
             config,
             queue: Mutex::new(QueueState::default()),
@@ -366,22 +372,21 @@ impl IngressServer {
         });
         let worker_state = Arc::clone(&state);
         let worker_shutdown = Arc::clone(&shutdown);
-        let handle = thread::spawn(move || {
-            while !worker_shutdown.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, peer)) => {
-                        let connection_state = Arc::clone(&worker_state);
-                        thread::spawn(move || {
-                            handle_connection(connection_state, stream, peer.ip());
-                        });
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let handle = thread::Builder::new()
+            .spawn(move || {
+                accept_connections(
+                    &worker_shutdown,
+                    || listener.accept(),
+                    |stream, peer| {
+                        let state = Arc::clone(&worker_state);
+                        thread::Builder::new()
+                            .spawn(move || handle_connection(state, stream, peer.ip()))?;
+                        Ok(())
+                    },
+                    |operation, error| event_log.listener_failure("ingress", operation, error),
+                );
+            })
+            .map_err(ServerError::Io)?;
         Ok(IngressHandle {
             addr,
             shutdown,
@@ -468,11 +473,16 @@ fn handle_connection(state: Arc<IngressState>, mut stream: TcpStream, peer_ip: I
             }
             let _ = stream.flush();
         }
+        let protocol = error_protocol(head.path());
         let _ = stream.set_read_timeout(Some(state.config.body_read_timeout));
         let body_result = read_request_body(&mut stream, head, state.config.max_request_bytes);
         let _ = stream.set_read_timeout(Some(state.config.head_read_timeout));
         let request = match body_result {
             Ok((request, _trailing)) => request,
+            Err(error) if error.kind() == io::ErrorKind::OutOfMemory => {
+                let _ = write_memory_pressure(&mut stream, protocol, &request_id);
+                return;
+            }
             Err(error) if is_timeout_error(&error) => {
                 let _ = write_error(
                     &mut stream,

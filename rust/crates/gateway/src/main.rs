@@ -224,6 +224,7 @@ fn main() -> ExitCode {
             queue_max: recovery_queue_max.max(1),
             queue_max_bytes: recovery_queue_max_bytes.max(1),
             control_token_file: config.control_token_file.clone(),
+            service_log: config.service_log,
             max_request_bytes: config.max_request_bytes,
             ..IngressConfig::default()
         };
