@@ -291,6 +291,20 @@ pub enum SidebarMode {
 }
 
 impl SidebarMode {
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Expanded => 0,
+            Self::IconsOnly => 1,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::IconsOnly,
+            _ => Self::Expanded,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Expanded => "expanded",
@@ -317,6 +331,20 @@ pub enum MotionPreference {
 }
 
 impl MotionPreference {
+    pub fn index(self) -> i32 {
+        match self {
+            Self::System => 0,
+            Self::Reduced => 1,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Reduced,
+            _ => Self::System,
+        }
+    }
+
     pub fn allows(self, system_allows: bool) -> bool {
         match self {
             Self::System => system_allows,
@@ -684,6 +712,37 @@ pub fn apply_theme(
     persist(path, config, "主题已切换")
 }
 
+/// Applies a sidebar choice to the in-memory config first, then persists it.
+pub fn apply_sidebar(
+    path: Option<&Path>,
+    config: &mut DesktopConfig,
+    mode: SidebarMode,
+) -> Result<(), String> {
+    config.settings.sidebar = mode;
+    persist(path, config, "外观设置已更新")
+}
+
+/// Applies a motion preference to the in-memory config first, then persists it.
+pub fn apply_motion(
+    path: Option<&Path>,
+    config: &mut DesktopConfig,
+    preference: MotionPreference,
+) -> Result<(), String> {
+    config.settings.reduced_motion = preference;
+    persist(path, config, "外观设置已更新")
+}
+
+/// Applies the reduced-transparency choice to the in-memory config first, then
+/// persists it.
+pub fn apply_reduce_transparency(
+    path: Option<&Path>,
+    config: &mut DesktopConfig,
+    reduce: bool,
+) -> Result<(), String> {
+    config.settings.reduce_transparency = reduce;
+    persist(path, config, "外观设置已更新")
+}
+
 /// Pushes every saved page setting into the window. The window's own `changed`
 /// handlers keep the derived indices and timers in step with these values.
 pub fn apply_settings(window: &MainWindow, config: &DesktopConfig, system_allows_motion: bool) {
@@ -697,7 +756,10 @@ pub fn apply_settings(window: &MainWindow, config: &DesktopConfig, system_allows
     window.set_log_period(settings.log_range.index());
     window.set_log_filter_level(settings.log_level.index());
     window.set_log_filter_keyword(settings.log_keyword.clone().into());
-    window.set_allow_motion(settings.reduced_motion.allows(system_allows_motion));
+    window.set_sidebar_mode(settings.sidebar.index());
+    window.set_motion_mode(settings.reduced_motion.index());
+    window.set_system_allows_motion(system_allows_motion);
+    window.set_reduce_transparency(settings.reduce_transparency);
 }
 
 /// Reads the page settings that have a window control. Appearance choices that
