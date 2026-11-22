@@ -593,17 +593,31 @@ fn the_instance_card_aligns_its_detail_rows() {
             "实例卡值必须排在标签右侧"
         );
     }
-    for value_right in [
-        window.get_instance_supervision_value_x() + window.get_instance_supervision_value_width(),
-        window.get_instance_config_value_x() + window.get_instance_config_value_width(),
-        window.get_instance_data_value_x() + window.get_instance_data_value_width(),
+    let card_right = window.get_technical_card_x() + window.get_technical_card_width() - inset;
+    assert!(
+        (window.get_instance_supervision_value_x() + window.get_instance_supervision_value_width()
+            - card_right)
+            .abs()
+            < 1.5,
+        "实例卡监督值必须与卡片内容右对齐"
+    );
+    for (value_x, copy_x, copy_width) in [
+        (
+            window.get_instance_config_value_x(),
+            window.get_instance_config_copy_x(),
+            window.get_instance_config_copy_width(),
+        ),
+        (
+            window.get_instance_data_value_x(),
+            window.get_instance_data_copy_x(),
+            window.get_instance_data_copy_width(),
+        ),
     ] {
         assert!(
-            (value_right - (window.get_technical_card_x() + window.get_technical_card_width() - inset))
-                .abs()
-                < 1.5,
-            "实例卡值必须与卡片内容右对齐"
+            (copy_x + copy_width - card_right).abs() < 1.5,
+            "实例卡路径复制按钮必须与卡片内容右对齐"
         );
+        assert!(value_x <= copy_x + 0.5, "实例卡值必须排在复制按钮左侧");
     }
     assert!(
         window.get_instance_data_y() + window.get_instance_data_height()
@@ -1091,6 +1105,32 @@ fn the_page_title_fades_with_the_page_host() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     assert_eq!(window.get_page(), 1);
     assert!((window.get_page_title_opacity() - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn the_page_out_timer_fires_once_per_navigation() {
+    let window = window_at(1060.0, 720.0);
+    let navigations = Rc::new(Cell::new(0));
+    window.on_navigate({
+        let window = window.as_weak();
+        let navigations = Rc::clone(&navigations);
+        move |page| {
+            navigations.set(navigations.get() + 1);
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    window.invoke_navigate_to(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    assert_eq!(navigations.get(), 1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(600));
+    assert_eq!(
+        navigations.get(),
+        1,
+        "the page-out timer must stop after the one page swap"
+    );
 }
 
 #[test]

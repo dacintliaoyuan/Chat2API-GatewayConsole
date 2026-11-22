@@ -368,7 +368,8 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     };
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
-    window.set_log_tone(3);
+    // A live stream reads as healthy; an empty or filtered list stays neutral.
+    window.set_log_tone(if total == 0 { 3 } else { status_tone(Tone::Good) });
     window.set_log_refresh_pending(false);
     if acknowledge_refresh {
         window.set_log_refreshed(true);
@@ -571,9 +572,16 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
 }
 
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
-    let metrics = page
-        .summary
-        .cards()
+    let cards = page.summary.cards();
+    // The compact request page folds the five cards into two readable lines;
+    // the break lands between whole metrics instead of inside a unit.
+    let summary = cards
+        .iter()
+        .map(|card| format!("{} {}", card.label, card.value))
+        .collect::<Vec<_>>();
+    window.set_request_summary(format!("{}
+{}", summary[..3].join(" · "), summary[3..].join(" · ")).into());
+    let metrics = cards
         .into_iter()
         .map(|card| RequestMetric {
             label: card.label.into(),
@@ -706,7 +714,12 @@ fn load_requests(
                     "失败" => status_tone(Tone::Bad),
                     _ => status_tone(Tone::Warn),
                 },
-                summary: format!("{}  {}", row.duration, row.request_id.as_deref().unwrap_or("")).into(),
+                summary: format!(
+                    "耗时 {} · ID {}",
+                    row.duration,
+                    row.request_id.as_deref().unwrap_or("—")
+                )
+                .into(),
                 first_token: row.first_token.clone().into(),
                 detail: "".into(),
             }).collect::<Vec<_>>();

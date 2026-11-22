@@ -65,10 +65,10 @@ component ModelSpeedTable inherits VerticalLayout {
     HorizontalLayout {
         spacing: 6px;
         Hint { text: "模型"; horizontal-stretch: 1; }
-        Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
-        Hint { text: "首字耗时"; width: 72px; horizontal-alignment: right; }
-        Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
-        Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
+        Hint { text: "速度"; width: 52px; horizontal-alignment: right; }
+        Hint { text: "首字耗时"; width: 64px; horizontal-alignment: right; }
+        Hint { text: "请求"; width: 36px; horizontal-alignment: right; }
+        Hint { text: "输出"; width: 56px; horizontal-alignment: right; }
     }
     // The empty-state hint must sit inside the remaining height;
     // a trailing sibling would overflow the fixed-height card row.
@@ -89,10 +89,10 @@ component ModelSpeedTable inherits VerticalLayout {
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
-                DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
-                DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
-                DataText { text: row.output; width: 58px; horizontal-alignment: right; }
+                DataText { text: row.speed; width: 52px; horizontal-alignment: right; }
+                DataText { text: row.first-token; width: 64px; horizontal-alignment: right; }
+                DataText { text: row.requests; width: 36px; horizontal-alignment: right; }
+                DataText { text: row.output; width: 56px; horizontal-alignment: right; }
             }
         }
         empty-hint := Hint {
@@ -112,6 +112,11 @@ export component RequestAnalytics inherits Panel {
     min-height: 0px;
     in property <bool> compact: false;
     in property <[RequestMetric]> metrics;
+    // The compact request page folds the cards into one summary line.
+    in property <string> summary-line: "";
+    // At compact width the chart and the speed table start collapsed so the
+    // request list stays in the first screen.
+    in-out property <bool> details-open: false;
     in property <[string]> labels;
     in property <[float]> token-counts;
     in property <[float]> request-counts;
@@ -138,19 +143,28 @@ export component RequestAnalytics inherits Panel {
     // Reads the table that is actually laid out at the current width.
     out property <bool> empty-hint-fits: root.compact
         ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
+    // Test seam: the compact chart toggle.
+    out property <length> details-toggle-x: details-toggle.absolute-position.x;
+    out property <length> details-toggle-y: details-toggle.absolute-position.y;
+    out property <length> details-toggle-width: details-toggle.width;
+    out property <length> details-toggle-height: details-toggle.height;
 
     content := VerticalLayout {
         padding: 12px;
         spacing: 8px;
 
-        // Equal fixed widths keep the cards the same size; at compact width
-        // three cards per row avoid squeezing the labels into vertical text.
+        // Equal flex-basis keeps the cards the same size; at compact width two
+        // per row and a full-width last card avoid clipped labels and a gap.
         cards := FlexboxLayout {
+            visible: !root.compact;
+            // A hidden layout still feeds the parent's preferred height.
+            height: root.compact ? 0px : self.preferred-height;
             flex-wrap: wrap;
             spacing: 8px;
-            for metric in root.metrics : Rectangle {
-                width: root.compact
-                    ? (root.width - 24px - 16px) / 3
+            for metric[index] in root.metrics : Rectangle {
+                min-width: 0px;
+                preferred-width: root.compact
+                    ? (index == 4 ? root.width - 24px : (root.width - 24px - 8px) / 2)
                     : (root.width - 24px - 32px) / 5;
                 height: 62px;
                 border-radius: 8px;
@@ -165,17 +179,42 @@ export component RequestAnalytics inherits Panel {
                         font-weight: 650;
                         overflow: elide;
                     }
+                    // The detail line elides in the card; the hover tooltip
+                    // keeps the full input/output split readable.
                     Hint { text: metric.detail; overflow: elide; wrap: no-wrap; }
                 }
+                metric-hover := TouchArea {}
+                Tooltip { text: @markdown("\{metric.detail}"); }
             }
         }
 
-        header := HorizontalLayout {
+        compact-summary := HorizontalLayout {
+            visible: root.compact;
+            // A hidden row still feeds the parent's preferred height.
+            height: root.compact ? self.preferred-height : 0px;
             spacing: 8px;
-            alignment: center;
+            // The compact summary wraps instead of losing the last metrics.
+            Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            details-toggle := ActionButton {
+                width: Theme.icon-button;
+                height: Theme.icon-button;
+                label: root.details-open ? "收起图表" : "查看图表";
+                icon: root.details-open ? "chevron-down" : "chevron-right";
+                icon-only: true;
+                quiet: true;
+                tooltip: root.details-open ? "收起图表" : "查看图表";
+                clicked => { root.details-open = !root.details-open; }
+            }
+        }
+        header := HorizontalLayout {
+            visible: !root.compact || root.details-open;
+            height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+            spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
+                visible: !root.compact || root.details-open;
+                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
                 width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
@@ -183,6 +222,8 @@ export component RequestAnalytics inherits Panel {
                 selected(index) => { root.metric = index; }
             }
             Segmented {
+                visible: !root.compact || root.details-open;
+                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
                 width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
@@ -194,11 +235,11 @@ export component RequestAnalytics inherits Panel {
         // Wide: the chart and the speed table share one row. Compact: the table
         // moves below the chart so neither is squeezed below its readable width.
         compact-stack := VerticalLayout {
-            visible: root.compact;
+            visible: root.compact && root.details-open;
             width: 100%;
             // Hidden layouts still feed the parent's preferred height, so the
             // inactive stack collapses to zero explicitly.
-            height: root.compact ? self.preferred-height : 0px;
+            height: (root.compact && root.details-open) ? self.preferred-height : 0px;
             spacing: 8px;
             RequestTrendChart {
                 width: 100%;
@@ -226,9 +267,9 @@ export component RequestAnalytics inherits Panel {
             }
         }
         wide-row := HorizontalLayout {
-            visible: !root.compact;
+            visible: !root.compact || root.details-open;
             spacing: 12px;
-            height: root.compact ? 0px : 148px;
+            height: (!root.compact || root.details-open) ? 148px : 0px;
             RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
@@ -249,7 +290,8 @@ export component RequestAnalytics inherits Panel {
                 allow-motion: root.allow-motion;
             }
             wide-table := ModelSpeedTable {
-                width: 336px;
+                // Wide enough for the full model name plus the four numbers.
+                width: 420px;
                 rows: root.model-speeds;
             }
         }
@@ -310,6 +352,7 @@ export component UsageChart inherits Panel {
             if (root.pending-period >= 0) {
                 root.period-changed(root.pending-period);
                 root.pending-period = -1;
+                period-sync-timer.running = false;
             }
         }
     }
@@ -540,6 +583,10 @@ export component UsageChart inherits Panel {
                 FlexboxLayout {
                     width: parent.width;
                     height: parent.height;
+                    // The explicit y keeps this row out of the parent's
+                    // preferred width, which would otherwise loop through
+                    // the `narrow` label visibility.
+                    y: 0px;
                     flex-wrap: wrap;
                     alignment: space-between;
                     spacing: 8px;
@@ -562,8 +609,11 @@ export component UsageChart inherits Panel {
                             current-index: root.show-line ? 1 : 0;
                             selected(index) => { root.show-line = index == 1; }
                         }
+                        // The cadence carries a visible label at the wide
+                        // layout; the compact row keeps only the a11y label.
+                        if !root.narrow : Hint { text: "自动刷新"; vertical-alignment: center; }
                         auto-refresh-control := Segmented {
-                            width: 180px;
+                            width: root.narrow ? 180px : 220px;
                             options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
                             label: "总览自动刷新";
                             current-index <=> root.auto-refresh-index;

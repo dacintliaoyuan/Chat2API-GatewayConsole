@@ -130,7 +130,7 @@ impl RequestSummary {
             MetricCard {
                 label: "Token".into(),
                 value: self.token_total.clone(),
-                detail: format!("输入 {} · 输出 {}", self.token_input, self.token_output),
+                detail: format!("入 {} · 出 {}", self.token_input, self.token_output),
             },
             MetricCard {
                 label: "请求".into(),

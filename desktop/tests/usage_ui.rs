@@ -477,6 +477,40 @@ fn scrolling_the_compact_request_page_moves_the_viewport() {
 }
 
 #[test]
+fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(540.0, 420.0));
+    window.set_page(1);
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+
+    assert!(!window.get_request_details_open());
+    assert!(
+        window.get_request_analytics_height() < 160.0,
+        "the folded analytics card stays one summary row"
+    );
+    assert!(
+        window.get_request_analytics_y() + window.get_request_analytics_height()
+            < window.get_request_list_y(),
+        "the request list starts below the folded summary"
+    );
+
+    click(
+        &window,
+        window.get_request_details_toggle_x() + window.get_request_details_toggle_width() / 2.0,
+        window.get_request_details_toggle_y() + window.get_request_details_toggle_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert!(window.get_request_details_open());
+    assert!(
+        window.get_request_analytics_height() > 160.0,
+        "the expanded analytics card brings the chart back"
+    );
+}
+
+#[test]
 fn the_empty_model_speed_hint_stays_inside_the_analytics_card() {
     init_backend();
     let window = main_ui::MainWindow::new().expect("create MainWindow");

@@ -495,7 +495,14 @@ fn admin_error(url: &str, error: ureq::Error) -> String {
                 None => format!("{url}: 本实例网关返回 HTTP {code}"),
             }
         }
-        ureq::Error::Transport(error) => format!("{url}: 无法连接本实例网关：{error}"),
+        // The transport error repeats the URL and the OS text; keep one short
+        // Chinese reason so the card stays readable.
+        ureq::Error::Transport(error) => match error.kind() {
+            ureq::ErrorKind::ConnectionFailed => {
+                format!("{url}: 无法连接本实例网关（连接被拒绝）")
+            }
+            _ => format!("{url}: 无法连接本实例网关"),
+        },
     }
 }
 

@@ -83,7 +83,7 @@ component TextDetails inherits Panel {
     copy-timer := Timer {
         interval: 1.2s;
         running: false;
-        triggered => { root.copied = false; }
+        triggered => { root.copied = false; copy-timer.running = false; }
     }
     clip: true;
     VerticalLayout {
@@ -447,6 +447,7 @@ export component MainWindow inherits Window {
     in property <string> request-detail;
     in-out property <length> request-scroll-y: 0px;
     in property <[RequestMetric]> request-metrics;
+    in property <string> request-summary: "";
     in property <[string]> request-chart-labels;
     in property <[float]> request-chart-token-counts;
     in property <[float]> request-chart-request-counts;
@@ -613,6 +614,10 @@ export component MainWindow inherits Window {
     out property <length> gateway-address-label-width: gateway-address-row.label-px;
     out property <length> instance-supervision-y: instance-supervision.absolute-position.y;
     out property <length> instance-supervision-height: instance-supervision.height;
+    out property <length> instance-config-copy-x: instance-config-copy.absolute-position.x;
+    out property <length> instance-config-copy-width: instance-config-copy.width;
+    out property <length> instance-data-copy-x: instance-data-copy.absolute-position.x;
+    out property <length> instance-data-copy-width: instance-data-copy.width;
     out property <length> instance-config-y: instance-config.absolute-position.y;
     out property <length> instance-config-height: instance-config.height;
     out property <length> instance-data-y: instance-data.absolute-position.y;
@@ -684,8 +689,13 @@ export component MainWindow inherits Window {
     out property <[float]> request-plotted-values: request-analytics.plotted-values;
     out property <int> request-chart-series-count: request-analytics.series-count;
     out property <int> request-model-row-count: request-analytics.model-row-count;
+    out property <bool> request-details-open: request-analytics.details-open;
+    out property <length> request-details-toggle-x: request-analytics.details-toggle-x;
+    out property <length> request-details-toggle-y: request-analytics.details-toggle-y;
+    out property <length> request-details-toggle-width: request-analytics.details-toggle-width;
+    out property <length> request-details-toggle-height: request-analytics.details-toggle-height;
     out property <bool> request-analytics-empty-fits: request-analytics.empty-hint-fits;
-    out property <length> request-scroll-viewport-y: request-scroll.viewport-y;
+    out property <length> request-scroll-viewport-y: request-scroll.content-y;
     out property <string> request-model-first: root.request-model-speeds.length > 0
         ? root.request-model-speeds[0].model : "";
     out property <string> request-model-speed: root.request-model-speeds.length > 0
@@ -896,6 +906,7 @@ export component MainWindow inherits Window {
         triggered => {
             root.navigate(root.pending-page);
             root.page-opacity = 1;
+            page-out-timer.running = false;
         }
     }
     // One root timer drives the shared breathing phase, so the dots keep pulsing
@@ -910,7 +921,7 @@ export component MainWindow inherits Window {
     clear-confirm-timer := Timer {
         interval: 3s;
         running: false;
-        triggered => { root.confirm-clear = false; }
+        triggered => { root.confirm-clear = false; clear-confirm-timer.running = false; }
     }
     public pure function auto-refresh-index-for(seconds: int) -> int {
         return seconds == 15 ? 1 : seconds == 30 ? 2 : seconds == 60 ? 3 : seconds == 0 ? 4 : 0;
@@ -1001,6 +1012,7 @@ export component MainWindow inherits Window {
             root.copy-error = "";
             root.base-copied = false;
             root.v1-copied = false;
+            copy-status-timer.running = false;
         }
     }
     // The refresh acknowledgement stays visible for 1.2 s, then the button
@@ -1008,7 +1020,7 @@ export component MainWindow inherits Window {
     log-refreshed-timer := Timer {
         interval: 1.2s;
         running: false;
-        triggered => { root.log-refreshed = false; }
+        triggered => { root.log-refreshed = false; log-refreshed-timer.running = false; }
     }
     changed log-refreshed => { if (root.log-refreshed) { log-refreshed-timer.start(); } }
     // The tray-less exit confirmation expires after three seconds, like the
@@ -1016,7 +1028,7 @@ export component MainWindow inherits Window {
     quit-confirm-timer := Timer {
         interval: 3s;
         running: false;
-        triggered => { root.confirm-quit = false; }
+        triggered => { root.confirm-quit = false; quit-confirm-timer.running = false; }
     }
     changed tray-available => { if (root.tray-available) { root.confirm-quit = false; } }
 
@@ -1431,6 +1443,7 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     compact: root.compact;
                     metrics: root.request-metrics;
+                    summary-line: root.request-summary;
                     labels: root.request-chart-labels;
                     token-counts: root.request-chart-token-counts;
                     request-counts: root.request-chart-request-counts;
@@ -1514,12 +1527,14 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                            // The pager sits in the card footer so the list
+                            // and its paging read as one surface.
+                            HorizontalLayout {
+                                spacing: 8px; alignment: end;
+                                ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
+                                ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
+                            }
                         }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px; alignment: end;
-                        ActionButton { label: "较新"; icon: "chevron-left"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
-                        ActionButton { label: "较早"; icon: "chevron-right"; icon-only: true; quiet: true; width: Theme.icon-button; height: Theme.icon-button; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
                     }
                 }
                 request-details := TextDetails {
@@ -1554,7 +1569,7 @@ export component MainWindow inherits Window {
                     // filter keeps the console's field/edge/radius language.
                     log-level-control := Segmented {
                         width: root.compact ? 170px : 248px;
-                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始" }];
+                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始行" }];
                         current-index <=> root.log-filter-level;
                         label: "日志级别";
                         selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
@@ -1571,13 +1586,15 @@ export component MainWindow inherits Window {
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                         cleared => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
+                    // The slot keeps its width; only the glyph swaps to a
+                    // check so the neighbouring actions never shift.
                     log-refresh := ActionButton {
-                        width: root.log-refreshed ? 74px : Theme.icon-button;
+                        width: Theme.icon-button;
                         height: Theme.icon-button;
                         label: root.log-refreshed ? "已刷新" : "刷新";
                         icon: root.log-refreshed ? "check" : "refresh";
                         icon-rotation: root.refresh-rotation;
-                        icon-only: !root.log-refreshed;
+                        icon-only: true;
                         quiet: true;
                         tooltip: root.log-refreshed ? "已刷新" : "刷新日志";
                         enabled: !root.refreshing;
@@ -1620,6 +1637,7 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     spacing: 8px;
                     alignment: start;
+                    StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
                     Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
                     DataText { text: root.log-updated-at-label; vertical-alignment: center; }
                     ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; tooltip: "较新的日志"; clicked => { root.log-history(root.log-period, -1); } }
@@ -1690,6 +1708,9 @@ export component MainWindow inherits Window {
                     min-height: self.preferred-height;
                     spacing: 12px;
                     padding-right: 8px;
+                    // Leave a gutter below the last card instead of letting
+                    // the footer cut through the API address row.
+                    padding-bottom: 8px;
                     HorizontalLayout {
                         spacing: 8px;
                         settings-refresh := ActionButton {
@@ -1992,6 +2013,12 @@ export component MainWindow inherits Window {
                                             overflow: elide;
                                             wrap: no-wrap;
                                         }
+                                        instance-config-copy := ActionButton {
+                                            width: Theme.icon-button; height: Theme.icon-button;
+                                            label: "复制配置文件路径"; icon: "copy"; icon-only: true; quiet: true;
+                                            tooltip: "复制配置文件路径";
+                                            clicked => { root.copy-text(root.config-path); }
+                                        }
                                     }
                                     instance-data := SettingRow {
                                         label: "实例数据";
@@ -2002,6 +2029,12 @@ export component MainWindow inherits Window {
                                             vertical-alignment: center;
                                             overflow: elide;
                                             wrap: no-wrap;
+                                        }
+                                        instance-data-copy := ActionButton {
+                                            width: Theme.icon-button; height: Theme.icon-button;
+                                            label: "复制实例数据路径"; icon: "copy"; icon-only: true; quiet: true;
+                                            tooltip: "复制实例数据路径";
+                                            clicked => { root.copy-text(root.instance-path); }
                                         }
                                     }
                                 }
@@ -2056,9 +2089,40 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
+                            SectionLabel { text: "指标说明"; }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Token"; width: 96px; } Hint { text: "模型返回的输入与输出 Token 总量"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "缓存命中率"; width: 96px; } Hint { text: "缓存读取 Token 占输入 Token 的比例"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "首字耗时"; width: 96px; } Hint { text: "从请求开始到首个输出 Token 的时间"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "整次平均"; width: 96px; } Hint { text: "整次请求的输出 Token 除以总耗时"; horizontal-stretch: 1; } }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
                             SectionLabel { text: "本机数据"; }
-                            Hint { text: "配置文件  " + root.config-path; }
-                            Hint { text: "实例数据  " + root.instance-path; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Hint { text: "配置文件"; width: 96px; }
+                                DataText { text: root.config-path; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
+                                ActionButton {
+                                    width: Theme.icon-button; height: Theme.icon-button;
+                                    label: "复制配置文件路径"; icon: "copy"; icon-only: true; quiet: true;
+                                    tooltip: "复制配置文件路径";
+                                    clicked => { root.copy-text(root.config-path); }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Hint { text: "实例数据"; width: 96px; }
+                                DataText { text: root.instance-path; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
+                                ActionButton {
+                                    width: Theme.icon-button; height: Theme.icon-button;
+                                    label: "复制实例数据路径"; icon: "copy"; icon-only: true; quiet: true;
+                                    tooltip: "复制实例数据路径";
+                                    clicked => { root.copy-text(root.instance-path); }
+                                }
+                            }
                         }
                     }
                 }
@@ -2077,7 +2141,7 @@ export component MainWindow inherits Window {
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                DataText { text: "更新于 " + root.last-update; vertical-alignment: center; }
+                DataText { text: "全局更新于 " + root.last-update; vertical-alignment: center; }
             }
         }
     }
