@@ -116,6 +116,8 @@ class BrowserPage:
         try:
             if op == "fill":
                 return field.fill(args["value"], timeout=5000)
+            if op == "value":
+                return field.input_value(timeout=5000).strip() or None
             if op == "field":
                 if field.input_value(timeout=5000).strip():
                     return "filled"

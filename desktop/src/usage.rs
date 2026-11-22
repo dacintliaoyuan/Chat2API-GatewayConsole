@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::{FixedOffset, TimeZone};
 use serde_json::Value;
-use um_console::local_um::{desktop_trend, um_requests};
+use um_console::local_um::{desktop_requests, desktop_trend};
 
 use crate::logs::{parse_log_line, sanitize_text};
 use crate::logstream::{DEFAULT_MAX_LINES, DEFAULT_TAIL_BYTES};
@@ -262,11 +262,15 @@ impl RequestNav {
         self.pages.last().cloned()
     }
 
-    /// Re-reads the current page at the same snapshot time. The first page is
-    /// `Some(None)`, a legal request with no cursor; only a missing page is
-    /// `None`.
-    pub fn refresh(&mut self) -> Option<Option<String>> {
+    /// Refreshes the time window while keeping the page anchor. When Beijing
+    /// "today" changes, the previous day's anchors no longer apply.
+    pub fn refresh(&mut self, now: i64, range: Range) -> Option<Option<String>> {
         let cursor = self.pages.last().cloned()?;
+        let beijing_day = |ms: i64| ms.saturating_add(28_800_000).div_euclid(86_400_000);
+        if range == Range::Today && beijing_day(self.now) != beijing_day(now) {
+            return self.query(now);
+        }
+        self.now = now;
         self.generation = self.generation.wrapping_add(1);
         Some(cursor)
     }
@@ -475,7 +479,7 @@ pub fn read_requests(
         5 => "client_disconnected",
         _ => "all",
     };
-    let value = match um_requests(
+    let value = match desktop_requests(
         ledger,
         range.key(),
         None,

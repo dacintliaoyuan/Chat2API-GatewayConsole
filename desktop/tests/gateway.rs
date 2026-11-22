@@ -315,6 +315,7 @@ struct SpawnRecord {
 struct FakeProcessState {
     exit: Option<ProcessExit>,
     killed: bool,
+    kill_fails: bool,
     try_wait_calls: usize,
 }
 
@@ -335,6 +336,9 @@ impl ChildProcess for FakeProcess {
 
     fn kill(&mut self) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
+        if state.kill_fails {
+            return Err("fixture: process cannot be stopped".into());
+        }
         state.killed = true;
         state.exit = Some(ProcessExit { code: Some(-1) });
         Ok(())
@@ -1208,6 +1212,44 @@ fn switch_port_restores_the_old_port_when_the_drain_fails() {
         world.http.health("http://127.0.0.1:7996").is_err(),
         "the new port must not be started"
     );
+}
+
+#[test]
+fn switch_port_does_not_replace_a_child_whose_exit_is_unconfirmed() {
+    let dir = TempDir::new("gateway-switch-unconfirmed-exit");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    world.launcher.process(0).lock().unwrap().kill_fails = true;
+    world.http.healthy.lock().unwrap().insert(7997, false);
+    world.http.fail_drain("fixture: the listener closed");
+
+    let outcome = supervisor.switch_port(7996, &mut |_| panic!("must not save the new port"));
+    assert!(matches!(
+        outcome,
+        PortSwitch::RestoreFailed { ref restore_error, .. }
+            if restore_error.contains("fixture: process cannot be stopped")
+    ));
+    assert!(matches!(supervisor.status().state, GatewayState::StopFailed { .. }));
+    assert_eq!(world.launcher.spawn_count(), 1);
+    let child = world.launcher.process(0);
+    child.lock().unwrap().kill_fails = false;
+    assert_eq!(supervisor.stop(StopReason::UserRequested).state, GatewayState::Stopped);
+    assert!(child.lock().unwrap().exit.is_some());
+}
+
+#[test]
+fn restart_cancelled_after_stop_does_not_start_a_replacement() {
+    let dir = TempDir::new("gateway-restart-cancelled");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7997);
+    let _ = supervisor.start_or_attach();
+    let checks = AtomicUsize::new(0);
+    let status = supervisor.restart_with_cancel(StopReason::UserRequested, &|| {
+        checks.fetch_add(1, Ordering::SeqCst) > 0
+    });
+    assert_eq!(status.state, GatewayState::Stopped);
+    assert_eq!(world.launcher.spawn_count(), 1);
 }
 
 #[test]

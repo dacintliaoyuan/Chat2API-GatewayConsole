@@ -659,14 +659,13 @@ fn load_requests(
     mode: RequestLoad,
 ) {
     let refresh = mode == RequestLoad::Refresh;
+    let range = Range::from_index(window.get_request_period());
+    let current_time = chrono::Utc::now().timestamp_millis();
     let (cursor, now, generation) = {
         let mut nav = nav.lock().expect("request navigation poisoned");
         let cursor = match mode {
-            // A refresh re-reads the page the user is on; it never rewinds the
-            // page stack or changes the filters. `Some(None)` is the legal
-            // first-page cursor, so only a missing page skips the request.
-            RequestLoad::Refresh => nav.refresh(),
-            RequestLoad::Query => nav.query(chrono::Utc::now().timestamp_millis()),
+            RequestLoad::Refresh => nav.refresh(current_time, range),
+            RequestLoad::Query => nav.query(current_time),
             RequestLoad::Page => nav.page(direction),
         };
         let Some(cursor) = cursor else {
@@ -674,7 +673,6 @@ fn load_requests(
         };
         (cursor, nav.now, nav.generation)
     };
-    let range = Range::from_index(window.get_request_period());
     let result = window.get_request_result();
     let keyword = window.get_request_keyword().to_string();
     let scroll = window.get_request_scroll_y();
@@ -1193,43 +1191,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_restart_gateway.upgrade() else {
             return;
         };
+        if window.get_gateway_restarting()
+            || window.get_port_busy()
+            || QUIT_REQUESTED.load(Ordering::SeqCst)
+        {
+            return;
+        }
         window.set_gateway_restarting(true);
         window.set_settings_status("正在重启本实例网关…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
-        let restarted = {
-            let mut guard = restart_gateway_supervisor
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let Some(supervisor) = guard.as_mut() else {
-                window.set_gateway_restarting(false);
-                window.set_settings_status("本实例网关未接入，无法重启".into());
-                window.set_settings_tone(status_tone(Tone::Bad));
-                return;
+        let supervisor = Arc::clone(&restart_gateway_supervisor);
+        let status = Arc::clone(&restart_gateway_status);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let restarted = {
+                let mut guard = supervisor
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let restarted = guard.as_mut().map(|supervisor| {
+                    supervisor.restart_with_cancel(StopReason::UserRequested, &|| {
+                        QUIT_REQUESTED.load(Ordering::SeqCst)
+                    })
+                });
+                if let Some(restarted) = &restarted {
+                    *status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        restarted.clone();
+                }
+                restarted
             };
-            supervisor.restart(StopReason::UserRequested)
-        };
-        *restart_gateway_status
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
-        window.set_gateway_restarting(false);
-        match &restarted.state {
-            GatewayState::Running { .. } => {
-                window.set_settings_status("网关已重启".into());
-                window.set_settings_tone(status_tone(Tone::Good));
-            }
-            GatewayState::StartFailed { reason }
-            | GatewayState::PortInUse { reason, .. }
-            | GatewayState::HealthTimeout { reason }
-            | GatewayState::StopFailed { reason }
-            | GatewayState::SetupFailed { reason } => {
-                window.set_settings_status(format!("重启失败：{reason}").into());
-                window.set_settings_tone(status_tone(Tone::Bad));
-            }
-            _ => {
-                window.set_settings_status("网关正在重启…".into());
-                window.set_settings_tone(status_tone(Tone::Warn));
-            }
-        }
+            let (message, tone) = match restarted.as_ref().map(|status| &status.state) {
+                Some(GatewayState::Running { .. }) => ("网关已重启".to_string(), Tone::Good),
+                Some(state) => (format!("重启失败：{}", state.detail()), Tone::Bad),
+                None => ("本实例网关未接入，无法重启".to_string(), Tone::Bad),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_gateway_restarting(false);
+                    if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                        window.set_settings_status(message.into());
+                        window.set_settings_tone(status_tone(tone));
+                    }
+                }
+            });
+        });
     });
 
     let request_nav = Arc::new(Mutex::new(usage::RequestNav::default()));
@@ -1834,6 +1838,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_save.upgrade() else {
             return;
         };
+        if window.get_gateway_restarting() || window.get_port_busy() {
+            return;
+        }
         let port = match config::validate_port(&text) {
             Ok(port) => port,
             Err(error) => {
@@ -1916,7 +1923,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     restore_error,
                 } => (
                     format!(
-                        "切换失败：{reason}；当前端口 127.0.0.1:{to}，恢复原端口 127.0.0.1:{from} 也失败：{restore_error}"
+                        "切换到 {to} 失败：{reason}；恢复原端口 127.0.0.1:{from} 也失败：{restore_error}"
                     ),
                     Tone::Bad,
                 ),

@@ -364,9 +364,6 @@ impl ServerHandle {
                 login.shutdown();
             }
         }
-        if let Some(login) = &self.state.login {
-            login.shutdown();
-        }
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();
         }

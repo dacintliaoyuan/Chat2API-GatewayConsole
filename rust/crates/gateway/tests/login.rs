@@ -220,11 +220,11 @@ impl LoginPage for FakePage {
         }
     }
 
-    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
+    fn credential_value(&self, selectors: &[&str]) -> Result<Option<String>, String> {
         if selectors.contains(&"input[name=\"UserName\"]") {
-            return self.account_value.lock().expect("account value").clone();
+            return Ok(self.account_value.lock().expect("account value").clone());
         }
-        None
+        Ok(None)
     }
 
     fn one_visible(&self, _selectors: &[&str]) -> Option<VisibleTarget> {
@@ -1183,6 +1183,40 @@ fn a_prefilled_umpass_account_that_differs_from_the_saved_account_stops_for_manu
     assert_eq!(status["error"], json!("umpass_account_mismatch"));
     assert_eq!(page.submit_clicks(), 0, "账号不一致时不得提交旧凭据");
     assert_eq!(page.fill_calls(), 0, "账号不一致时不得覆盖页面账号");
+}
+
+#[test]
+fn a_visible_account_mismatch_keeps_the_same_window_for_manual_confirmation() {
+    let temp = TempDir::new("um-rust-login-visible-mismatch-");
+    let page = empty_form_page();
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.set_account_value("someone-else@um.edu.mo");
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            configure_form_pair(config);
+            config.display_file = marker;
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_account_mismatch")
+    });
+    assert_eq!(status["state"], json!("logging_in"));
+    assert!(!page.is_closed());
+    page.set_account_value("fixture-account");
+    page.set_token(Some("operator-token"));
+    let status = wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(page.submit_clicks(), 0);
+    assert_eq!(page.fill_calls(), 0);
 }
 
 #[test]

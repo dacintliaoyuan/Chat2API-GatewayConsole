@@ -268,10 +268,11 @@ impl LoginPage for PlaywrightPage {
         }
     }
 
-    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
-        match self.call("value", json!(selectors)) {
-            Ok(Value::String(value)) if !value.is_empty() => Some(value),
-            _ => None,
+    fn credential_value(&self, selectors: &[&str]) -> Result<Option<String>, String> {
+        match self.call("value", json!(selectors))? {
+            Value::String(value) if !value.is_empty() => Ok(Some(value)),
+            Value::String(_) | Value::Null => Ok(None),
+            _ => Err("unexpected login field reply".to_string()),
         }
     }
 

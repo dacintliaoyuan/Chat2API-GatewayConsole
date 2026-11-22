@@ -220,22 +220,22 @@ fn request_page_keeps_summary_model_speeds_chart_and_first_token_across_the_page
 fn refreshing_the_first_request_page_still_issues_a_request() {
     let mut nav = RequestNav::default();
     assert!(
-        nav.refresh().is_none(),
+        nav.refresh(1000, Range::Day).is_none(),
         "no page has been loaded, so there is nothing to refresh"
     );
     assert_eq!(nav.query(1000), Some(None));
     assert_eq!(nav.pages, [None]);
     assert_eq!(
-        nav.refresh(),
+        nav.refresh(2000, Range::Day),
         Some(None),
         "the first page has no cursor but is still a request"
     );
-    assert_eq!(nav.now, 1000, "refresh keeps the query snapshot time");
+    assert_eq!(nav.now, 2000, "refresh moves the query snapshot forward");
     assert_eq!(nav.pages, [None], "refresh never rewinds the page stack");
 }
 
 #[test]
-fn paging_and_refresh_keep_the_page_stack_and_snapshot_time() {
+fn paging_and_refresh_keep_the_page_stack_at_a_fresh_snapshot_time() {
     let mut nav = RequestNav::default();
     nav.query(1000);
     nav.earlier = Some("cursor-1".into());
@@ -248,8 +248,8 @@ fn paging_and_refresh_keep_the_page_stack_and_snapshot_time() {
         [None, Some("cursor-1".into()), Some("cursor-2".into())]
     );
 
-    assert_eq!(nav.refresh(), Some(Some("cursor-2".into())));
-    assert_eq!(nav.now, 1000, "refresh keeps the query snapshot time");
+    assert_eq!(nav.refresh(2000, Range::All), Some(Some("cursor-2".into())));
+    assert_eq!(nav.now, 2000, "refresh moves the query snapshot forward");
     assert_eq!(
         nav.pages,
         [None, Some("cursor-1".into()), Some("cursor-2".into())],
@@ -259,6 +259,19 @@ fn paging_and_refresh_keep_the_page_stack_and_snapshot_time() {
     assert_eq!(nav.page(-1), Some(Some("cursor-1".into())));
     assert_eq!(nav.page(-1), Some(None), "the first page has no cursor");
     assert_eq!(nav.page(-1), None, "the first page has no newer page");
+}
+
+#[test]
+fn refresh_today_across_beijing_midnight_uses_the_new_day() {
+    let mut nav = RequestNav::default();
+    nav.query(time("2026-11-17T23:59:59+08:00"));
+    nav.earlier = Some("previous-day".into());
+    nav.page(1).unwrap();
+
+    let midnight = time("2026-11-18T00:00:00+08:00");
+    assert_eq!(nav.refresh(midnight, Range::Today), Some(None));
+    assert_eq!(nav.now, midnight);
+    assert_eq!(nav.pages, [None]);
 }
 
 #[test]

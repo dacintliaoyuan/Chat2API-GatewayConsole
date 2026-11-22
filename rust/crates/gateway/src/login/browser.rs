@@ -133,9 +133,10 @@ pub trait LoginPage: Send {
     }
     fn credential_field(&self, selectors: &[&str]) -> CredentialField;
     /// The unique visible field's trimmed text, or `None` when the field is
-    /// absent, ambiguous, empty or unreadable.
-    fn credential_value(&self, _selectors: &[&str]) -> Option<String> {
-        None
+    /// absent, ambiguous, empty or protected by browser autofill. An error
+    /// means the driver could not finish the read.
+    fn credential_value(&self, _selectors: &[&str]) -> Result<Option<String>, String> {
+        Ok(None)
     }
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
@@ -710,11 +711,12 @@ impl LoginPage for RealPage {
         CredentialField::ProtectedAutofill
     }
 
-    fn credential_value(&self, selectors: &[&str]) -> Option<String> {
+    fn credential_value(&self, selectors: &[&str]) -> Result<Option<String>, String> {
         let expression = credential_value_expression(selectors);
-        match self.evaluate(&expression) {
-            Ok(Value::String(value)) if !value.is_empty() => Some(value),
-            _ => None,
+        match self.evaluate(&expression)? {
+            Value::String(value) if !value.is_empty() => Ok(Some(value)),
+            Value::String(_) | Value::Null => Ok(None),
+            _ => Err("unexpected login field reply".to_string()),
         }
     }
 

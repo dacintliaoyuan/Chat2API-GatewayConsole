@@ -1163,6 +1163,17 @@ impl GatewaySupervisor {
     /// Replaces the running instance so the current credentials environment
     /// applies to the new child. A failed stop leaves the old child untouched.
     pub fn restart(&mut self, reason: StopReason) -> GatewayStatus {
+        self.restart_with_cancel(reason, &|| false)
+    }
+
+    pub fn restart_with_cancel(
+        &mut self,
+        reason: StopReason,
+        cancelled: &dyn Fn() -> bool,
+    ) -> GatewayStatus {
+        if cancelled() {
+            return self.status();
+        }
         let has_instance = self.child.is_some()
             || matches!(
                 self.state,
@@ -1175,6 +1186,9 @@ impl GatewaySupervisor {
             if !matches!(stopped.state, GatewayState::Stopped) {
                 return stopped;
             }
+        }
+        if cancelled() {
+            return self.status();
         }
         let started = self.start_or_attach();
         self.append_log(
@@ -1423,20 +1437,29 @@ impl GatewaySupervisor {
         progress: &mut dyn FnMut(PortSwitchProgress),
     ) -> PortSwitch {
         progress(PortSwitchProgress::Restoring);
-        self.port = from;
-        if let Some(mut child) = self.child.take() {
-            // A committed stop may have closed the listener while the old child
-            // is still finishing its auth watch. Reap or kill it before starting
-            // the replacement; otherwise start_or_attach would probe the stale
-            // child and report a HealthTimeout instead of a restored port.
-            match child.try_wait() {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    let _ = child.kill();
-                }
-                Err(_) => {}
+        if let Some(child) = self.child.as_mut() {
+            // The listener can close before its process exits. Keep ownership
+            // until exit is confirmed before reusing the same state files.
+            let stopped = match child.try_wait() {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => self.force_kill(),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = stopped {
+                let restore_error = format!("无法确认旧网关已停止：{error}");
+                self.state = GatewayState::StopFailed {
+                    reason: restore_error.clone(),
+                };
+                return PortSwitch::RestoreFailed {
+                    from,
+                    to,
+                    reason,
+                    restore_error,
+                };
             }
+            self.child = None;
         }
+        self.port = from;
         let restored = self.start_or_attach();
         if matches!(&restored.state, GatewayState::Running { .. }) {
             if let Err(error) = config_restore {

@@ -15,7 +15,7 @@
 
    运行中的 `desktop/target/debug/um-desktop.exe` 会被 Windows 锁住；独立 target 不碰它，因此不需要停 App。
 
-4. **桌面测试用 `scripts/check-desktop.sh`**：`CARGO_INCREMENTAL=0 cargo test -j 2 --manifest-path desktop/Cargo.toml`。默认并行度会在这台机器上触发 `link.exe` 1102 与 rustc ICE；`scripts/check.sh --desktop` 和 `--full` 都走这个脚本。
+4. **桌面测试用 `scripts/check-desktop.sh`**，单独构建到 `desktop/target/test`。脚本将编译并行度限制为 2 并关闭增量编译，避免本机触发 `link.exe` 1102 与 rustc ICE。`scripts/check.sh --desktop` 和 `--full` 都走这个脚本。
 
 ## 安全停止
 

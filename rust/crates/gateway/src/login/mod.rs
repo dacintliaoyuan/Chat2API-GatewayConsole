@@ -1821,6 +1821,7 @@ fn drive_login(
     let mut auto_submissions = 0usize;
     let mut last_click_swallowed = false;
     let mut saw_umpass_form = false;
+    let mut manual_account_takeover = false;
 
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
@@ -1831,7 +1832,7 @@ fn drive_login(
         if let Some(outcome) = check_login_window(page, visible) {
             return outcome;
         }
-        if Instant::now() >= idle_deadline {
+        if !manual_account_takeover && Instant::now() >= idle_deadline {
             return LoginOutcome::Manual {
                 reason: "idle_timeout".to_string(),
             };
@@ -2109,7 +2110,7 @@ fn drive_login(
                     );
                 }
             }
-        } else if stage == "umpass" {
+        } else if stage == "umpass" && !manual_account_takeover {
             let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             let fields = [
                 page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
@@ -2124,24 +2125,42 @@ fn drive_login(
             // submitted when it differs from the account the app saved. Pause
             // the automatic round and ask the user which account to use.
             if !inner.config.um_account.is_empty() {
-                if let Some(page_account) = page.credential_value(&UMPASS_ACCOUNT_SELECTORS) {
-                    if !page_account.eq_ignore_ascii_case(inner.config.um_account.trim()) {
-                        note_form(
-                            inner,
-                            round,
-                            "manual_takeover",
-                            Some(&url),
-                            Some("umpass_account_mismatch"),
-                            FormState {
-                                form: FORM_ACCOUNT_MISMATCH,
-                                detail: Some(ACCOUNT_MISMATCH_HINT),
-                                submit_count: auto_submissions,
-                            },
-                        );
+                let account_problem = match page.credential_value(&UMPASS_ACCOUNT_SELECTORS) {
+                    Ok(Some(account))
+                        if !account.eq_ignore_ascii_case(inner.config.um_account.trim()) =>
+                    {
+                        Some(("umpass_account_mismatch", FORM_ACCOUNT_MISMATCH, ACCOUNT_MISMATCH_HINT))
+                    }
+                    Err(_) => Some((
+                        "umpass_account_unreadable",
+                        FORM_MISSING_FIELDS,
+                        "暂时无法读取 UMPASS 页面账号，请在可见窗口确认",
+                    )),
+                    _ => None,
+                };
+                if let Some((reason, form, hint)) = account_problem {
+                    note_form(
+                        inner,
+                        round,
+                        "manual_takeover",
+                        Some(&url),
+                        Some(reason),
+                        FormState {
+                            form,
+                            detail: Some(hint),
+                            submit_count: auto_submissions,
+                        },
+                    );
+                    if !visible {
                         return LoginOutcome::Manual {
-                            reason: "umpass_account_mismatch".to_string(),
+                            reason: reason.to_string(),
                         };
                     }
+                    // Keep observing this window, but leave the form under
+                    // the operator's control for the rest of this round.
+                    manual_account_takeover = true;
+                    manual_reason = Some(reason.to_string());
+                    continue;
                 }
             }
             // A rejection is only acted on once a UMPASS form was recognized in

@@ -2079,9 +2079,6 @@ fn encode_um_log_cursor(
     base64_encode(python_json(&payload).as_bytes())
 }
 
-/// #140 keeps the summary, model speeds and chart buckets over the whole filtered
-/// set here, not in the desktop client: the visible page is only 60 rows, so a
-/// client-side aggregate would change when the reader pages.
 pub fn um_requests(
     ledger: &Path,
     window: &str,
@@ -2091,6 +2088,34 @@ pub fn um_requests(
     cursor: Option<&str>,
     limit: i64,
     now_ms: f64,
+) -> Result<Value, UmQueryError> {
+    read_request_page(ledger, window, model, result, search, cursor, limit, now_ms, false)
+}
+
+/// Desktop summary and charts cover the filtered window across all pages.
+pub fn desktop_requests(
+    ledger: &Path,
+    window: &str,
+    model: Option<&str>,
+    result: &str,
+    search: &str,
+    cursor: Option<&str>,
+    limit: i64,
+    now_ms: f64,
+) -> Result<Value, UmQueryError> {
+    read_request_page(ledger, window, model, result, search, cursor, limit, now_ms, true)
+}
+
+fn read_request_page(
+    ledger: &Path,
+    window: &str,
+    model: Option<&str>,
+    result: &str,
+    search: &str,
+    cursor: Option<&str>,
+    limit: i64,
+    now_ms: f64,
+    desktop_analytics: bool,
 ) -> Result<Value, UmQueryError> {
     if !UM_WINDOWS.contains(&window) {
         return Err(UmQueryError(format!(
@@ -2125,8 +2150,7 @@ pub fn um_requests(
             "events": read.events.len(), "errors": read.errors,
             "truncated": read.truncated,
         });
-        let missing = Reading::missing(&note);
-        return Ok(json!({
+        let mut payload = json!({
             "page": {
                 "rows": [],
                 "scope": scope,
@@ -2135,7 +2159,13 @@ pub fn um_requests(
             },
             "range": window,
             "models": [],
-            "summary": {
+            "coverage": coverage(&read),
+            "timezone": "Asia/Shanghai",
+            "checked_epoch": (now_ms / 1000.0).floor() as i64,
+        });
+        if desktop_analytics {
+            let missing = Reading::missing(&note);
+            payload["summary"] = json!({
                 "tokens": {
                     "total": missing.to_json(),
                     "input": missing.to_json(),
@@ -2149,14 +2179,12 @@ pub fn um_requests(
                 "cache": {"hitRate": missing.to_json()},
                 "speed": {"value": missing.to_json(), "basis": "whole_request", "samples": 0},
                 "firstTokenMs": missing.to_json(),
-            },
-            "modelSpeeds": [],
-            "buckets": [],
-            "splitModels": [],
-            "coverage": coverage(&read),
-            "timezone": "Asia/Shanghai",
-            "checked_epoch": (now_ms / 1000.0).floor() as i64,
-        }));
+            });
+            for key in ["modelSpeeds", "buckets", "splitModels"] {
+                payload[key] = json!([]);
+            }
+        }
+        return Ok(payload);
     }
     let events: Vec<&Event> = read
         .events
@@ -2208,12 +2236,11 @@ pub fn um_requests(
             }
         }
         let key = keys.get(&index).cloned().unwrap_or_default();
-        filtered.push(*event);
+        if desktop_analytics {
+            filtered.push(*event);
+        }
         rows.push(request_row(event, key, &attached));
     }
-    let summary = requests_summary(&filtered);
-    let model_speeds = model_speeds(&filtered);
-    let (buckets, split_models) = request_buckets(&filtered, window, now_ms);
     rows.sort_by(|left, right| {
         let left_at = left.get("at").and_then(Value::as_i64).unwrap_or(0);
         let right_at = right.get("at").and_then(Value::as_i64).unwrap_or(0);
@@ -2256,7 +2283,7 @@ pub fn um_requests(
         object.insert("bounded".to_string(), json!(true));
         object.insert("clamped".to_string(), json!(false));
     }
-    Ok(json!({
+    let mut payload = json!({
         "page": {
             "rows": rows,
             "scope": format!("{scope}，时间倒序；物理重试不单独成行"),
@@ -2265,14 +2292,18 @@ pub fn um_requests(
         },
         "range": window,
         "models": models,
-        "summary": summary,
-        "modelSpeeds": model_speeds,
-        "buckets": buckets,
-        "splitModels": split_models,
         "coverage": page_coverage,
         "timezone": "Asia/Shanghai",
         "checked_epoch": (now_ms / 1000.0).floor() as i64,
-    }))
+    });
+    if desktop_analytics {
+        let (buckets, split_models) = request_buckets(&filtered, window, now_ms);
+        payload["summary"] = requests_summary(&filtered);
+        payload["modelSpeeds"] = model_speeds(&filtered);
+        payload["buckets"] = json!(buckets);
+        payload["splitModels"] = json!(split_models);
+    }
+    Ok(payload)
 }
 
 pub(crate) fn base64_encode(data: &[u8]) -> String {

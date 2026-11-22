@@ -147,6 +147,30 @@ fn a_non_stream_row_matches_the_python_field_set_and_values() {
 }
 
 #[test]
+fn a_finish_only_stream_has_no_first_token_sample() {
+    let temp = TempDir::new("um-rust-chat-ledger-finish-only-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::now(
+                b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),
+            ),
+            ChatChunk::now(b"data: [DONE]\n\n".to_vec()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream chat");
+    client.read_all(Duration::from_secs(5)).expect("read stream");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert!(rows[0].get("first_token_ms").is_none());
+}
+
+#[test]
 fn a_stream_row_records_the_first_token_time() {
     let temp = TempDir::new("um-rust-chat-ledger-");
     let stub = ChatStub::start();

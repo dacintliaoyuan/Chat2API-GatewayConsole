@@ -749,6 +749,7 @@ fn process_event(
         }
     }
     let mut substantive = false;
+    let mut has_output = false;
     let mut saw_finish = false;
     if let Some(Value::Object(chunk)) = chunk.as_ref() {
         if let Some(usage) = chunk.get("usage") {
@@ -773,7 +774,17 @@ fn process_event(
                 }
                 if let Some(text) = delta.get("content").and_then(Value::as_str) {
                     state.completion_chars += text.chars().count() as u64;
+                    has_output |= !text.is_empty();
                 }
+                let has_arguments = |call: &Value| {
+                    call.get("arguments")
+                        .and_then(Value::as_str)
+                        .is_some_and(|arguments| !arguments.is_empty())
+                };
+                has_output |= delta.get("function_call").is_some_and(has_arguments)
+                    || delta.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| {
+                        calls.iter().any(|call| call.get("function").is_some_and(has_arguments))
+                    });
                 let reasoning = delta
                     .get("reasoning_content")
                     .and_then(Value::as_str)
@@ -783,6 +794,7 @@ fn process_event(
                     // Python 的 preflight 在首段思考内容到达时提交响应。
                     // 思考属于业务输出，不能继续计入 64 KiB 无事件前导缓冲。
                     substantive |= !text.is_empty();
+                    has_output |= !text.is_empty();
                 }
             }
         }
@@ -812,7 +824,9 @@ fn process_event(
         if !state.committed && !commit(stream, context, state) {
             return EventAction::Stop(StreamStatus::ClientDisconnected);
         }
-        let _ = write_chunk(stream, &raw);
+        if write_chunk(stream, &raw).is_ok() && has_output {
+            crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
+        }
         return EventAction::Continue;
     }
     if state.committed {
@@ -847,7 +861,6 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
     if write_chunk(stream, &staged).is_err() {
         return false;
     }
-    crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
     true
 }
 

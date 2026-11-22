@@ -19,7 +19,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
         DispatchMessageW, GetCursorPos, LoadIconW, PeekMessageW, PostMessageW, RegisterClassW,
-        SetForegroundWindow, TrackPopupMenu, TranslateMessage, UnregisterClassW, IDI_APPLICATION,
+        SetForegroundWindow, TrackPopupMenu, TranslateMessage, UnregisterClassW,
         MF_STRING, MSG, PM_REMOVE, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, WM_APP,
         WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WINDOW_EX_STYLE, WINDOW_STYLE,
     };
@@ -97,7 +97,8 @@ mod imp {
                 .map_err(|error| error.to_string())?;
             AppendMenuW(menu, MF_STRING, ID_QUIT, windows::core::w!("退出并停止网关"))
                 .map_err(|error| error.to_string())?;
-            let icon = LoadIconW(None, IDI_APPLICATION).map_err(|error| error.to_string())?;
+            let icon = LoadIconW(Some(instance), crate::window_icon::APP_ICON)
+                .map_err(|error| error.to_string())?;
             let mut data = NOTIFYICONDATAW {
                 cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                 hWnd: hwnd,

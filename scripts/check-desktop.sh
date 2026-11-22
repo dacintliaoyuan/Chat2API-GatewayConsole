@@ -8,6 +8,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
-# Only the lib and test targets: a running app locks `um-desktop.exe`, and the
-# tests link the lib, not the binary.
-CARGO_INCREMENTAL=0 cargo test -j 2 --manifest-path desktop/Cargo.toml --lib --tests "$@"
+# Cargo also builds the application binary for integration tests. Give the
+# test build its own target directory so a running preview cannot lock it.
+CARGO_INCREMENTAL=0 cargo test -j 2 --manifest-path desktop/Cargo.toml \
+  --target-dir "$ROOT/desktop/target/test" --lib --tests "$@"

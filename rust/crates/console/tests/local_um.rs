@@ -12,7 +12,8 @@ use std::fs;
 use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use um_console::local_um::{
-    desktop_trend, um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
+    desktop_requests, desktop_trend, um_logs, um_maintenance, um_request_logs, um_requests,
+    um_today, um_trend,
 };
 use um_console::operations::OperationsReader;
 
@@ -396,7 +397,8 @@ fn missing_cache_fields_stay_unknown_and_zero_cache_stays_exact() {
             .join("\n"),
     )
     .expect("write ledger");
-    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    let payload =
+        desktop_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
     assert_eq!(
         payload["summary"]["cache"]["hitRate"],
         json!({
@@ -444,7 +446,8 @@ fn all_missing_cache_fields_are_unknown_not_zero() {
         .to_string(),
     )
     .expect("write ledger");
-    let payload = um_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
+    let payload =
+        desktop_requests(&ledger, "today", None, "all", "", None, 50, now()).expect("requests");
     assert_eq!(
         payload["summary"]["cache"]["hitRate"],
         json!({"kind": "unknown", "note": "缓存报告状态为 reported 但缓存字段缺失"})
@@ -489,7 +492,14 @@ fn requests_summarize_the_whole_filtered_set_not_only_the_page() {
             .join("\n"),
     )
     .expect("write ledger");
-    let payload = um_requests(&ledger, "today", None, "all", "", None, 60, now()).expect("requests");
+    let payload =
+        desktop_requests(&ledger, "today", None, "all", "", None, 60, now()).expect("requests");
+    let console_page =
+        um_requests(&ledger, "today", None, "all", "", None, 60, now()).expect("console page");
+    for key in ["summary", "modelSpeeds", "buckets", "splitModels"] {
+        assert!(console_page.get(key).is_none(), "unexpected desktop field {key}");
+    }
+    assert_eq!(console_page["page"], payload["page"]);
     assert_eq!(payload["page"]["rows"].as_array().expect("rows").len(), 60);
     assert_eq!(
         payload["summary"]["tokens"]["total"],
@@ -528,7 +538,7 @@ fn requests_summarize_the_whole_filtered_set_not_only_the_page() {
     );
     assert_eq!(model_speeds[1]["model"], json!("m2"));
 
-    let filtered = um_requests(&ledger, "today", Some("m2"), "all", "", None, 60, now())
+    let filtered = desktop_requests(&ledger, "today", Some("m2"), "all", "", None, 60, now())
         .expect("filtered requests");
     assert_eq!(
         filtered["summary"]["requests"]["recorded"],
