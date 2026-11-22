@@ -12,6 +12,7 @@ pub mod config;
 pub mod dwm;
 pub mod gateway;
 pub mod instance;
+pub mod login_rounds;
 pub mod logs;
 pub mod logstream;
 pub mod models;

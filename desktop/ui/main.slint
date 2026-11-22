@@ -66,6 +66,24 @@ export struct ProbeHistoryRow {
     tone: int,
 }
 
+// One row of the settings page's UM login-round table (#159). The words are
+// already mapped; an unknown closed-set value reads 未知 and keeps its raw value
+// only in `detail`.
+export struct LoginRoundRow {
+    key: string,
+    at: string,
+    round: string,
+    state: string,
+    state-tone: int,
+    mode: string,
+    trigger: string,
+    submit: string,
+    outcome: string,
+    reason: string,
+    upstream: string,
+    detail: string,
+}
+
 // One navigation entry. The page number lives next to its label so the rail and
 // the page title can never drift apart again.
 export struct NavEntry {
@@ -688,6 +706,27 @@ export component MainWindow inherits Window {
     callback clear-probe-selection();
     callback run-context-probe();
     callback stop-context-probe();
+    // The settings page's UM login-round table (#159): round/reason filters,
+    // the bounded rows and the read-only detail. A legal empty history says
+    // 暂无登录轮次; an unreadable one keeps its reason and hides the table.
+    in property <[LoginRoundRow]> login-rounds: [];
+    in property <string> login-rounds-status: "尚未读取登录轮次";
+    in property <int> login-rounds-tone: 3;
+    in property <string> login-rounds-scope;
+    in property <string> login-rounds-empty-text;
+    in property <bool> login-rounds-table-visible;
+    in property <bool> login-rounds-truncated;
+    in property <bool> login-rounds-loading;
+    in-out property <string> login-rounds-round-filter;
+    in-out property <string> login-rounds-reason-filter;
+    in-out property <string> login-rounds-selected;
+    in property <string> login-rounds-detail-title;
+    in property <string> login-rounds-detail;
+    callback filter-login-rounds(string, string);
+    callback refresh-login-rounds();
+    callback open-login-round(string);
+    out property <length> login-rounds-list-height: login-rounds-list.height;
+    out property <length> login-rounds-row-height: root.compact ? 72px : 44px;
     in property <string> config-path;
     in property <string> instance-path;
     // Test seam: the layout tests expand the instance card without a pointer.
@@ -2967,6 +3006,159 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    login-rounds-card := Card {
+                        inset: 16px;
+                        gap: 12px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                login-rounds-title := SectionLabel {
+                                    text: "UM 登录轮次";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                login-rounds-refresh := ActionButton {
+                                    width: Theme.icon-button;
+                                    height: Theme.icon-button;
+                                    label: "刷新登录轮次";
+                                    icon: "refresh";
+                                    icon-only: true;
+                                    quiet: true;
+                                    enabled: !root.login-rounds-loading;
+                                    tooltip: "重新读取本实例网关的登录历史";
+                                    clicked => { root.refresh-login-rounds(); }
+                                }
+                            }
+                            Hint { text: "来源：本实例网关的登录历史（只读，不触发探测或登录）。"; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                login-rounds-round-filter := MaterialField {
+                                    width: root.compact ? 110px : 130px;
+                                    placeholder: "轮次";
+                                    numeric: true;
+                                    text <=> root.login-rounds-round-filter;
+                                    accepted => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                login-rounds-reason-filter := MaterialField {
+                                    width: root.compact ? 150px : 220px;
+                                    placeholder: "按原因或结果查找";
+                                    clearable: true;
+                                    text <=> root.login-rounds-reason-filter;
+                                    accepted => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                    cleared => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                login-rounds-filter := FocusAction {
+                                    label: "筛选";
+                                    icon: "search";
+                                    quiet: true;
+                                    clicked => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                StatusDot {
+                                    tone: root.login-rounds-tone;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                Hint {
+                                    text: root.login-rounds-status;
+                                    color: Theme.status_ink(root.login-rounds-tone);
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                                if root.login-rounds-truncated : Hint {
+                                    text: "已达单页上限";
+                                    color: Theme.status_ink(1);
+                                    vertical-alignment: center;
+                                }
+                            }
+                            login-rounds-scope-hint := Hint {
+                                visible: !root.login-rounds-scope.is-empty;
+                                text: root.login-rounds-scope;
+                            }
+                            if root.login-rounds-table-visible && !root.compact : HorizontalLayout {
+                                height: 20px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Hint { text: "开始（北京时间）"; width: 118px; vertical-alignment: center; }
+                                Hint { text: "轮次"; width: 36px; vertical-alignment: center; }
+                                Hint { text: "状态"; width: 64px; vertical-alignment: center; }
+                                Hint { text: "模式"; width: 56px; vertical-alignment: center; }
+                                Hint { text: "触发来源"; width: 72px; vertical-alignment: center; }
+                                Hint { text: "提交"; width: 36px; vertical-alignment: center; }
+                                Hint { text: "结果"; width: 72px; vertical-alignment: center; }
+                                Hint { text: "原因"; horizontal-stretch: 1; vertical-alignment: center; }
+                                Hint { text: "上游 / 证据"; width: 120px; vertical-alignment: center; }
+                            }
+                            login-rounds-list := ListView {
+                                visible: root.login-rounds-table-visible;
+                                height: min(280px, root.login-rounds.length * root.login-rounds-row-height);
+                                for row in root.login-rounds : Selectable {
+                                    label: row.at + " 轮次 " + row.round + " " + row.state
+                                        + " " + row.mode + " " + row.trigger + " 提交 " + row.submit
+                                        + " " + row.outcome + " " + row.reason + " " + row.upstream;
+                                    height: root.login-rounds-row-height;
+                                    selected: root.login-rounds-selected == row.key;
+                                    activate => { root.open-login-round(row.key); }
+                                    if root.compact : VerticalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        padding-top: 4px;
+                                        padding-bottom: 4px;
+                                        spacing: 1px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            DataText { text: row.at; horizontal-stretch: 1; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                            DataText { text: "轮次 " + row.round; width: 52px; vertical-alignment: center; }
+                                            Tag { label: row.state; tone: row.state-tone; width: 64px; }
+                                            Hint { text: row.mode; width: 56px; vertical-alignment: center; }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Hint { text: "触发 " + row.trigger; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                            Hint { text: "提交 " + row.submit; width: 52px; vertical-alignment: center; }
+                                            Hint { text: row.outcome; width: 72px; vertical-alignment: center; overflow: elide; }
+                                            Hint { text: row.upstream; width: 110px; vertical-alignment: center; overflow: elide; }
+                                        }
+                                        Hint { text: "原因 " + row.reason; overflow: elide; }
+                                    }
+                                    if !root.compact : HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+                                        DataText { text: row.at; width: 118px; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                        DataText { text: row.round; width: 36px; vertical-alignment: center; }
+                                        Tag { label: row.state; tone: row.state-tone; width: 64px; }
+                                        Hint { text: row.mode; width: 56px; vertical-alignment: center; }
+                                        Hint { text: row.trigger; width: 72px; vertical-alignment: center; overflow: elide; }
+                                        DataText { text: row.submit; width: 36px; vertical-alignment: center; }
+                                        Hint { text: row.outcome; width: 72px; vertical-alignment: center; overflow: elide; }
+                                        Hint { text: row.reason; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                        Hint { text: row.upstream; width: 120px; vertical-alignment: center; overflow: elide; }
+                                    }
+                                }
+                            }
+                            login-rounds-empty-hint := Hint {
+                                visible: !root.login-rounds-empty-text.is-empty;
+                                text: root.login-rounds-empty-text;
+                            }
+                            login-rounds-detail := TextDetails {
+                                visible: !root.login-rounds-selected.is-empty || self.height > 0px;
+                                height: root.login-rounds-selected.is-empty ? 0px : root.compact ? 150px : 190px;
+                                animate height { duration: Theme.settle; easing: ease-out; }
+                                title: root.login-rounds-detail-title;
+                                body: root.login-rounds-detail;
+                                closed => { root.open-login-round(""); }
                             }
                         }
                     }
