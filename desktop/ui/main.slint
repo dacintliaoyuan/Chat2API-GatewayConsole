@@ -863,8 +863,12 @@ export component MainWindow inherits Window {
     in property <[RequestRow]> requests: [];
     in property <string> request-status: "等待从本实例读取请求记录…";
     in property <int> request-tone: 3;
+    // 较新/较早 page navigation.
     in property <bool> older-requests;
     in property <bool> newer-requests;
+    // 加载更早 appends history; it has its own cursor so appending to the
+    // end never disables the 较早 page pager.
+    in property <bool> has-earlier-records;
     in-out property <string> request-keyword;
     in-out property <int> request-period;
     in-out property <int> request-result;
@@ -1071,6 +1075,24 @@ export component MainWindow inherits Window {
     out property <length> request-query-height: request-query.height;
     out property <length> request-status-y: request-status-row.absolute-position.y;
     out property <length> request-status-height: request-status-row.height;
+    // Test seams: 加载更早 appends history instead of paging; the hint takes
+    // the button's place once the history ends.
+    out property <length> request-load-earlier-x: request-load-earlier.absolute-position.x;
+    out property <length> request-load-earlier-y: request-load-earlier.absolute-position.y;
+    out property <length> request-load-earlier-width: request-load-earlier.width;
+    out property <length> request-load-earlier-height: request-load-earlier.height;
+    out property <bool> request-load-earlier-enabled: request-load-earlier.enabled;
+    out property <bool> request-earlier-hint-visible: request-earlier-hint.visible;
+    out property <string> request-earlier-hint-text: request-earlier-hint.text;
+    out property <length> request-newer-page-x: request-newer-page.absolute-position.x;
+    out property <length> request-newer-page-y: request-newer-page.absolute-position.y;
+    out property <length> request-newer-page-width: request-newer-page.width;
+    out property <length> request-newer-page-height: request-newer-page.height;
+    out property <length> request-older-page-x: request-older-page.absolute-position.x;
+    out property <length> request-older-page-y: request-older-page.absolute-position.y;
+    out property <length> request-older-page-width: request-older-page.width;
+    out property <length> request-older-page-height: request-older-page.height;
+    out property <bool> request-older-page-enabled: request-older-page.enabled;
     out property <length> request-analytics-y: request-analytics.absolute-position.y;
     out property <length> request-analytics-height: request-analytics.height;
     out property <length> technical-card-x: technical-card.absolute-position.x;
@@ -1409,6 +1431,7 @@ export component MainWindow inherits Window {
     callback save-port(string);
     callback refresh-overview();
     callback refresh-requests();
+    callback load-earlier-requests();
     callback refresh-settings();
     callback refresh-page();
     callback refresh-logs();
@@ -2374,12 +2397,29 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            // The pager sits in the card footer so the list
-                            // and its paging read as one surface.
+                            // The footer holds 加载更早 (append history under the
+                            // current filters) next to the 较新/较早 page pager.
+                            // The two kinds never share state: loading earlier
+                            // keeps the scroll and the current page; the pager
+                            // replaces the page and starts at its top.
                             HorizontalLayout {
-                                spacing: 8px; alignment: end;
-                                ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(-1); } }
-                                ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(1); } }
+                                spacing: 8px; alignment: start;
+                                request-load-earlier := ActionButton {
+                                    label: "加载更早";
+                                    icon: "chevron-down";
+                                    quiet: true;
+                                    enabled: root.has-earlier-records;
+                                    tooltip: "加载更早的请求";
+                                    clicked => { root.load-earlier-requests(); }
+                                }
+                                request-earlier-hint := Hint {
+                                    text: "没有更早记录";
+                                    visible: root.requests.length > 0 && !root.has-earlier-records;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                request-newer-page := ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(-1); } }
+                                request-older-page := ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(1); } }
                             }
                         }
                     }

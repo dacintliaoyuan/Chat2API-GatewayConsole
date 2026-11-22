@@ -1,5 +1,6 @@
 //! Slint view models over the instance ledger and service log.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{FixedOffset, TimeZone};
@@ -252,6 +253,28 @@ pub struct RequestPage {
     pub models: Vec<String>,
 }
 
+/// What a 加载更早 click should do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EarlierLoad {
+    /// No older page is left; the page shows 没有更早记录.
+    NoMore,
+    /// A 加载更早 read is already in flight; the click is ignored.
+    Busy,
+    /// Read the page at this cursor and append it to the displayed rows.
+    Cursor(String),
+}
+
+/// What appending an older page changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EarlierOutcome {
+    /// `added` older rows now follow the displayed ones.
+    Appended { added: usize },
+    /// No older rows remain; the displayed rows stay on screen.
+    NoMore,
+    /// The ledger could not be read; the displayed rows stay on screen.
+    Failed(String),
+}
+
 /// Page cursor stack and last good page for the request list. `pages` always
 /// holds the first page as `None`; a later page holds its cursor. Keeping the
 /// outer `Option` distinct from the inner cursor is what lets a refresh of the
@@ -260,6 +283,12 @@ pub struct RequestPage {
 pub struct RequestNav {
     pub pages: Vec<Option<String>>,
     pub earlier: Option<String>,
+    /// The cursor for the next 加载更早 page. It starts at the page anchor's
+    /// cursor and advances independently of the 较新/较早 page stack, so loading
+    /// history never moves the current page.
+    pub append_cursor: Option<String>,
+    /// True while a 加载更早 read is in flight; a second click is ignored.
+    pub appending: bool,
     pub rows: Vec<RequestRow>,
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
@@ -275,6 +304,8 @@ impl RequestNav {
         self.pages.clear();
         self.pages.push(None);
         self.earlier = None;
+        self.append_cursor = None;
+        self.appending = false;
         self.now = now;
         self.generation = self.generation.wrapping_add(1);
         self.pages.last().cloned()
@@ -295,6 +326,8 @@ impl RequestNav {
             -1 => return None,
             _ => return None,
         }
+        self.append_cursor = None;
+        self.appending = false;
         self.generation = self.generation.wrapping_add(1);
         self.pages.last().cloned()
     }
@@ -307,9 +340,63 @@ impl RequestNav {
         if range == Range::Today && beijing_day(self.now) != beijing_day(now) {
             return self.query(now);
         }
+        self.appending = false;
         self.now = now;
         self.generation = self.generation.wrapping_add(1);
         Some(cursor)
+    }
+
+    /// Records a page read at the current anchor. `restart_earlier` resets the
+    /// 加载更早 cursor from this page; a refresh that kept appended rows passes
+    /// `false` so the next 加载更早 continues after them.
+    pub fn apply_page(&mut self, page: &RequestPage, restart_earlier: bool) {
+        self.rows = page.rows.clone();
+        self.earlier = page.earlier.clone();
+        if restart_earlier {
+            self.append_cursor = page.earlier.clone();
+        }
+        self.appending = false;
+        self.summary = page.summary.clone();
+        self.model_speeds = page.model_speeds.clone();
+        self.chart = page.chart.clone();
+        self.models = page.models.clone();
+    }
+
+    /// Starts appending the next older page. The page stack and its anchor stay
+    /// put; only the 加载更早 cursor advances.
+    pub fn begin_earlier(&mut self) -> EarlierLoad {
+        if self.appending {
+            return EarlierLoad::Busy;
+        }
+        let Some(cursor) = self.append_cursor.clone() else {
+            return EarlierLoad::NoMore;
+        };
+        self.appending = true;
+        self.generation = self.generation.wrapping_add(1);
+        EarlierLoad::Cursor(cursor)
+    }
+
+    /// Appends an older page after the displayed rows. Duplicate keys from a
+    /// moved ledger are skipped; the rows already shown stay in place.
+    pub fn finish_earlier(&mut self, page: RequestPage) -> EarlierOutcome {
+        self.appending = false;
+        if page.coverage == Coverage::Unavailable {
+            return EarlierOutcome::Failed(page.message);
+        }
+        let mut seen: HashSet<String> = self.rows.iter().map(|row| row.key.clone()).collect();
+        let before = self.rows.len();
+        for row in page.rows {
+            if seen.insert(row.key.clone()) {
+                self.rows.push(row);
+            }
+        }
+        let added = self.rows.len() - before;
+        self.append_cursor = if added == 0 { None } else { page.earlier };
+        if added == 0 {
+            EarlierOutcome::NoMore
+        } else {
+            EarlierOutcome::Appended { added }
+        }
     }
 }
 
