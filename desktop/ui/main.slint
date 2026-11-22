@@ -46,6 +46,26 @@ export struct ModelRow {
     detail: string,
 }
 
+// One row of the settings page's context-probe batch list (#154). `selected`
+// mirrors the checkbox; `state` and `summary` are the visible test result.
+export struct ProbeRow {
+    model-id: string,
+    name: string,
+    state: string,
+    summary: string,
+    tone: int,
+    selected: bool,
+}
+
+// One row of the collapsible probe history table.
+export struct ProbeHistoryRow {
+    time: string,
+    model: string,
+    result: string,
+    summary: string,
+    tone: int,
+}
+
 // One navigation entry. The page number lives next to its label so the rail and
 // the page title can never drift apart again.
 export struct NavEntry {
@@ -88,6 +108,45 @@ component StateCell inherits VerticalLayout {
 }
 
 component Divider inherits Rectangle { height: 1px; background: Theme.edge; }
+
+// A compact checkbox for the context-probe list (#154). The whole 24 px box is
+// the hit target and the accessible role is checkbox, matching the appearance
+// Toggle while fitting the dense table row.
+component ProbeCheck inherits Rectangle {
+    in property <bool> checked;
+    in property <string> label;
+    callback toggled();
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    Rectangle {
+        width: 17px;
+        height: 17px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 4px;
+        background: root.checked ? Theme.accent : Theme.field;
+        border-width: 1px;
+        border-color: root.checked ? Theme.accent : Theme.edge;
+    }
+    AppIcon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: 11px;
+        kind: "check";
+        tint: Theme.on-accent;
+        visible: root.checked;
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.toggled(); }
+    }
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => { root.toggled(); }
+}
 
 component TextDetails inherits Panel {
     in property <string> title;
@@ -614,6 +673,25 @@ export component MainWindow inherits Window {
     in property <string> um-model-detail;
     callback refresh-um-models();
     callback open-model(string);
+    // Context probes (#154): batch selection, the run/stop actions, progress,
+    // budget and the collapsible history. A failed probe keeps its reason and a
+    // missing budget or result field reads 不可用 instead of a zero.
+    in property <[ProbeRow]> probe-models;
+    in property <[ProbeHistoryRow]> probe-history;
+    in property <string> probe-status: "尚未执行上下文探测";
+    in property <int> probe-tone: 3;
+    in property <string> probe-progress;
+    in property <string> probe-budget;
+    in property <bool> probe-running;
+    in property <bool> probe-stop-requested;
+    in property <bool> probe-loading;
+    in-out property <[string]> probe-selected;
+    in-out property <bool> probe-history-open: false;
+    callback toggle-probe-model(string);
+    callback select-all-probes();
+    callback clear-probe-selection();
+    callback run-context-probe();
+    callback stop-context-probe();
     in property <string> config-path;
     in property <string> instance-path;
     // Test seam: the layout tests expand the instance card without a pointer.
@@ -1014,6 +1092,43 @@ export component MainWindow inherits Window {
     out property <bool> um-model-detail-visible: um-model-detail.visible;
     out property <string> um-model-detail-title-text: um-model-detail.title;
     out property <string> um-model-detail-body: um-model-detail.body;
+    // Test seams: the context-probe batch list, selection, run/stop controls and
+    // the collapsible history. The visible properties are the user-facing facts.
+    out property <int> probe-row-count: root.probe-models.length;
+    out property <bool> probe-list-visible: probe-model-list.visible;
+    out property <bool> probe-empty-visible: probe-empty.visible;
+    out property <string> probe-selection-text: "已选 " + root.probe-selected.length + " 个";
+    out property <bool> probe-run-enabled:
+        root.probe-selected.length > 0 && !root.probe-loading && !root.probe-running;
+    out property <bool> probe-stop-visible: root.probe-running;
+    out property <bool> probe-stop-enabled: !root.probe-stop-requested;
+    out property <bool> probe-history-visible: probe-history-body.visible;
+    out property <bool> probe-history-empty-visible: probe-history-empty.visible;
+    out property <int> probe-history-count: root.probe-history.length;
+    out property <length> probe-list-x: probe-model-list.absolute-position.x;
+    out property <length> probe-list-y: probe-model-list.absolute-position.y;
+    out property <length> probe-list-width: probe-model-list.width;
+    out property <length> probe-list-height: probe-model-list.height;
+    out property <length> probe-select-all-x: probe-select-all.absolute-position.x;
+    out property <length> probe-select-all-y: probe-select-all.absolute-position.y;
+    out property <length> probe-select-all-width: probe-select-all.width;
+    out property <length> probe-select-all-height: probe-select-all.height;
+    out property <length> probe-run-x: probe-run.absolute-position.x;
+    out property <length> probe-run-y: probe-run.absolute-position.y;
+    out property <length> probe-run-width: probe-run.width;
+    out property <length> probe-run-height: probe-run.height;
+    out property <length> probe-clear-x: probe-clear.absolute-position.x;
+    out property <length> probe-clear-y: probe-clear.absolute-position.y;
+    out property <length> probe-clear-width: probe-clear.width;
+    out property <length> probe-clear-height: probe-clear.height;
+    out property <length> probe-stop-x: probe-stop.absolute-position.x;
+    out property <length> probe-stop-y: probe-stop.absolute-position.y;
+    out property <length> probe-stop-width: probe-stop.width;
+    out property <length> probe-stop-height: probe-stop.height;
+    out property <length> probe-history-toggle-x: probe-history-toggle.absolute-position.x;
+    out property <length> probe-history-toggle-y: probe-history-toggle.absolute-position.y;
+    out property <length> probe-history-toggle-width: probe-history-toggle.width;
+    out property <length> probe-history-toggle-height: probe-history-toggle.height;
     out property <length> theme-mode-x: theme-mode-control.absolute-position.x;
     out property <length> theme-mode-y: theme-mode-control.absolute-position.y;
     out property <length> theme-mode-width: theme-mode-control.width;
@@ -2728,6 +2843,170 @@ export component MainWindow inherits Window {
                                 title: root.um-model-detail-title;
                                 body: root.um-model-detail;
                                 closed => { root.selected-model = ""; }
+                            }
+                            // Context probes (#154): pick a batch, run it, stop the
+                            // rest and read the collapsible history. The gateway keeps
+                            // the queue and the per-model results, so this card only
+                            // reads and submits; a failed probe keeps its reason.
+                            Divider { }
+                            probe-toolbar := HorizontalLayout {
+                                spacing: 8px;
+                                probe-select-all := ActionButton {
+                                    label: "全选";
+                                    quiet: true;
+                                    enabled: root.probe-models.length > 0;
+                                    clicked => { root.select-all-probes(); }
+                                }
+                                probe-selection-hint := Hint {
+                                    text: root.probe-selection-text;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                probe-run := ActionButton {
+                                    label: root.probe-loading ? "正在提交…" : "上下文探测";
+                                    icon: "play";
+                                    primary: true;
+                                    enabled: root.probe-run-enabled;
+                                    tooltip: "按顺序对已勾选模型执行上下文探测；整批共用请求预算";
+                                    clicked => { root.run-context-probe(); }
+                                }
+                                probe-stop := ActionButton {
+                                    visible: root.probe-running;
+                                    label: root.probe-stop-requested ? "已请求停止" : "停止后续探测";
+                                    icon: "close";
+                                    danger: true;
+                                    enabled: root.probe-stop-enabled;
+                                    tooltip: "在途请求返回后不再开始后续模型";
+                                    clicked => { root.stop-context-probe(); }
+                                }
+                                probe-clear := ActionButton {
+                                    label: "清空选择";
+                                    quiet: true;
+                                    enabled: root.probe-selected.length > 0;
+                                    clicked => { root.clear-probe-selection(); }
+                                }
+                            }
+                            probe-status-hint := Hint {
+                                text: root.probe-status;
+                                color: Theme.status_ink(root.probe-tone);
+                            }
+                            probe-progress-hint := Hint {
+                                visible: !root.probe-progress.is-empty;
+                                text: root.probe-progress;
+                            }
+                            probe-budget-hint := Hint {
+                                text: root.probe-budget;
+                            }
+                            probe-empty := Hint {
+                                visible: root.probe-models.length == 0;
+                                text: "没有可探测的模型：先刷新 UM 模型目录";
+                            }
+                            probe-model-list := ListView {
+                                visible: root.probe-models.length > 0;
+                                height: min(220px, root.probe-models.length * 44px);
+                                for item in root.probe-models : Selectable {
+                                    label: item.name + " " + item.model-id + " " + item.state + " " + item.summary;
+                                    height: 44px;
+                                    selected: item.selected;
+                                    activate => { root.toggle-probe-model(item.model-id); }
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+                                        ProbeCheck {
+                                            checked: item.selected;
+                                            label: "选择 " + item.name;
+                                            toggled => { root.toggle-probe-model(item.model-id); }
+                                        }
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: 1px;
+                                            Text {
+                                                text: item.name;
+                                                color: Theme.ink;
+                                                font-weight: 600;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                            DataText {
+                                                text: item.model-id;
+                                                font-size: 11px;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        Hint {
+                                            text: item.state;
+                                            width: 76px;
+                                            color: Theme.status_ink(item.tone);
+                                            vertical-alignment: center;
+                                        }
+                                        Hint {
+                                            text: item.summary;
+                                            horizontal-stretch: 2;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                            probe-history-toggle := ActionButton {
+                                label: root.probe-history-open
+                                    ? "收起历史测试记录"
+                                    : "历史测试记录（" + root.probe-history.length + "）";
+                                icon: root.probe-history-open ? "chevron-down" : "chevron-right";
+                                quiet: true;
+                                clicked => { root.probe-history-open = !root.probe-history-open; }
+                            }
+                            probe-history-body := VerticalLayout {
+                                visible: root.probe-history-open;
+                                height: self.visible ? self.preferred-height : 0px;
+                                spacing: 6px;
+                                probe-history-empty := Hint {
+                                    visible: root.probe-history.length == 0;
+                                    text: "没有历史测试记录";
+                                }
+                                probe-history-list := ListView {
+                                    visible: root.probe-history.length > 0;
+                                    height: min(220px, root.probe-history.length * 40px);
+                                    for row in root.probe-history : Selectable {
+                                        label: row.time + " " + row.model + " " + row.result + " " + row.summary;
+                                        height: 40px;
+                                        VerticalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            padding-top: 3px;
+                                            padding-bottom: 3px;
+                                            spacing: 1px;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                DataText {
+                                                    text: row.time;
+                                                    width: 110px;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: row.model;
+                                                    horizontal-stretch: 1;
+                                                    color: Theme.ink;
+                                                    overflow: elide;
+                                                    vertical-alignment: center;
+                                                }
+                                                Hint {
+                                                    text: row.result;
+                                                    width: 64px;
+                                                    color: Theme.status_ink(row.tone);
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            Hint {
+                                                text: row.summary;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
