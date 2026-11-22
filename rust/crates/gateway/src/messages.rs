@@ -784,14 +784,15 @@ fn process_event(
                 tool_action = true;
             }
         }
-        if event
-            .get("content_block")
-            .and_then(Value::as_object)
-            .and_then(|block| block.get("type"))
-            .and_then(Value::as_str)
-            == Some("tool_use")
-        {
-            tool_action = true;
+        if let Some(block) = event.get("content_block").and_then(Value::as_object) {
+            if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && block
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| !input.is_empty())
+            {
+                tool_action = true;
+            }
         }
         let event_type = event.get("type").and_then(Value::as_str);
         terminal = matches!(event_type, Some("message_stop" | "error"));
@@ -804,8 +805,15 @@ fn process_event(
     }
     state.usage.observe_text(thinking_piece);
     state.usage.observe_text(text_piece);
+    let content_block_text = event
+        .as_ref()
+        .and_then(|event| event.get("content_block"))
+        .and_then(Value::as_object)
+        .and_then(|block| block.get("text"))
+        .and_then(Value::as_str);
     let substantive = thinking_piece.is_some_and(|piece| !piece.is_empty())
         || text_piece.is_some_and(|piece| !piece.is_empty())
+        || content_block_text.is_some_and(|text| !text.is_empty())
         || tool_action;
     if substantive {
         // Prelude overflow and terminal-only streams commit without any

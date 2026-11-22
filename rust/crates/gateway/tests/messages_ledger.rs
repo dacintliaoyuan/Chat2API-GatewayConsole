@@ -451,6 +451,56 @@ fn a_terminal_only_messages_stream_does_not_record_a_first_token() {
 }
 
 #[test]
+fn a_tool_use_prelude_does_not_record_a_first_token() {
+    let temp = TempDir::new("um-rust-messages-tool-prelude-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            sse_event(
+                "message_start",
+                json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1", "type": "message", "role": "assistant",
+                        "model": "claude-x", "content": [], "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": {"input_tokens": 7, "output_tokens": 0},
+                    },
+                }),
+            ),
+            sse_event(
+                "content_block_start",
+                json!({"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "tool_use", "id": "toolu_1",
+                                        "name": "lookup", "input": {}}}),
+            ),
+            sse_event("message_stop", json!({"type": "message_stop"})),
+        ]
+        .into_iter()
+        .map(ChatChunk::now)
+        .collect(),
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request(true)).expect("stream messages");
+    let _ = client
+        .read_all(Duration::from_secs(5))
+        .expect("read stream");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert!(
+        rows[0].get("first_token_ms").is_none(),
+        "a tool_use header without arguments is prelude, not substantive output"
+    );
+}
+
+#[test]
 fn a_messages_prelude_overflow_does_not_record_a_first_token() {
     let temp = TempDir::new("um-rust-messages-prelude-overflow-");
     let stub = ChatStub::start();
