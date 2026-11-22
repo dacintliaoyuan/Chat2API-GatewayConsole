@@ -8,6 +8,7 @@ use std::rc::Rc;
 use slint::{ModelRc, VecModel};
 
 use crate::account::AccountSurface;
+use crate::models::{CatalogSurface, ModelRow as ModelViewRow};
 use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
 use crate::um_service::ServiceSurface;
 
@@ -150,5 +151,60 @@ impl ServiceSurface for MainWindow {
             Tone::Bad => 2,
             Tone::Neutral => 3,
         });
+    }
+}
+
+impl CatalogSurface for MainWindow {
+    fn set_models(&self, rows: &[ModelViewRow]) {
+        let rows: Vec<ModelRow> = rows
+            .iter()
+            .map(|row| ModelRow {
+                id: row.id.as_str().into(),
+                name: row.name.as_str().into(),
+                context: row.context.as_str().into(),
+                efforts: row.efforts.as_str().into(),
+                last_test: row.last_test.as_str().into(),
+                detail: row.detail.as_str().into(),
+            })
+            .collect();
+        self.set_um_models(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    fn set_status(&self, status: &str) {
+        self.set_um_model_status(status.into());
+    }
+
+    fn set_tone(&self, tone: Tone) {
+        self.set_um_model_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+    }
+
+    fn set_stale(&self, stale: bool) {
+        self.set_um_model_stale(stale);
+    }
+
+    fn set_empty(&self, empty: bool) {
+        self.set_um_model_empty(empty);
+    }
+
+    fn set_loading(&self, loading: bool) {
+        self.set_um_model_loading(loading);
+    }
+
+    fn selected_model(&self) -> String {
+        self.get_selected_model().to_string()
+    }
+
+    fn set_selected_model(&self, id: &str) {
+        self.set_selected_model(id.into());
+    }
+
+    fn set_detail(&self, title: &str, body: &str) {
+        self.set_um_model_detail_title(title.into());
+        self.set_um_model_detail(body.into());
     }
 }
