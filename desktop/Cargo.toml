@@ -12,6 +12,9 @@ publish = false
 [[bin]]
 name = "um-desktop"
 path = "src/main.rs"
+# The binary has no unit tests; skipping it keeps `cargo test` from
+# rebuilding a running `um-desktop.exe` (Windows locks it).
+test = false
 
 [dependencies]
 chrono = "0.4"
