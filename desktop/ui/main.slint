@@ -35,6 +35,29 @@ export struct FaultRow {
     evidence: string,
 }
 
+// One maintenance-menu row. `reason` stays empty while the action is enabled; a
+// closed row keeps the concrete reason instead of disappearing. The confirm copy
+// is the second step of the same action.
+export struct MaintenanceRow {
+    action: int,
+    label: string,
+    impact: string,
+    enabled: bool,
+    reason: string,
+    confirm-title: string,
+    confirm-body: string,
+    confirm-label: string,
+    danger: bool,
+}
+
+// One maintenance-record row. The app instance has no record source yet, so the
+// array stays empty and the area says 不适用 instead of drawing a table.
+export struct MaintenanceRecordRow {
+    at: string,
+    action: string,
+    result: string,
+}
+
 // One row of the settings page's UM model catalog (#153). The name/ID column
 // carries both, and `detail` is the full facts behind the row's 详情.
 export struct ModelRow {
@@ -262,6 +285,91 @@ component Card inherits Panel {
         enabled: root.clickable;
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activated(); }
+    }
+}
+
+// One maintenance-menu row. The row shows the impact while enabled and the
+// concrete reason while closed; the button only arms the shared confirmation, so
+// no action runs on the first click. Geometry is exposed so the headless tests
+// can drive the same click path the window uses.
+component MaintenanceItem inherits VerticalLayout {
+    in property <MaintenanceRow> item;
+    in property <bool> confirming: false;
+    in property <bool> busy: false;
+    callback activate();
+    callback confirmed();
+    callback cancelled();
+    out property <length> button-x: activate-button.absolute-position.x;
+    out property <length> button-y: activate-button.absolute-position.y;
+    out property <length> button-width: activate-button.width;
+    out property <length> button-height: activate-button.height;
+    out property <length> confirm-x: confirm-button.absolute-position.x;
+    out property <length> confirm-y: confirm-button.absolute-position.y;
+    out property <length> confirm-width: confirm-button.width;
+    out property <length> confirm-height: confirm-button.height;
+    out property <length> cancel-x: cancel-button.absolute-position.x;
+    out property <length> cancel-y: cancel-button.absolute-position.y;
+    out property <length> cancel-width: cancel-button.width;
+    out property <length> cancel-height: cancel-button.height;
+    spacing: 6px;
+    HorizontalLayout {
+        spacing: 8px;
+        cross-axis-alignment: center;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: start;
+            Text {
+                text: root.item.label;
+                color: Theme.ink;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            Hint { text: root.item.impact; }
+            if !root.item.enabled : Hint {
+                text: root.item.reason;
+                color: Theme.warn-text;
+            }
+        }
+        activate-button := ActionButton {
+            label: root.confirming ? "已选择" : "执行";
+            icon: root.confirming ? "check" : "play";
+            quiet: true;
+            enabled: root.item.enabled && !root.busy;
+            clicked => { root.activate(); }
+        }
+    }
+    // Always instantiated so the confirmation keeps a testable geometry; it
+    // only takes height while the row is armed.
+    confirm-panel := Panel {
+        visible: root.confirming;
+        height: root.confirming ? self.preferred-height : 0px;
+        preferred-height: confirm-content.preferred-height;
+        confirm-content := VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: root.item.confirm-title;
+                color: Theme.ink;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            Hint { text: root.item.confirm-body; }
+            HorizontalLayout {
+                spacing: 8px;
+                confirm-button := ActionButton {
+                    label: root.item.confirm-label;
+                    danger: root.item.danger;
+                    enabled: !root.busy;
+                    clicked => { root.confirmed(); }
+                }
+                cancel-button := ActionButton {
+                    label: "取消";
+                    quiet: true;
+                    clicked => { root.cancelled(); }
+                }
+            }
+        }
     }
 }
 
@@ -507,6 +615,159 @@ export component MainWindow inherits Window {
     in property <int> verify-tone: 3;
     in property <bool> verify-busy: false;
     in property <string> verify-action-label: "立即核验";
+    // The overview maintenance menu: five actions, their impact and the
+    // concrete reason a closed action shows. The first click only arms the
+    // shared confirmation; only its confirm button runs the action.
+    in-out property <bool> maintenance-menu-open: false;
+    in property <[MaintenanceRow]> maintenance-items: [
+        { action: 0, label: "", impact: "", enabled: false,
+            reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
+            confirm-label: "", danger: false },
+        { action: 1, label: "", impact: "", enabled: false,
+            reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
+            confirm-label: "", danger: false },
+        { action: 2, label: "", impact: "", enabled: false,
+            reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
+            confirm-label: "", danger: false },
+        { action: 3, label: "", impact: "", enabled: false,
+            reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
+            confirm-label: "", danger: false },
+        { action: 4, label: "", impact: "", enabled: false,
+            reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
+            confirm-label: "", danger: false }
+    ];
+    in-out property <int> maintenance-confirm: -1;
+    in property <string> maintenance-status;
+    in property <int> maintenance-status-tone: 3;
+    // The app instance has no console-state.sqlite3 source, so the records
+    // area says 不适用 and carries no rows instead of drawing an empty table.
+    in property <string> maintenance-records-status: "不适用（本机实例无维护记录来源）";
+    in property <int> maintenance-records-tone: 3;
+    in property <bool> maintenance-records-not-applicable: true;
+    in property <[MaintenanceRecordRow]> maintenance-records: [];
+    // A start/stop action runs through the existing supervisor; verify,
+    // on-demand login and restart delegate to their own cards.
+    in-out property <bool> maintenance-action-busy: false;
+    out property <bool> maintenance-busy:
+        root.verify-busy || root.account-busy || root.gateway-restarting
+        || root.maintenance-action-busy;
+    callback maintenance-act(int);
+    // Test seams: the row copy and geometry the headless tests read.
+    out property <bool> maintenance-verify-enabled: root.maintenance-items[0].enabled;
+    out property <string> maintenance-verify-note:
+        root.maintenance-items[0].enabled
+        ? root.maintenance-items[0].impact : root.maintenance-items[0].reason;
+    out property <bool> maintenance-login-enabled: root.maintenance-items[1].enabled;
+    out property <bool> maintenance-start-enabled: root.maintenance-items[2].enabled;
+    out property <string> maintenance-start-note:
+        root.maintenance-items[2].enabled
+        ? root.maintenance-items[2].impact : root.maintenance-items[2].reason;
+    out property <bool> maintenance-stop-enabled: root.maintenance-items[3].enabled;
+    out property <bool> maintenance-restart-enabled: root.maintenance-items[4].enabled;
+    out property <bool> maintenance-menu-visible: maintenance-menu.visible;
+    out property <length> maintenance-toggle-x: maintenance-toggle.absolute-position.x;
+    out property <length> maintenance-toggle-y: maintenance-toggle.absolute-position.y;
+    out property <length> maintenance-toggle-width: maintenance-toggle.width;
+    out property <length> maintenance-toggle-height: maintenance-toggle.height;
+    out property <length> maintenance-verify-x: maintenance-verify.button-x;
+    out property <length> maintenance-verify-y: maintenance-verify.button-y;
+    out property <length> maintenance-verify-width: maintenance-verify.button-width;
+    out property <length> maintenance-verify-height: maintenance-verify.button-height;
+    out property <length> maintenance-login-x: maintenance-login.button-x;
+    out property <length> maintenance-login-y: maintenance-login.button-y;
+    out property <length> maintenance-login-width: maintenance-login.button-width;
+    out property <length> maintenance-login-height: maintenance-login.button-height;
+    out property <length> maintenance-start-x: maintenance-start.button-x;
+    out property <length> maintenance-start-y: maintenance-start.button-y;
+    out property <length> maintenance-start-width: maintenance-start.button-width;
+    out property <length> maintenance-start-height: maintenance-start.button-height;
+    out property <length> maintenance-stop-x: maintenance-stop.button-x;
+    out property <length> maintenance-stop-y: maintenance-stop.button-y;
+    out property <length> maintenance-stop-width: maintenance-stop.button-width;
+    out property <length> maintenance-stop-height: maintenance-stop.button-height;
+    out property <length> maintenance-restart-x: maintenance-restart.button-x;
+    out property <length> maintenance-restart-y: maintenance-restart.button-y;
+    out property <length> maintenance-restart-width: maintenance-restart.button-width;
+    out property <length> maintenance-restart-height: maintenance-restart.button-height;
+    out property <bool> maintenance-confirm-visible: root.maintenance-confirm >= 0;
+    out property <string> maintenance-confirm-title:
+        root.maintenance-confirm == 0 ? root.maintenance-items[0].confirm-title
+        : root.maintenance-confirm == 1 ? root.maintenance-items[1].confirm-title
+        : root.maintenance-confirm == 2 ? root.maintenance-items[2].confirm-title
+        : root.maintenance-confirm == 3 ? root.maintenance-items[3].confirm-title
+        : root.maintenance-items[4].confirm-title;
+    out property <string> maintenance-confirm-body:
+        root.maintenance-confirm == 0 ? root.maintenance-items[0].confirm-body
+        : root.maintenance-confirm == 1 ? root.maintenance-items[1].confirm-body
+        : root.maintenance-confirm == 2 ? root.maintenance-items[2].confirm-body
+        : root.maintenance-confirm == 3 ? root.maintenance-items[3].confirm-body
+        : root.maintenance-items[4].confirm-body;
+    out property <string> maintenance-confirm-label:
+        root.maintenance-confirm == 0 ? root.maintenance-items[0].confirm-label
+        : root.maintenance-confirm == 1 ? root.maintenance-items[1].confirm-label
+        : root.maintenance-confirm == 2 ? root.maintenance-items[2].confirm-label
+        : root.maintenance-confirm == 3 ? root.maintenance-items[3].confirm-label
+        : root.maintenance-items[4].confirm-label;
+    out property <bool> maintenance-confirm-danger:
+        root.maintenance-confirm == 0 ? root.maintenance-items[0].danger
+        : root.maintenance-confirm == 1 ? root.maintenance-items[1].danger
+        : root.maintenance-confirm == 2 ? root.maintenance-items[2].danger
+        : root.maintenance-confirm == 3 ? root.maintenance-items[3].danger
+        : root.maintenance-items[4].danger;
+    out property <length> maintenance-confirm-x:
+        root.maintenance-confirm == 0 ? maintenance-verify.confirm-x
+        : root.maintenance-confirm == 1 ? maintenance-login.confirm-x
+        : root.maintenance-confirm == 2 ? maintenance-start.confirm-x
+        : root.maintenance-confirm == 3 ? maintenance-stop.confirm-x
+        : maintenance-restart.confirm-x;
+    out property <length> maintenance-confirm-y:
+        root.maintenance-confirm == 0 ? maintenance-verify.confirm-y
+        : root.maintenance-confirm == 1 ? maintenance-login.confirm-y
+        : root.maintenance-confirm == 2 ? maintenance-start.confirm-y
+        : root.maintenance-confirm == 3 ? maintenance-stop.confirm-y
+        : maintenance-restart.confirm-y;
+    out property <length> maintenance-confirm-width:
+        root.maintenance-confirm == 0 ? maintenance-verify.confirm-width
+        : root.maintenance-confirm == 1 ? maintenance-login.confirm-width
+        : root.maintenance-confirm == 2 ? maintenance-start.confirm-width
+        : root.maintenance-confirm == 3 ? maintenance-stop.confirm-width
+        : maintenance-restart.confirm-width;
+    out property <length> maintenance-confirm-height:
+        root.maintenance-confirm == 0 ? maintenance-verify.confirm-height
+        : root.maintenance-confirm == 1 ? maintenance-login.confirm-height
+        : root.maintenance-confirm == 2 ? maintenance-start.confirm-height
+        : root.maintenance-confirm == 3 ? maintenance-stop.confirm-height
+        : maintenance-restart.confirm-height;
+    out property <length> maintenance-cancel-x:
+        root.maintenance-confirm == 0 ? maintenance-verify.cancel-x
+        : root.maintenance-confirm == 1 ? maintenance-login.cancel-x
+        : root.maintenance-confirm == 2 ? maintenance-start.cancel-x
+        : root.maintenance-confirm == 3 ? maintenance-stop.cancel-x
+        : maintenance-restart.cancel-x;
+    out property <length> maintenance-cancel-y:
+        root.maintenance-confirm == 0 ? maintenance-verify.cancel-y
+        : root.maintenance-confirm == 1 ? maintenance-login.cancel-y
+        : root.maintenance-confirm == 2 ? maintenance-start.cancel-y
+        : root.maintenance-confirm == 3 ? maintenance-stop.cancel-y
+        : maintenance-restart.cancel-y;
+    out property <length> maintenance-cancel-width:
+        root.maintenance-confirm == 0 ? maintenance-verify.cancel-width
+        : root.maintenance-confirm == 1 ? maintenance-login.cancel-width
+        : root.maintenance-confirm == 2 ? maintenance-start.cancel-width
+        : root.maintenance-confirm == 3 ? maintenance-stop.cancel-width
+        : maintenance-restart.cancel-width;
+    out property <length> maintenance-cancel-height:
+        root.maintenance-confirm == 0 ? maintenance-verify.cancel-height
+        : root.maintenance-confirm == 1 ? maintenance-login.cancel-height
+        : root.maintenance-confirm == 2 ? maintenance-start.cancel-height
+        : root.maintenance-confirm == 3 ? maintenance-stop.cancel-height
+        : maintenance-restart.cancel-height;
+    out property <bool> maintenance-status-visible: !root.maintenance-status.is-empty;
+    out property <bool> maintenance-table-visible:
+        !root.maintenance-records-not-applicable
+        && root.maintenance-records.length > 0;
+    out property <int> maintenance-record-count: root.maintenance-records.length;
+    out property <bool> maintenance-busy-note-visible: root.maintenance-busy;
     in property <string> status-line;
     in property <int> status-tone: 0;
     // Inline clear confirmation: one click arms it, the next click clears.
@@ -1585,6 +1846,25 @@ export component MainWindow inherits Window {
                     opacity: root.page-opacity;
                     animate opacity { duration: Theme.glide; easing: ease-out; }
                     clicked => { root.request-copy(root.base-url + "/v1", 2); }
+                }
+                // The maintenance menu opens as an overlay so the overview's
+                // cards and the usage chart keep their default-window layout.
+                // The button takes the title row's own height, so opening the
+                // menu never moves the page content or clips the settings copy.
+                maintenance-toggle := ActionButton {
+                    label: "维护";
+                    icon: "settings";
+                    tooltip: "打开维护菜单";
+                    quiet: true;
+                    width: 76px;
+                    height: 24px;
+                    visible: root.page == 0;
+                    cross-axis-self-alignment: center;
+                    opacity: root.page-opacity;
+                    clicked => {
+                        root.maintenance-menu-open = !root.maintenance-menu-open;
+                        if (!root.maintenance-menu-open) { root.maintenance-confirm = -1; }
+                    }
                 }
             }
 
@@ -3091,6 +3371,133 @@ export component MainWindow inherits Window {
                                     tooltip: "复制实例数据路径";
                                     clicked => { root.copy-text(root.instance-path); }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            // The maintenance menu overlay: the app instance gateway is the UM
+            // service itself. A closed action shows its reason; the first click
+            // only arms the inline confirmation. The records area says 不适用
+            // because the app instance has no console-state.sqlite3 source.
+            maintenance-menu := Panel {
+                visible: root.maintenance-menu-open && root.page == 0;
+                x: page-host.width - self.width - 8px;
+                y: 36px;
+                width: min(520px, page-host.width - 16px);
+                height: maintenance-menu-content.preferred-height;
+                z: 20;
+                maintenance-menu-content := VerticalLayout {
+                    width: parent.width;
+                    padding: 12px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        SectionLabel {
+                            text: "维护";
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        ActionButton {
+                            label: "关闭维护菜单";
+                            icon: "close";
+                            icon-only: true;
+                            quiet: true;
+                            clicked => {
+                                root.maintenance-menu-open = false;
+                                root.maintenance-confirm = -1;
+                            }
+                        }
+                    }
+                    Hint { text: "每项动作先显示影响，二次确认后才执行。"; }
+                    maintenance-verify := MaintenanceItem {
+                        item: root.maintenance-items[0];
+                        confirming: root.maintenance-confirm == 0;
+                        busy: root.maintenance-busy;
+                        activate => { root.maintenance-confirm = 0; }
+                        confirmed => {
+                            root.maintenance-confirm = -1;
+                            root.maintenance-act(0);
+                        }
+                        cancelled => { root.maintenance-confirm = -1; }
+                    }
+                    maintenance-login := MaintenanceItem {
+                        item: root.maintenance-items[1];
+                        confirming: root.maintenance-confirm == 1;
+                        busy: root.maintenance-busy;
+                        activate => { root.maintenance-confirm = 1; }
+                        confirmed => {
+                            root.maintenance-confirm = -1;
+                            root.maintenance-act(1);
+                        }
+                        cancelled => { root.maintenance-confirm = -1; }
+                    }
+                    maintenance-start := MaintenanceItem {
+                        item: root.maintenance-items[2];
+                        confirming: root.maintenance-confirm == 2;
+                        busy: root.maintenance-busy;
+                        activate => { root.maintenance-confirm = 2; }
+                        confirmed => {
+                            root.maintenance-confirm = -1;
+                            root.maintenance-act(2);
+                        }
+                        cancelled => { root.maintenance-confirm = -1; }
+                    }
+                    maintenance-stop := MaintenanceItem {
+                        item: root.maintenance-items[3];
+                        confirming: root.maintenance-confirm == 3;
+                        busy: root.maintenance-busy;
+                        activate => { root.maintenance-confirm = 3; }
+                        confirmed => {
+                            root.maintenance-confirm = -1;
+                            root.maintenance-act(3);
+                        }
+                        cancelled => { root.maintenance-confirm = -1; }
+                    }
+                    maintenance-restart := MaintenanceItem {
+                        item: root.maintenance-items[4];
+                        confirming: root.maintenance-confirm == 4;
+                        busy: root.maintenance-busy;
+                        activate => { root.maintenance-confirm = 4; }
+                        confirmed => {
+                            root.maintenance-confirm = -1;
+                            root.maintenance-act(4);
+                        }
+                        cancelled => { root.maintenance-confirm = -1; }
+                    }
+                    if root.maintenance-busy : Hint {
+                        text: "同一操作正在进行，等待它结束";
+                        color: Theme.status_ink(1);
+                    }
+                    if !root.maintenance-status.is-empty : Hint {
+                        text: root.maintenance-status;
+                        color: Theme.status_ink(root.maintenance-status-tone);
+                    }
+                    Divider { }
+                    SectionLabel { text: "维护记录"; }
+                    Hint {
+                        text: root.maintenance-records-status;
+                        color: Theme.status_ink(root.maintenance-records-tone);
+                    }
+                    if root.maintenance-table-visible : VerticalLayout {
+                        spacing: 6px;
+                        for record-row in root.maintenance-records : HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: record-row.at;
+                                color: Theme.ink;
+                                font-size: 12px;
+                            }
+                            Text {
+                                text: record-row.action;
+                                color: Theme.ink;
+                                font-size: 12px;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: record-row.result;
+                                color: Theme.muted;
+                                font-size: 12px;
                             }
                         }
                     }
