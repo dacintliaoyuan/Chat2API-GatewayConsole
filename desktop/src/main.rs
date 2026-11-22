@@ -47,7 +47,7 @@ use um_desktop::log_history::{
 };
 use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
 use um_desktop::logstream::{
-    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
+    format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine,
 };
 use um_desktop::maintenance;
 use um_desktop::models;
@@ -98,12 +98,7 @@ impl LogUpdate {
 }
 
 fn status_tone(tone: Tone) -> i32 {
-    match tone {
-        Tone::Good => 0,
-        Tone::Warn => 1,
-        Tone::Bad => 2,
-        Tone::Neutral => 3,
-    }
+    um_desktop::ui::tone_index(tone)
 }
 
 fn theme_mode_index(theme: ThemeMode) -> i32 {
@@ -423,18 +418,6 @@ fn level_selection(window: &MainWindow) -> LevelSelection {
     )
 }
 
-fn sync_log_level(window: &MainWindow) {
-    window.set_log_filter_level(level_selection(window).log_level().index());
-}
-
-fn apply_level_selection(window: &MainWindow, levels: LevelSelection) {
-    let (error, warn, info, debug) = levels.flags();
-    window.set_log_level_error(error);
-    window.set_log_level_warn(warn);
-    window.set_log_level_info(info);
-    window.set_log_level_debug(debug);
-}
-
 fn history_sources(window: &MainWindow) -> Vec<String> {
     let options = window.get_log_source_options();
     (1..options.row_count())
@@ -496,7 +479,6 @@ fn load_log_history(
     if window.get_log_mode() != 1 {
         return;
     }
-    sync_log_level(window);
     let cursor = if append {
         navigation
             .lock()
@@ -743,19 +725,23 @@ fn apply_request_rows(window: &MainWindow, rows: &[usage::RequestRow]) {
     window.set_requests(ModelRc::from(rows.as_slice()));
 }
 
-fn apply_request_page(window: &MainWindow, page: &usage::RequestPage) {
-    let mut models = vec![String::from("全部模型")];
-    models.extend(page.models.iter().cloned());
+fn apply_request_page(
+    window: &MainWindow,
+    page: &usage::RequestPage,
+    catalog: Option<&models::CatalogView>,
+) {
+    let mut options = vec![String::from("全部模型")];
+    options.extend(models::request_model_options(&page.models, catalog));
     let selected = window.get_request_model_filter().to_string();
     let model_index = if selected.is_empty() {
         0
     } else {
-        models
+        options
             .iter()
             .position(|model| model == &selected)
             .map_or(0, |index| index as i32)
     };
-    let model_options = models
+    let model_options = options
         .iter()
         .map(|model| model.as_str().into())
         .collect::<Vec<slint::SharedString>>();
@@ -858,6 +844,7 @@ fn load_requests(
     window: &MainWindow,
     ledger: &Path,
     nav: &Arc<Mutex<usage::RequestNav>>,
+    catalog: &Arc<Mutex<Option<models::CatalogView>>>,
     direction: i32,
     mode: RequestLoad,
 ) {
@@ -895,6 +882,10 @@ fn load_requests(
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
+    let catalog = catalog
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
     if earlier {
         // Loading earlier appends history: the displayed rows, the selected
         // detail and the scroll position stay where they are.
@@ -972,7 +963,7 @@ fn load_requests(
             } else {
                 page
             };
-            apply_request_page(&window, &page);
+            apply_request_page(&window, &page, catalog.as_ref());
             window.set_newer_requests(nav.pages.len() > 1);
             // A failed refresh kept the appended rows and their 加载更早 cursor;
             // a successful page read restarts 加载更早 from this page.
@@ -1206,10 +1197,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     window.set_log_range(HistoryRange::from_log_range(loaded_config.settings.log_range).index());
-    apply_level_selection(
-        &window,
-        LevelSelection::from_log_level(loaded_config.settings.log_level),
-    );
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -2030,74 +2017,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    // The UM service cell starts the service through the gateway control route
-    // and re-reads the snapshot; a failure keeps the stopped state and reason.
-    let weak_start_service = window.as_weak();
-    let start_service_api = Arc::clone(&service_api);
-    let start_service_port = Arc::clone(&current_port);
-    let start_service_token = paths.control_token.clone();
-    let start_service_status = Arc::clone(&gateway_status);
-    let start_service_state = Arc::clone(&service_state);
-    window.on_start_um_service(move || {
-        let Some(window) = weak_start_service.upgrade() else {
-            return;
-        };
-        if window.get_um_service_busy() || QUIT_REQUESTED.load(Ordering::SeqCst) {
-            return;
-        }
-        let gateway = start_service_status
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        if !matches!(gateway.state, GatewayState::Running { .. }) {
-            window.set_um_service_start_status("网关未运行，先启动网关".into());
-            window.set_um_service_start_tone(status_tone(Tone::Warn));
-            return;
-        }
-        let token = match load_control_token(&start_service_token) {
-            Ok(token) => token,
-            Err(error) => {
-                window.set_um_service_start_status(format!("启动失败：{error}").into());
-                window.set_um_service_start_tone(status_tone(Tone::Bad));
-                return;
-            }
-        };
-        let previous = start_service_state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-            .unwrap_or_else(|| um_service::ServiceView::failure("尚未读取 UM 服务状态"));
-        window.set_um_service_busy(true);
-        window.set_um_service_start_status("正在启动 UM 服务…".into());
-        window.set_um_service_start_tone(status_tone(Tone::Warn));
-        let api = Arc::clone(&start_service_api);
-        let base = format!(
-            "http://127.0.0.1:{}",
-            start_service_port.load(Ordering::SeqCst)
-        );
-        let weak = window.as_weak();
-        let state = Arc::clone(&start_service_state);
-        std::thread::spawn(move || {
-            let result = um_service::start_and_refresh(&*api, &base, token.expose(), &previous);
-            let service = result.service.clone();
-            let refreshed = result.refreshed;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(window) = weak.upgrade() {
-                    window.set_um_service_busy(false);
-                    if !QUIT_REQUESTED.load(Ordering::SeqCst) {
-                        um_service::apply_start_result(&window, &result);
-                        if refreshed {
-                            *state
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                                Some(service);
-                        }
-                    }
-                }
-            });
-        });
-    });
-
     // The maintenance menu re-checks the same availability its rows show, then
     // runs the action through the seam each card already owns. Verify, on-demand
     // login and restart delegate to their own cards so there is one data path;
@@ -2230,6 +2149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ledger = paths.usage_log.clone();
     let request_ledger = ledger.clone();
     let request_page_nav = Arc::clone(&request_nav);
+    let request_page_catalog = Arc::clone(&catalog_state);
     let weak_request = window.as_weak();
     window.on_query_requests(move |direction| {
         if let Some(window) = weak_request.upgrade() {
@@ -2238,11 +2158,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 RequestLoad::Page
             };
-            load_requests(&window, &request_ledger, &request_page_nav, direction, mode);
+            load_requests(
+                &window,
+                &request_ledger,
+                &request_page_nav,
+                &request_page_catalog,
+                direction,
+                mode,
+            );
         }
     });
     let request_earlier_ledger = ledger.clone();
     let request_earlier_nav = Arc::clone(&request_nav);
+    let request_earlier_catalog = Arc::clone(&catalog_state);
     let weak_request = window.as_weak();
     window.on_load_earlier_requests(move || {
         if let Some(window) = weak_request.upgrade() {
@@ -2250,6 +2178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &window,
                 &request_earlier_ledger,
                 &request_earlier_nav,
+                &request_earlier_catalog,
                 0,
                 RequestLoad::Earlier,
             );
@@ -2257,6 +2186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let request_refresh_ledger = ledger.clone();
     let request_refresh_nav = Arc::clone(&request_nav);
+    let request_refresh_catalog = Arc::clone(&catalog_state);
     let weak_request = window.as_weak();
     window.on_refresh_requests(move || {
         if let Some(window) = weak_request.upgrade() {
@@ -2264,6 +2194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &window,
                 &request_refresh_ledger,
                 &request_refresh_nav,
+                &request_refresh_catalog,
                 0,
                 RequestLoad::Refresh,
             );
@@ -2586,7 +2517,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_level.upgrade() else {
             return;
         };
-        sync_log_level(&window);
         if window.get_log_mode() != 1 {
             return;
         }
@@ -2599,13 +2529,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &level_navigation,
             false,
         );
-    });
-
-    let weak_sync = window.as_weak();
-    window.on_sync_log_level(move || {
-        if let Some(window) = weak_sync.upgrade() {
-            sync_log_level(&window);
-        }
     });
 
     let weak_query = window.as_weak();
@@ -3274,7 +3197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match config::apply_reduce_transparency(transparency_path.as_deref(), &mut config, reduce) {
             Ok(()) => {
                 let status = if reduce {
-                    "外观：降低透明度已保存（当前界面无透明度效果）"
+                    "外观：已降低透明度"
                 } else {
                     "外观：透明度已恢复"
                 };

@@ -283,6 +283,23 @@ pub fn open_model<S: CatalogSurface>(surface: &S, view: Option<&CatalogView>, id
     surface.set_detail(row.name.as_str(), row.detail.as_str());
 }
 
+/// The request page's model dropdown. The ledger only lists models that already
+/// appear in the selected window, so a catalog model with no request yet would be
+/// impossible to select; the union keeps every catalog model selectable without a
+/// second HTTP read.
+pub fn request_model_options(ledger_models: &[String], catalog: Option<&CatalogView>) -> Vec<String> {
+    let mut models = ledger_models.to_vec();
+    if let Some(catalog) = catalog {
+        for model in &catalog.models {
+            if !models.iter().any(|known| known == &model.id) {
+                models.push(model.id.clone());
+            }
+        }
+    }
+    models.sort();
+    models
+}
+
 fn context_label(item: &Value) -> String {
     let declared = item
         .get("context")

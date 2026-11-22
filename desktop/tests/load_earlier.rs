@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc};
 use um_desktop::usage::{
-    read_requests, Coverage, EarlierLoad, EarlierOutcome, Range, RequestChart, RequestNav,
-    RequestPage, RequestRow, RequestSummary,
+    read_requests, Coverage, EarlierLoad, EarlierOutcome, Range, ReadingView, RequestChart,
+    RequestNav, RequestPage, RequestRow, RequestSummary,
 };
 
 mod main_ui {
@@ -133,8 +133,14 @@ fn usage_row(key: &str, at: &str) -> RequestRow {
         at: at.into(),
         model: "fixture-model".into(),
         result: "成功".into(),
-        input: "10".into(),
-        output: "2".into(),
+        input: ReadingView {
+            value: Some("10".into()),
+            note: None,
+        },
+        output: ReadingView {
+            value: Some("2".into()),
+            note: None,
+        },
         duration: "900 ms".into(),
         first_token: "100 ms".into(),
         detail: String::new(),

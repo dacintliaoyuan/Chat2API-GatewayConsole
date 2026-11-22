@@ -17,6 +17,10 @@ export global Theme {
     // Mirrors the system choice from Palette. It stays in-out so the headless
     // tests can drive the same derivation without a native window.
     in-out property <bool> system-dark: Palette.color-scheme == ColorScheme.dark;
+    // Turns off the remaining semi-transparent layers: card and overlay shadows
+    // and the badge fill that normally sits on the accent. It is a real visual
+    // effect, not a saved-only preference.
+    in-out property <bool> reduce-transparency: false;
     out property <bool> dark: theme-mode == 2 || (theme-mode == 0 && system-dark);
 
     out property <color> background: dark ? #1a1a1c : #f5f5f7;
@@ -64,7 +68,8 @@ export global Theme {
     out property <color> data: dark ? #f5f5f7 : #1d1d1f;
     out property <color> hover: dark ? #2c2c2e : #f0f0f2;
     out property <color> selected: dark ? #2c2c2e : #e8f2ff;
-    out property <color> card-shadow: dark ? #00000066 : #00000012;
+    out property <color> card-shadow: reduce-transparency ? transparent
+        : dark ? #00000066 : #00000012;
     out property <string> font-display: "Segoe UI";
     out property <string> font-body: "Segoe UI";
     out property <string> font-data: "Consolas";
@@ -271,7 +276,8 @@ export component FocusAction inherits Rectangle {
         if !root.badge.is-empty : Rectangle {
             height: 17px;
             border-radius: 4px;
-            background: root.primary ? Theme.on-accent.with-alpha(0.22) : Theme.accent-soft;
+            background: root.primary ? (Theme.reduce-transparency
+                ? Theme.on-accent : Theme.on-accent.with-alpha(0.22)) : Theme.accent-soft;
             HorizontalLayout {
                 padding-left: 5px;
                 padding-right: 5px;
@@ -334,7 +340,7 @@ export component Segmented inherits Rectangle {
         background: Theme.accent-soft;
         drop-shadow-offset-y: 1px;
         drop-shadow-blur: 2px;
-        drop-shadow-color: #00000014;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000014;
         animate x, width { duration: Theme.settle; easing: ease-out; }
         animate background { duration: Theme.quick; easing: ease-in-out; }
     }
@@ -396,6 +402,9 @@ export component Dropdown inherits Rectangle {
     in property <[string]> options;
     in-out property <int> current-index: 0;
     in property <string> label: "选项";
+    // Hover and assistive copy for the closed set; the tooltip never changes
+    // the control's layout height.
+    in property <string> tooltip: "";
     in property <bool> enabled: true;
     callback selected(int);
     out property <bool> open: self.is-open;
@@ -486,7 +495,7 @@ export component Dropdown inherits Rectangle {
         border-color: Theme.edge;
         drop-shadow-offset-y: 4px;
         drop-shadow-blur: 12px;
-        drop-shadow-color: #00000022;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000022;
         ListView {
             x: 4px;
             y: 4px;
@@ -527,8 +536,10 @@ export component Dropdown inherits Rectangle {
     }
     accessible-role: combobox;
     accessible-label: root.label;
+    accessible-description: root.tooltip;
     accessible-expanded: root.is-open;
     accessible-action-default => { root.is-open = !root.is-open; }
+    if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
 export component Field inherits VerticalLayout {

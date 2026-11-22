@@ -712,7 +712,7 @@ pub fn sanitize_reason(raw: &str) -> String {
     redacted.chars().take(MAX_REASON_CHARS).collect()
 }
 
-fn redact_secrets(text: &str) -> String {
+pub(crate) fn redact_secrets(text: &str) -> String {
     let mut output = String::new();
     let mut rest = text;
     loop {

@@ -53,12 +53,7 @@ impl AccountSurface for MainWindow {
     }
 
     fn set_overview_tone(&self, tone: Tone) {
-        self.set_account_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_account_tone(tone_index(tone));
     }
 
     fn set_overview_pulse(&self, value: bool) {
@@ -88,12 +83,7 @@ impl VerifySurface for MainWindow {
     }
 
     fn set_verify_tone_index(&self, tone: Tone) {
-        self.set_verify_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_verify_tone(tone_index(tone));
     }
 
     fn set_verify_action_text(&self, value: &str) {
@@ -107,12 +97,7 @@ impl FaultSurface for MainWindow {
     }
 
     fn set_fault_tone(&self, tone: Tone) {
-        self.set_upstream_fault_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_upstream_fault_tone(tone_index(tone));
     }
 
     fn set_fault_check(&self, check: &str) {
@@ -152,20 +137,11 @@ impl ServiceSurface for MainWindow {
     }
 
     fn set_service_tone(&self, tone: Tone) {
-        self.set_um_service_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_um_service_tone(tone_index(tone));
     }
 
     fn set_service_checked_at(&self, value: &str) {
         self.set_um_service_checked_at(value.into());
-    }
-
-    fn set_service_can_start(&self, value: bool) {
-        self.set_um_service_can_start(value);
     }
 
     fn set_service_gateway_missing(&self, value: bool) {
@@ -178,19 +154,6 @@ impl ServiceSurface for MainWindow {
 
     fn set_service_can_start_gateway(&self, value: bool) {
         self.set_um_service_can_start_gateway(value);
-    }
-
-    fn set_service_start_status(&self, value: &str) {
-        self.set_um_service_start_status(value.into());
-    }
-
-    fn set_service_start_tone(&self, tone: Tone) {
-        self.set_um_service_start_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
     }
 }
 
@@ -315,12 +278,7 @@ impl CatalogSurface for MainWindow {
     }
 
     fn set_tone(&self, tone: Tone) {
-        self.set_um_model_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_um_model_tone(tone_index(tone));
     }
 
     fn set_stale(&self, stale: bool) {
@@ -435,7 +393,7 @@ impl ProbeSurface for MainWindow {
     }
 }
 
-fn tone_index(tone: Tone) -> i32 {
+pub fn tone_index(tone: Tone) -> i32 {
     match tone {
         Tone::Good => 0,
         Tone::Warn => 1,
@@ -515,12 +473,7 @@ impl MaintenanceSurface for MainWindow {
 
     fn set_status(&self, status: &str, tone: Tone) {
         self.set_maintenance_status(status.into());
-        self.set_maintenance_status_tone(match tone {
-            Tone::Good => 0,
-            Tone::Warn => 1,
-            Tone::Bad => 2,
-            Tone::Neutral => 3,
-        });
+        self.set_maintenance_status_tone(tone_index(tone));
     }
 }
 
@@ -533,8 +486,8 @@ impl RecentIssuesSurface for MainWindow {
                 count: row.count.as_str().into(),
                 detail: row.detail.as_str().into(),
                 tone: tone_index(row.tone),
-                evidence_result: row.evidence.map_or(-1, |query| query.result),
-                evidence_window: row.evidence.map_or(0, |query| query.window),
+                evidence_result: row.evidence.map_or(-1, |query| query.result.index()),
+                evidence_window: row.evidence.map_or(0, |query| query.window.index()),
                 evidence_note: row.evidence_note.as_str().into(),
             })
             .collect();

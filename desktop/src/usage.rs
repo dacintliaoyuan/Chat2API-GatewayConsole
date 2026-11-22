@@ -75,8 +75,12 @@ pub struct RequestRow {
     pub at: String,
     pub model: String,
     pub result: String,
-    pub input: String,
-    pub output: String,
+    /// Input tokens as the ledger reported them; a missing reading keeps its
+    /// reason instead of folding to zero or a bare dash.
+    pub input: ReadingView,
+    /// Output tokens as the ledger reported them; a missing reading keeps its
+    /// reason instead of folding to zero or a bare dash.
+    pub output: ReadingView,
     pub duration: String,
     pub first_token: String,
     pub detail: String,
@@ -884,8 +888,8 @@ fn request_row(row: &Value) -> RequestRow {
         at: format_at(row["at"].as_i64()),
         model: text(&row["model"], "未知模型"),
         result: result.into(),
-        input: display(&row["input"]),
-        output: display(&row["output"]),
+        input: reading_view(&row["input"]),
+        output: reading_view(&row["output"]),
         duration,
         first_token,
         detail,
@@ -965,7 +969,7 @@ pub fn read_request_logs(
 /// sanitized lines already filtered by [`read_request_logs`].
 pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
     let mut detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n{}\n{}\n{}\n{}\n耗时  {}\n{}\n{}\n{}\n输入  {} Token  ·  输出  {} Token\n\n结果说明\n{}\n\n{}",
+        "{}  {}\n模型  {}\n请求 ID  {}\n{}\n{}\n{}\n{}\n耗时  {}\n{}\n{}\n{}\n{}\n{}\n\n结果说明\n{}\n\n{}",
         row.at,
         row.result,
         row.model,
@@ -978,8 +982,8 @@ pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
         first_token_line(row),
         reading_line("速度", &row.speed, " Token/秒", ""),
         format!("速度口径  {}", row.speed_basis),
-        row.input,
-        row.output,
+        reading_line("输入", &row.input, " Token", ""),
+        reading_line("输出", &row.output, " Token", ""),
         row.detail,
         retry_lines(row)
     );

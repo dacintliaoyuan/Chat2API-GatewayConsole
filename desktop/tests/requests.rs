@@ -90,6 +90,37 @@ fn click_result_option(window: &main_ui::MainWindow, index: usize) {
 }
 
 #[test]
+fn the_model_dropdown_keeps_catalog_models_that_have_no_request_yet() {
+    let catalog = um_desktop::models::parse_catalog(&json!({
+        "models": [{"id": "catalog-only"}, {"id": "alpha"}]
+    }))
+    .expect("catalog");
+
+    let options = um_desktop::models::request_model_options(
+        &["ledger-only".to_string(), "alpha".to_string()],
+        Some(&catalog),
+    );
+    assert_eq!(
+        options,
+        vec![
+            "alpha".to_string(),
+            "catalog-only".to_string(),
+            "ledger-only".to_string()
+        ],
+        "the dropdown must union the ledger and the catalog without duplicates"
+    );
+
+    let ledger_only = um_desktop::models::request_model_options(
+        &["ledger-only".to_string(), "alpha".to_string()],
+        None,
+    );
+    assert_eq!(
+        ledger_only,
+        vec!["alpha".to_string(), "ledger-only".to_string()]
+    );
+}
+
+#[test]
 fn the_filter_row_lists_models_six_results_and_the_search_scope() {
     let window = request_window();
     window.set_request_model_options(ModelRc::from([

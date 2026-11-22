@@ -65,7 +65,6 @@ fn running_service() -> ServiceView {
         detail: "端口 7999 · PID 4321".to_string(),
         tone: Tone::Good,
         checked_at: "核对于 10:00:00".to_string(),
-        can_start: false,
         gateway_missing: false,
         gateway_detail: String::new(),
         can_start_gateway: false,
@@ -185,8 +184,8 @@ fn request_failures_truncations_and_client_disconnects_come_from_the_ledger() {
     assert_eq!(
         failed.evidence,
         Some(IssueQuery {
-            result: 2,
-            window: 0,
+            result: um_desktop::config::RequestResult::Failed,
+            window: um_desktop::config::TimeRange::Today,
         })
     );
     assert_eq!(failed.tone, Tone::Bad);
@@ -198,8 +197,8 @@ fn request_failures_truncations_and_client_disconnects_come_from_the_ledger() {
     assert_eq!(
         truncated.evidence,
         Some(IssueQuery {
-            result: 3,
-            window: 0,
+            result: um_desktop::config::RequestResult::Truncated,
+            window: um_desktop::config::TimeRange::Today,
         })
     );
 
@@ -213,8 +212,8 @@ fn request_failures_truncations_and_client_disconnects_come_from_the_ledger() {
     assert_eq!(
         disconnected.evidence,
         Some(IssueQuery {
-            result: 4,
-            window: 0,
+            result: um_desktop::config::RequestResult::ClientDisconnected,
+            window: um_desktop::config::TimeRange::Today,
         })
     );
     assert_eq!(disconnected.tone, Tone::Warn);
@@ -435,7 +434,6 @@ fn stopped_service() -> ServiceView {
         detail: "端口 7999 · 本实例网关已停止".to_string(),
         tone: Tone::Bad,
         checked_at: "核对于 10:00:00".to_string(),
-        can_start: true,
         gateway_missing: false,
         gateway_detail: String::new(),
         can_start_gateway: false,
@@ -448,7 +446,6 @@ fn missing_gateway_service() -> ServiceView {
         detail: "网关未运行，先启动网关".to_string(),
         tone: Tone::Bad,
         checked_at: "核对时间未知".to_string(),
-        can_start: false,
         gateway_missing: true,
         gateway_detail: "本实例网关尚未启动".to_string(),
         can_start_gateway: true,
@@ -461,7 +458,6 @@ fn failed_service() -> ServiceView {
         detail: "connection refused".to_string(),
         tone: Tone::Bad,
         checked_at: "核对时间未知".to_string(),
-        can_start: false,
         gateway_missing: false,
         gateway_detail: String::new(),
         can_start_gateway: false,
@@ -728,8 +724,8 @@ fn request_issue() -> DomainIssueRow {
         detail: "今天账本记录了 2 次失败；重试不重复计请求".to_string(),
         tone: Tone::Bad,
         evidence: Some(IssueQuery {
-            result: 2,
-            window: 0,
+            result: um_desktop::config::RequestResult::Failed,
+            window: um_desktop::config::TimeRange::Today,
         }),
         evidence_note: String::new(),
     }

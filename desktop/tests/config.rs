@@ -5,8 +5,9 @@ use slint::ComponentHandle;
 use um_desktop::config::{
     apply_settings, apply_theme, config_path, load_from, load_from_with_warnings, model_api_bind,
     parse_config, parse_config_with_warnings, save_to, save_window_settings, validate_port,
-    AutoRefresh, DesktopConfig, LoadOutcome, LogLevel, LogRange, MotionPreference, RequestResult,
-    Settings, SidebarMode, ThemeMode, TimeRange, DEFAULT_MODEL_API_PORT, MODEL_API_HOST,
+    AutoRefresh, DesktopConfig, LoadOutcome, LogLevels, LogRange, MotionPreference,
+    RequestResult, Settings, SidebarMode, ThemeMode, TimeRange, DEFAULT_MODEL_API_PORT,
+    MODEL_API_HOST,
 };
 use um_desktop::ui::*;
 
@@ -35,7 +36,8 @@ fn assert_default_settings(settings: &Settings) {
     assert_eq!(settings.request_result, RequestResult::All);
     assert_eq!(settings.request_search, "");
     assert_eq!(settings.log_range, LogRange::Live);
-    assert_eq!(settings.log_level, LogLevel::All);
+    assert_eq!(settings.log_level, LogLevels::default());
+    assert!(settings.log_level.flags() == (false, false, false, false));
     assert_eq!(settings.log_keyword, "");
     assert_eq!(settings.sidebar, SidebarMode::Expanded);
     assert_eq!(settings.reduced_motion, MotionPreference::System);
@@ -50,7 +52,7 @@ fn non_default_settings() -> Settings {
         request_result: RequestResult::Failed,
         request_search: "fixture".to_string(),
         log_range: LogRange::Month,
-        log_level: LogLevel::Warn,
+        log_level: LogLevels::from_flags(false, true, false, false),
         log_keyword: "timeout".to_string(),
         sidebar: SidebarMode::IconsOnly,
         reduced_motion: MotionPreference::Reduced,
@@ -236,7 +238,7 @@ fn saving_writes_every_setting_to_desktop_json() {
     assert_eq!(body["request_result"], "failed", "{text}");
     assert_eq!(body["request_search"], "fixture", "{text}");
     assert_eq!(body["log_range"], "30d", "{text}");
-    assert_eq!(body["log_level"], "warn", "{text}");
+    assert_eq!(body["log_level"], serde_json::json!(["warn"]), "{text}");
     assert_eq!(body["log_keyword"], "timeout", "{text}");
     assert_eq!(body["sidebar"], "icons", "{text}");
     assert_eq!(body["reduced_motion"], "reduced", "{text}");
@@ -249,6 +251,47 @@ fn older_config_without_settings_uses_defaults_without_warnings() {
         .expect("old config");
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_default_settings(&config.settings);
+}
+
+#[test]
+fn log_level_accepts_the_legacy_single_value_and_the_multi_select_array() {
+    let legacy = parse_config(r#"{"version":2,"model_api_port":7999,"log_level":"warn"}"#)
+        .expect("legacy single level loads");
+    assert_eq!(
+        legacy.settings.log_level,
+        LogLevels::from_flags(false, true, false, false)
+    );
+
+    let multi =
+        parse_config(r#"{"version":2,"model_api_port":7999,"log_level":["error","info"]}"#)
+            .expect("level array loads");
+    assert_eq!(
+        multi.settings.log_level,
+        LogLevels::from_flags(true, false, true, false)
+    );
+
+    let (invalid, warnings) =
+        parse_config_with_warnings(r#"{"version":2,"model_api_port":7999,"log_level":["error","trace"]}"#)
+            .expect("unknown level names are warnings");
+    assert_eq!(invalid.settings.log_level, LogLevels::default());
+    assert!(
+        warnings.iter().any(|warning| warning.contains("log_level")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn an_invalid_log_range_lists_every_accepted_value() {
+    let (_, warnings) = parse_config_with_warnings(
+        r#"{"version":2,"model_api_port":7999,"log_range":"yesterday"}"#,
+    )
+    .expect("invalid log range is a warning");
+    let warning = warnings
+        .iter()
+        .find(|warning| warning.contains("log_range"))
+        .expect("log_range warning");
+    assert!(warning.contains("24h"), "{warning}");
+    assert!(warning.contains("all"), "{warning}");
 }
 
 #[test]
@@ -380,7 +423,10 @@ fn applying_a_saved_config_sets_the_window_properties() {
     assert_eq!(window.get_request_result(), 2);
     assert_eq!(window.get_request_keyword().as_str(), "fixture");
     assert_eq!(window.get_log_period(), 3);
-    assert_eq!(window.get_log_filter_level(), 2);
+    assert!(!window.get_log_level_error());
+    assert!(window.get_log_level_warn());
+    assert!(!window.get_log_level_info());
+    assert!(!window.get_log_level_debug());
     assert_eq!(window.get_log_filter_keyword().as_str(), "timeout");
     assert!(!window.get_allow_motion(), "减少动效必须关闭界面动效");
 }
@@ -396,7 +442,8 @@ fn window_settings_survive_a_restart() {
     first.set_request_result(1);
     first.set_request_keyword("fixture".into());
     first.set_log_period(2);
-    first.set_log_filter_level(3);
+    first.set_log_level_error(true);
+    first.set_log_level_info(true);
     first.set_log_filter_keyword("timeout".into());
     let mut config = DesktopConfig::default();
     save_window_settings(Some(&path), &mut config, &first).expect("save window settings");
@@ -416,7 +463,10 @@ fn window_settings_survive_a_restart() {
     assert_eq!(second.get_request_result(), 1);
     assert_eq!(second.get_request_keyword().as_str(), "fixture");
     assert_eq!(second.get_log_period(), 2);
-    assert_eq!(second.get_log_filter_level(), 3);
+    assert!(second.get_log_level_error());
+    assert!(!second.get_log_level_warn());
+    assert!(second.get_log_level_info());
+    assert!(!second.get_log_level_debug());
     assert_eq!(second.get_log_filter_keyword().as_str(), "timeout");
 }
 
