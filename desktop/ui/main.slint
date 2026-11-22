@@ -481,6 +481,9 @@ export component MainWindow inherits Window {
     // A failed gateway offers one recovery action; restart interrupts in-flight
     // requests, so it asks once before acting.
     callback restart-gateway();
+    // The shell persists the page filters and the auto-refresh interval when any
+    // of them changes, so a restart opens the same view.
+    callback settings-changed();
     in-out property <bool> confirm-restart: false;
     in-out property <bool> gateway-restarting: false;
     in property <int> settings-tone: 3;
@@ -983,10 +986,18 @@ export component MainWindow inherits Window {
         if (root.auto-refresh > 0 && !root.refresh-paused && !root.refreshing) {
             auto-refresh-timer.restart();
         }
+        root.settings-changed();
     }
     changed auto-refresh-index => {
         root.auto-refresh = root.auto-refresh-seconds(root.auto-refresh-index);
     }
+    changed usage-period => { root.settings-changed(); }
+    changed request-period => { root.settings-changed(); }
+    changed request-result => { root.settings-changed(); }
+    changed request-keyword => { root.settings-changed(); }
+    changed log-period => { root.settings-changed(); }
+    changed log-filter-level => { root.settings-changed(); }
+    changed log-filter-keyword => { root.settings-changed(); }
     changed refreshing => {
         if (root.refreshing) {
             root.refresh-rotation = 0deg;
