@@ -1251,20 +1251,29 @@ export component MainWindow inherits Window {
                                 visible: !root.compact;
                                 height: root.compact ? 0px : self.preferred-height;
                                 spacing: 14px;
+                                // Equal thirds keep the long detail text from
+                                // squeezing the other two columns into vertical
+                                // text at the wide layout.
                                 state-gateway := StateCell {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
                                     label: "网关"; value: root.gateway-value;
                                     detail: root.gateway-detail; tone: root.gateway-tone;
                                     pulse: root.gateway-pulse;
                                 }
                                 state-login := StateCell {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
                                     label: "UM 登录"; value: root.account-label;
                                     detail: root.account-state-detail(); tone: root.account-tone;
                                     pulse: root.account-pulse;
                                 }
                                 state-upstream := StateCell {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
                                     label: "上游"; value: root.upstream-value;
                                     detail: root.upstream-detail; tone: root.upstream-tone;
                                     pulse: root.upstream-pulse;
