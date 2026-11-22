@@ -508,7 +508,9 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
                 detail_label: format!("北京时间 {}", bucket.label).into(),
                 token_value: bucket.tokens.into(),
                 request_value: bucket.requests.into(),
-                token_count: bucket.token_count.map_or(f32::NAN, |value| value as f32),
+                // The axis reads in 亿 so nine-digit labels do not crowd the
+                // plot; the exact total stays in the card and the selection line.
+                token_count: bucket.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0),
                 request_count: bucket.request_count.map_or(f32::NAN, |value| value as f32),
             })
             .collect::<Vec<_>>()

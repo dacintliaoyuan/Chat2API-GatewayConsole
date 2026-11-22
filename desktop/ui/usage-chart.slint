@@ -575,7 +575,8 @@ export component UsageChart inherits Panel {
                     VerticalLayout {
                         spacing: 3px;
                         Heading { text: "用量趋势"; }
-                        Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
+                        Hint { text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
+                        + (root.show-requests ? " · 单位：次" : " · 单位：亿"); }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     right-header := HorizontalLayout {
