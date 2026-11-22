@@ -2028,9 +2028,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("um-desktop: {error}");
         }
     });
-    if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, window.get_theme_dark()) {
-        eprintln!("um-desktop: {error}");
-    }
+    // The native window exists only once the event loop runs; the first DWM
+    // apply waits for it instead of reporting a missing window at startup.
+    let initial_dark = window.get_theme_dark();
+    slint::Timer::single_shot(Duration::from_millis(250), move || {
+        if let Err(error) = dwm::apply_dark_title_bar(instance::WINDOW_TITLE, initial_dark) {
+            eprintln!("um-desktop: {error}");
+        }
+    });
     slint::run_event_loop_until_quit()?;
     Ok(())
 }
