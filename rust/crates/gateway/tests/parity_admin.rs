@@ -535,3 +535,62 @@ fn the_admin_reads_distinguish_missing_tokens_from_foreign_origins() {
         json!("method_not_allowed")
     );
 }
+
+#[test]
+fn the_admin_model_catalog_fresh_read_is_strict_and_never_serves_the_cache() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    stub.set(StubBehaviour {
+        models_body: Some(json!({
+            "object": "list",
+            "data": [{"id": "fixture-model-a", "name": "Fixture A"}],
+        })),
+        ..StubBehaviour::default()
+    });
+    let gateway = start_local_gateway(&stub, &temp);
+
+    let first = admin_get(&gateway, "/admin/models");
+    assert_eq!(first.status, 200, "{:?}", first.body);
+    assert_eq!(first.json()["fresh"], json!(false));
+
+    stub.set(StubBehaviour {
+        models_status: 503,
+        models_body: None,
+        ..StubBehaviour::default()
+    });
+    let cached = admin_get(&gateway, "/admin/models");
+    assert_eq!(cached.status, 200, "{:?}", cached.body);
+    let body = cached.json();
+    assert_eq!(body["fresh"], json!(false));
+    assert_eq!(body["models"].as_array().expect("cached models").len(), 1);
+
+    let fresh = admin_get(&gateway, "/admin/models?fresh=1");
+    assert_eq!(fresh.status, 502, "{:?}", fresh.body);
+    assert_eq!(
+        error_body(&fresh)["error"]["code"],
+        json!("models_unavailable")
+    );
+
+    let invalid = admin_get(&gateway, "/admin/models?fresh=yes");
+    assert_eq!(invalid.status, 400, "{:?}", invalid.body);
+    assert_eq!(
+        error_body(&invalid)["error"]["code"],
+        json!("invalid_request")
+    );
+
+    stub.set(StubBehaviour {
+        models_body: Some(json!({
+            "object": "list",
+            "data": [
+                {"id": "fixture-model-a", "name": "Fixture A"},
+                {"id": "fixture-model-b", "name": "Fixture B"},
+            ],
+        })),
+        ..StubBehaviour::default()
+    });
+    let refreshed = admin_get(&gateway, "/admin/models?fresh=1");
+    assert_eq!(refreshed.status, 200, "{:?}", refreshed.body);
+    let body = refreshed.json();
+    assert_eq!(body["fresh"], json!(true));
+    assert_eq!(body["models"].as_array().expect("fresh models").len(), 2);
+}

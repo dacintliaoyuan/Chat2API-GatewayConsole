@@ -43,6 +43,7 @@ use um_desktop::instance::{self, InstanceError};
 use um_desktop::logstream::{
     format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
 };
+use um_desktop::models;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::ui::*;
@@ -55,6 +56,7 @@ static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
+static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -1074,6 +1076,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
     let upstream_faults_path = paths.upstream_faults.clone();
+    // The settings page's UM model catalog. Every read is strict (`fresh=1`):
+    // it runs when the gateway first becomes running, after a restart or port
+    // change, and on every manual refresh. A failed read keeps the previous rows
+    // and marks them stale; a legal empty catalog clears the rows.
+    let catalog_state: Arc<Mutex<Option<models::CatalogView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&catalog_state);
+        std::thread::spawn(move || {
+            let reader = models::HttpCatalogReader::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut was_running = false;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = MODELS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let refresh = epoch != last_epoch;
+                let started = running && (!was_running || last_port != Some(port));
+                if !refresh && !started {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                was_running = running;
+                let previous = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let view = if !running {
+                    models::catalog_failure(
+                        format!("本实例网关未就绪：{}", gateway.state.detail()),
+                        previous.as_ref(),
+                    )
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => models::refresh_catalog(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                            previous.as_ref(),
+                        ),
+                        Err(error) => models::catalog_failure(error, previous.as_ref()),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_catalog(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+    let weak_models = window.as_weak();
+    window.on_refresh_um_models(move || {
+        if let Some(window) = weak_models.upgrade() {
+            window.set_um_model_loading(true);
+            window.set_um_model_status("正在刷新 UM 模型目录…".into());
+            window.set_um_model_tone(3);
+        }
+        MODELS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_models = window.as_weak();
+    let open_catalog = Arc::clone(&catalog_state);
+    window.on_open_model(move |id| {
+        let Some(window) = weak_models.upgrade() else {
+            return;
+        };
+        let state = open_catalog
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        models::open_model(&window, state.as_ref(), id.as_str());
+    });
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);

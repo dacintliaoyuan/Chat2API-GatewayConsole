@@ -35,6 +35,17 @@ export struct FaultRow {
     evidence: string,
 }
 
+// One row of the settings page's UM model catalog (#153). The name/ID column
+// carries both, and `detail` is the full facts behind the row's 详情.
+export struct ModelRow {
+    id: string,
+    name: string,
+    context: string,
+    efforts: string,
+    last-test: string,
+    detail: string,
+}
+
 // One navigation entry. The page number lives next to its label so the rail and
 // the page title can never drift apart again.
 export struct NavEntry {
@@ -584,6 +595,19 @@ export component MainWindow inherits Window {
     in-out property <bool> confirm-restart: false;
     in-out property <bool> gateway-restarting: false;
     in property <int> settings-tone: 3;
+    // The settings page's UM model catalog: a failed refresh keeps the previous
+    // rows and marks them stale; a legal empty catalog says 无模型.
+    in property <[ModelRow]> um-models;
+    in property <string> um-model-status: "尚未读取 UM 模型目录";
+    in property <int> um-model-tone: 3;
+    in property <bool> um-model-stale;
+    in property <bool> um-model-loading;
+    in property <bool> um-model-empty;
+    in-out property <string> selected-model;
+    in property <string> um-model-detail-title;
+    in property <string> um-model-detail;
+    callback refresh-um-models();
+    callback open-model(string);
     in property <string> config-path;
     in property <string> instance-path;
     // Test seam: the layout tests expand the instance card without a pointer.
@@ -947,6 +971,23 @@ export component MainWindow inherits Window {
     out property <length> settings-refresh-width: settings-refresh.width;
     out property <length> settings-refresh-height: settings-refresh.height;
     out property <bool> settings-refresh-enabled: settings-refresh.enabled;
+    // Test seams: the settings catalog's table, empty state, stale mark and detail.
+    out property <int> um-model-row-count: root.um-models.length;
+    out property <bool> um-model-table-visible: um-model-list.visible;
+    out property <bool> um-model-empty-visible: um-model-empty.visible;
+    out property <bool> um-model-stale-visible: um-model-stale-tag.visible;
+    out property <bool> um-model-refresh-enabled: um-model-refresh.enabled;
+    out property <length> um-model-refresh-x: um-model-refresh.absolute-position.x;
+    out property <length> um-model-refresh-y: um-model-refresh.absolute-position.y;
+    out property <length> um-model-refresh-width: um-model-refresh.width;
+    out property <length> um-model-refresh-height: um-model-refresh.height;
+    out property <length> um-model-list-x: um-model-list.absolute-position.x;
+    out property <length> um-model-list-y: um-model-list.absolute-position.y;
+    out property <length> um-model-list-width: um-model-list.width;
+    out property <length> um-model-list-height: um-model-list.height;
+    out property <bool> um-model-detail-visible: um-model-detail.visible;
+    out property <string> um-model-detail-title-text: um-model-detail.title;
+    out property <string> um-model-detail-body: um-model-detail.body;
     out property <length> theme-mode-x: theme-mode-control.absolute-position.x;
     out property <length> theme-mode-y: theme-mode-control.absolute-position.y;
     out property <length> theme-mode-width: theme-mode-control.width;
@@ -2554,6 +2595,95 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    // The UM model catalog: a strict refresh, one row per model
+                    // and the full facts behind each row's 详情. A failed refresh
+                    // keeps the rows and marks them 已过期; an empty catalog is
+                    // the legal 无模型 state instead of stale rows.
+                    model-card := Card {
+                        inset: 16px;
+                        gap: 12px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                SectionLabel { text: "UM 模型"; horizontal-stretch: 1; vertical-alignment: center; }
+                                um-model-stale-tag := Tag {
+                                    visible: root.um-model-stale;
+                                    label: "已过期";
+                                    tone: 1;
+                                    cross-axis-self-alignment: center;
+                                }
+                                um-model-refresh := ActionButton {
+                                    label: "刷新 UM 模型列表";
+                                    icon: "refresh";
+                                    quiet: true;
+                                    enabled: !root.um-model-loading;
+                                    tooltip: "严格从 UM 取新目录，不使用缓存";
+                                    clicked => { root.refresh-um-models(); }
+                                }
+                            }
+                            um-model-status-hint := Hint {
+                                text: root.um-model-status;
+                                color: Theme.status_ink(root.um-model-tone);
+                            }
+                            um-model-empty := VerticalLayout {
+                                visible: root.um-model-empty;
+                                alignment: center;
+                                spacing: 4px;
+                                Hint { text: "无模型"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
+                                Hint { text: "后端合法地返回了 0 个模型"; horizontal-alignment: center; }
+                            }
+                            um-model-header := HorizontalLayout {
+                                visible: root.um-models.length > 0;
+                                height: 20px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Hint { text: "模型名称 / ID"; horizontal-stretch: 1; vertical-alignment: center; }
+                                Hint { text: "上下文信息"; width: root.compact ? 90px : 120px; vertical-alignment: center; }
+                                Hint { text: "思考档位"; width: root.compact ? 100px : 150px; vertical-alignment: center; }
+                                Hint { text: "最近测试"; horizontal-stretch: 1; vertical-alignment: center; }
+                            }
+                            um-model-list := ListView {
+                                visible: root.um-models.length > 0;
+                                height: min(240px, root.um-models.length * 56px);
+                                for item in root.um-models : Selectable {
+                                    label: item.name + " " + item.id + " " + item.context + " " + item.efforts + " " + item.last-test;
+                                    height: 56px;
+                                    selected: root.selected-model == item.id;
+                                    activate => { root.open-model(item.id); }
+                                    VerticalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        padding-top: 5px;
+                                        padding-bottom: 5px;
+                                        spacing: 2px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                spacing: 1px;
+                                                Text { text: item.name; color: Theme.ink; font-weight: 600; overflow: elide; vertical-alignment: center; }
+                                                DataText { text: item.id; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                                            }
+                                            Hint { text: item.context; width: root.compact ? 90px : 120px; vertical-alignment: center; }
+                                            Hint { text: item.efforts; width: root.compact ? 100px : 150px; vertical-alignment: center; }
+                                            Hint { text: item.last-test; horizontal-stretch: 1; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                            }
+                            um-model-detail := TextDetails {
+                                visible: !root.selected-model.is-empty;
+                                height: self.visible ? 190px : 0px;
+                                animate height { duration: Theme.settle; easing: ease-out; }
+                                title: root.um-model-detail-title;
+                                body: root.um-model-detail;
+                                closed => { root.selected-model = ""; }
                             }
                         }
                     }
