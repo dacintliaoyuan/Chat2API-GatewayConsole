@@ -179,7 +179,8 @@ impl RequestResult {
 }
 
 /// The log page's time range. The live bucket is the file tail; the rest are
-/// history reads.
+/// history reads. `Day` and `All` are appended after the original four indices so
+/// an older saved document keeps its meaning.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LogRange {
     #[default]
@@ -187,6 +188,8 @@ pub enum LogRange {
     Today,
     Week,
     Month,
+    Day,
+    All,
 }
 
 impl LogRange {
@@ -196,6 +199,8 @@ impl LogRange {
             Self::Today => 1,
             Self::Week => 2,
             Self::Month => 3,
+            Self::Day => 4,
+            Self::All => 5,
         }
     }
 
@@ -204,6 +209,8 @@ impl LogRange {
             1 => Self::Today,
             2 => Self::Week,
             3 => Self::Month,
+            4 => Self::Day,
+            5 => Self::All,
             _ => Self::Live,
         }
     }
@@ -214,6 +221,8 @@ impl LogRange {
             Self::Today => "today",
             Self::Week => "7d",
             Self::Month => "30d",
+            Self::Day => "24h",
+            Self::All => "all",
         }
     }
 
@@ -223,6 +232,8 @@ impl LogRange {
             "today" => Some(Self::Today),
             "7d" => Some(Self::Week),
             "30d" => Some(Self::Month),
+            "24h" => Some(Self::Day),
+            "all" => Some(Self::All),
             _ => None,
         }
     }

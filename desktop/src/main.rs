@@ -40,9 +40,11 @@ use um_desktop::gateway::{
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logstream::{
-    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
+use um_desktop::log_history::{
+    self, append_history_rows, HistoryClient, HistoryQuery, HistoryRange, HttpHistoryClient,
+    LevelSelection,
 };
+use um_desktop::logstream::{format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine};
 use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
@@ -242,8 +244,26 @@ fn log_row(line: &StreamLine) -> LogRow {
         id: format!("{}:{:x}", line.id.offset, line.id.hash).into(),
         at: time.label.into(),
         level: level.into(),
+        source: "chat2api".into(),
         text: line.entry.text.clone().into(),
         detail: format!("{}  {level}\n\n{}", time.precise, line.detail).into(),
+    }
+}
+
+/// One history row already carries the gateway's level and source labels.
+fn history_row(row: &log_history::HistoryRow) -> LogRow {
+    let time = format_log_time(row.at, chrono::Local::now());
+    LogRow {
+        id: row.key.clone().into(),
+        at: time.label.into(),
+        level: row.level.clone().into(),
+        source: row.source.clone().into(),
+        text: row.text.clone().into(),
+        detail: format!(
+            "{}  {} · {}\n\n{}",
+            time.precise, row.level, row.source, row.detail
+        )
+        .into(),
     }
 }
 
@@ -311,7 +331,7 @@ fn service_view(
 }
 
 fn apply_logs(window: &MainWindow, update: &LogUpdate) {
-    if window.get_log_period() != 0 {
+    if window.get_log_mode() != 0 {
         return;
     }
     if let Some(reason) = &update.failure {
@@ -323,8 +343,7 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     }
     let acknowledge_refresh = window.get_log_refresh_pending();
 
-    let level = LevelFilter::from_index(window.get_log_filter_level());
-    let keyword = window.get_log_filter_keyword().trim().to_lowercase();
+    // The live layer is the unfiltered tail; the history filters never reach it.
     let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
     let filter_changed = APPLIED_FILTER_EPOCH.swap(epoch, Ordering::SeqCst) != epoch;
     let follow = window.get_log_follow();
@@ -342,8 +361,8 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
         follow,
         window.get_log_scroll_y(),
         window.get_new_log_count(),
-        level,
-        &keyword,
+        LevelFilter::All,
+        "",
     );
     if plan.rebuild {
         model.set_vec(plan.rows.iter().map(log_row).collect::<Vec<_>>());
@@ -359,8 +378,6 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     let visible = model.row_count();
     let status = if total == 0 {
         "本实例暂无日志记录".to_string()
-    } else if visible == 0 {
-        format!("最新 {total} 条中没有匹配的日志")
     } else if visible == total {
         format!("实时 · 最近 {total} 条")
     } else {
@@ -368,117 +385,235 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     };
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
-    // A live stream reads as healthy; an empty or filtered list stays neutral.
-    window.set_log_tone(if total == 0 { 3 } else { status_tone(Tone::Good) });
+    // A live stream reads as healthy; an empty list stays neutral.
+    window.set_log_tone(if total == 0 {
+        3
+    } else {
+        status_tone(Tone::Good)
+    });
     window.set_log_refresh_pending(false);
     if acknowledge_refresh {
         window.set_log_refreshed(true);
     }
+    window.set_log_history_note("".into());
     window.set_log_version(window.get_log_version().wrapping_add(1));
     window.set_log_updated_at(clock_now().into());
 }
 
 #[derive(Default)]
 struct HistoryNav {
-    pages: Vec<Option<u64>>,
-    older: Option<u64>,
+    rows: Vec<log_history::HistoryRow>,
+    cursor: Option<String>,
     generation: u64,
 }
 
-fn load_historical_logs(
+fn level_selection(window: &MainWindow) -> LevelSelection {
+    LevelSelection::from_flags(
+        window.get_log_level_error(),
+        window.get_log_level_warn(),
+        window.get_log_level_info(),
+        window.get_log_level_debug(),
+    )
+}
+
+fn sync_log_level(window: &MainWindow) {
+    window.set_log_filter_level(level_selection(window).log_level().index());
+}
+
+fn apply_level_selection(window: &MainWindow, levels: LevelSelection) {
+    let (error, warn, info, debug) = levels.flags();
+    window.set_log_level_error(error);
+    window.set_log_level_warn(warn);
+    window.set_log_level_info(info);
+    window.set_log_level_debug(debug);
+}
+
+fn history_sources(window: &MainWindow) -> Vec<String> {
+    let options = window.get_log_source_options();
+    (1..options.row_count())
+        .filter_map(|index| options.row_data(index))
+        .map(|source| source.to_string())
+        .collect()
+}
+
+fn apply_history_sources(window: &MainWindow, sources: &[String]) {
+    let mut options = vec![String::from("全部来源")];
+    options.extend(sources.iter().cloned());
+    let selected = window.get_log_source().to_string();
+    let index = if selected.is_empty() {
+        0
+    } else {
+        options
+            .iter()
+            .position(|source| source == &selected)
+            .map_or(0, |index| index as i32)
+    };
+    let options = options
+        .iter()
+        .map(|source| source.as_str().into())
+        .collect::<Vec<slint::SharedString>>();
+    window.set_log_source_options(ModelRc::from(options.as_slice()));
+    window.set_log_source_index(index);
+    if index == 0 && !selected.is_empty() {
+        window.set_log_source("".into());
+    }
+}
+
+fn apply_history_failure(window: &MainWindow, nav: &mut HistoryNav, reason: String) {
+    let previous = log_history::HistoryView {
+        status: String::new(),
+        tone: Tone::Neutral,
+        rows: nav.rows.clone(),
+        sources: history_sources(window),
+        earlier: nav.cursor.clone(),
+        empty: false,
+        note: String::new(),
+    };
+    let failure = log_history::history_failure(reason, Some(&previous));
+    window.set_log_status(failure.status.into());
+    window.set_log_tone(status_tone(failure.tone));
+    window.set_older_logs(nav.cursor.is_some());
+    window.set_log_history_note("".into());
+    window.set_log_refresh_pending(false);
+    window.set_log_refreshed(false);
+}
+
+fn load_log_history(
     window: &MainWindow,
-    path: &Path,
+    client: &Arc<dyn HistoryClient>,
+    base_url: &str,
+    token_path: &Path,
     navigation: &Arc<Mutex<HistoryNav>>,
-    direction: i32,
+    append: bool,
 ) {
-    let period = window.get_log_period();
-    if period == 0 {
-        window.set_log_status("正在读取实时日志…".into());
-        window.set_log_follow(true);
-        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
-        REFRESH_LOGS.store(true, Ordering::SeqCst);
+    if window.get_log_mode() != 1 {
         return;
     }
-
-    let (before, generation) = {
+    sync_log_level(window);
+    let cursor = if append {
+        navigation
+            .lock()
+            .expect("log history navigation poisoned")
+            .cursor
+            .clone()
+    } else {
+        None
+    };
+    if append && cursor.is_none() {
+        window.set_older_logs(false);
+        window.set_log_history_note("没有更早记录".into());
+        return;
+    }
+    let query = HistoryQuery {
+        range: HistoryRange::from_index(window.get_log_range()),
+        levels: level_selection(window),
+        source: window.get_log_source().to_string(),
+        keyword: window.get_log_filter_keyword().to_string(),
+        cursor,
+        limit: log_history::HISTORY_LIMIT,
+    };
+    let (generation, previous_count) = {
         let mut nav = navigation.lock().expect("log history navigation poisoned");
-        match direction {
-            1 => match nav.older {
-                Some(cursor) => nav.pages.push(Some(cursor)),
-                None => return,
-            },
-            -1 if nav.pages.len() > 1 => {
-                nav.pages.pop();
-            }
-            -1 => return,
-            _ => {
-                nav.pages.clear();
-                nav.pages.push(None);
-            }
+        if !append {
+            nav.rows.clear();
+            nav.cursor = None;
         }
         nav.generation = nav.generation.wrapping_add(1);
-        (nav.pages.last().copied().flatten(), nav.generation)
+        (nav.generation, nav.rows.len())
     };
-    let path = path.to_path_buf();
+    let base = base_url.to_string();
+    let token_path = token_path.to_path_buf();
     let weak = window.as_weak();
     let navigation = Arc::clone(navigation);
-    let level = LevelFilter::from_index(window.get_log_filter_level());
-    let keyword = window.get_log_filter_keyword().to_string();
+    let client = Arc::clone(client);
     window.set_older_logs(false);
-    window.set_newer_logs(false);
-    window.set_log_status("正在读取历史日志…".into());
+    window.set_log_status(
+        if append {
+            "正在读取更早的日志…"
+        } else {
+            "正在读取历史日志…"
+        }
+        .into(),
+    );
     window.set_log_tone(3);
+    window.set_log_history_note("".into());
     std::thread::spawn(move || {
-        let now = chrono::Local::now();
-        let days = match period {
-            2 => 6,
-            3 => 29,
-            _ => 0,
-        };
-        let since = now
-            .date_naive()
-            .checked_sub_days(chrono::Days::new(days))
-            .and_then(|date| date.and_hms_opt(0, 0, 0))
-            .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
-            .map_or_else(
-                || (now - chrono::Duration::days(days as i64 + 1)).timestamp_millis(),
-                |time| time.timestamp_millis(),
-            );
-        let result = read_history(&path, before, since, level, &keyword);
+        let result = load_control_token(&token_path)
+            .and_then(|token| client.read_history(&base, &token, &query));
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else { return };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             let mut nav = navigation.lock().expect("log history navigation poisoned");
-            if window.get_log_period() != period || nav.generation != generation {
+            if window.get_log_mode() != 1 || nav.generation != generation {
                 return;
             }
             let model = window.get_logs();
             let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
                 return;
             };
+            let acknowledge_refresh = window.get_log_refresh_pending();
             match result {
-                Ok(result) => {
-                    let count = result.lines.len();
-                    nav.older = result.older;
-                    window.set_older_logs(nav.older.is_some());
-                    window.set_newer_logs(nav.pages.len() > 1);
-                    model.set_vec(result.lines.iter().map(log_row).collect::<Vec<_>>());
-                    window.set_log_scroll_y(0.0);
-                    let text = if count == 0 {
-                        "本页没有符合条件的记录".to_string()
-                    } else {
-                        format!("历史日志 · 本页 {count} 条")
-                    };
-                    window.set_log_status(text.into());
-                    window.set_log_tone(3);
-                    window.set_log_updated_at(clock_now().into());
-                }
-                Err(error) => {
-                    nav.older = None;
-                    window.set_older_logs(false);
-                    window.set_newer_logs(nav.pages.len() > 1);
-                    window.set_log_status(format!("刷新失败：历史日志读取失败：{error}").into());
-                    window.set_log_tone(status_tone(Tone::Bad));
-                }
+                Ok(payload) => match log_history::parse_history_payload(&payload) {
+                    Ok(view) if view.tone == Tone::Bad => {
+                        apply_history_failure(&window, &mut nav, view.status)
+                    }
+                    Ok(view) => {
+                        let mut view = view;
+                        view.rows = log_history::filter_history_rows(&view.rows, &query.keyword);
+                        view.empty = view.rows.is_empty();
+                        if view.empty {
+                            view.status = if query.keyword.trim().is_empty() {
+                                "读取范围内没有符合条件的日志".to_string()
+                            } else {
+                                "本页没有符合关键词的日志".to_string()
+                            };
+                            view.tone = Tone::Neutral;
+                        } else if !query.keyword.trim().is_empty() {
+                            view.status = format!("历史 · 本页 {} 条", view.rows.len());
+                            view.tone = Tone::Good;
+                        }
+                        let rows = if append {
+                            append_history_rows(&nav.rows, &view)
+                        } else {
+                            view.rows.clone()
+                        };
+                        nav.rows = rows.clone();
+                        nav.cursor = view.earlier.clone();
+                        if append {
+                            model.extend(rows.iter().skip(previous_count).map(history_row));
+                        } else {
+                            model.set_vec(rows.iter().map(history_row).collect::<Vec<_>>());
+                            window.set_log_scroll_y(0.0);
+                            window.set_open_log_id("".into());
+                        }
+                        apply_history_sources(&window, &view.sources);
+                        window.set_older_logs(nav.cursor.is_some());
+                        window.set_log_history_note(if nav.cursor.is_none() {
+                            "没有更早记录".into()
+                        } else {
+                            "".into()
+                        });
+                        window.set_log_status(
+                            if append {
+                                format!("历史 · 已加载 {} 条", rows.len())
+                            } else {
+                                view.status.clone()
+                            }
+                            .into(),
+                        );
+                        window.set_log_tone(status_tone(view.tone));
+                        window.set_log_total(rows.len() as i32);
+                        window.set_log_updated_at(clock_now().into());
+                        window.set_log_version(window.get_log_version().wrapping_add(1));
+                        window.set_log_refresh_pending(false);
+                        if acknowledge_refresh {
+                            window.set_log_refreshed(true);
+                        }
+                    }
+                    Err(reason) => apply_history_failure(&window, &mut nav, reason),
+                },
+                Err(reason) => apply_history_failure(&window, &mut nav, reason),
             }
         });
     });
@@ -1056,6 +1191,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_settings_tone(status_tone(settings_tone));
     window.set_theme_mode(theme_mode_index(loaded_config.theme));
     config::apply_settings(&window, &loaded_config, allow_motion());
+    window.set_log_mode(
+        if matches!(loaded_config.settings.log_range, config::LogRange::Live) {
+            0
+        } else {
+            1
+        },
+    );
+    window.set_log_range(HistoryRange::from_log_range(loaded_config.settings.log_range).index());
+    apply_level_selection(
+        &window,
+        LevelSelection::from_log_level(loaded_config.settings.log_level),
+    );
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -2112,25 +2259,140 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let history_client: Arc<dyn HistoryClient> = Arc::new(HttpHistoryClient::new());
     let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
-    let weak_history = window.as_weak();
-    let history_path = service_log.clone();
-    let nav_for_filter = Arc::clone(&history_navigation);
-    window.on_apply_log_filter(move |_, _| {
-        if let Some(window) = weak_history.upgrade() {
-            if window.get_log_period() != 0 {
-                load_historical_logs(&window, &history_path, &nav_for_filter, 0);
-            } else {
-                FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
-                REFRESH_LOGS.store(true, Ordering::SeqCst);
-            }
+    let history_token = paths.control_token.clone();
+
+    let weak_mode = window.as_weak();
+    let mode_client = Arc::clone(&history_client);
+    let mode_navigation = Arc::clone(&history_navigation);
+    let mode_token = history_token.clone();
+    let mode_port = Arc::clone(&current_port);
+    window.on_select_log_mode(move |index| {
+        let Some(window) = weak_mode.upgrade() else {
+            return;
+        };
+        window.set_log_mode(index);
+        if index == 0 {
+            window.set_log_period(0);
+            window.set_log_history_note("".into());
+            window.set_log_follow(true);
+            FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
+            REFRESH_LOGS.store(true, Ordering::SeqCst);
+            window.set_log_status("正在读取实时日志…".into());
+            window.set_log_tone(3);
+            return;
+        }
+        window.set_log_period(
+            HistoryRange::from_index(window.get_log_range())
+                .log_range()
+                .index(),
+        );
+        let base = format!("http://127.0.0.1:{}", mode_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &mode_client,
+            &base,
+            &mode_token,
+            &mode_navigation,
+            false,
+        );
+    });
+
+    let weak_range = window.as_weak();
+    let range_client = Arc::clone(&history_client);
+    let range_navigation = Arc::clone(&history_navigation);
+    let range_token = history_token.clone();
+    let range_port = Arc::clone(&current_port);
+    window.on_select_log_range(move |index| {
+        let Some(window) = weak_range.upgrade() else {
+            return;
+        };
+        window.set_log_range(index);
+        window.set_log_period(HistoryRange::from_index(index).log_range().index());
+        let base = format!("http://127.0.0.1:{}", range_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &range_client,
+            &base,
+            &range_token,
+            &range_navigation,
+            false,
+        );
+    });
+
+    let weak_level = window.as_weak();
+    let level_client = Arc::clone(&history_client);
+    let level_navigation = Arc::clone(&history_navigation);
+    let level_token = history_token.clone();
+    let level_port = Arc::clone(&current_port);
+    window.on_toggle_log_level(move |_| {
+        let Some(window) = weak_level.upgrade() else {
+            return;
+        };
+        sync_log_level(&window);
+        if window.get_log_mode() != 1 {
+            return;
+        }
+        let base = format!("http://127.0.0.1:{}", level_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &level_client,
+            &base,
+            &level_token,
+            &level_navigation,
+            false,
+        );
+    });
+
+    let weak_sync = window.as_weak();
+    window.on_sync_log_level(move || {
+        if let Some(window) = weak_sync.upgrade() {
+            sync_log_level(&window);
         }
     });
-    let weak_history = window.as_weak();
-    window.on_log_history(move |_, direction| {
-        if let Some(window) = weak_history.upgrade() {
-            load_historical_logs(&window, &service_log, &history_navigation, direction);
+
+    let weak_query = window.as_weak();
+    let query_client = Arc::clone(&history_client);
+    let query_navigation = Arc::clone(&history_navigation);
+    let query_token = history_token.clone();
+    let query_port = Arc::clone(&current_port);
+    window.on_query_log_history(move || {
+        let Some(window) = weak_query.upgrade() else {
+            return;
+        };
+        if window.get_refreshing() {
+            window.set_log_refresh_pending(true);
         }
+        let base = format!("http://127.0.0.1:{}", query_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &query_client,
+            &base,
+            &query_token,
+            &query_navigation,
+            false,
+        );
+    });
+
+    let weak_earlier = window.as_weak();
+    let earlier_client = Arc::clone(&history_client);
+    let earlier_navigation = Arc::clone(&history_navigation);
+    let earlier_token = history_token.clone();
+    let earlier_port = Arc::clone(&current_port);
+    window.on_load_earlier_logs(move || {
+        let Some(window) = weak_earlier.upgrade() else {
+            return;
+        };
+        let base = format!("http://127.0.0.1:{}", earlier_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &earlier_client,
+            &base,
+            &earlier_token,
+            &earlier_navigation,
+            true,
+        );
     });
 
     let weak_skip = window.as_weak();
