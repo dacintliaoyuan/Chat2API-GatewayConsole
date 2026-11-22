@@ -1014,6 +1014,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     supervision,
                     &saved,
                 );
+                if PAUSED.load(Ordering::SeqCst) {
+                    // The window was hidden or minimized while the probe was
+                    // in flight; the resume pass reads again before applying.
+                    continue;
+                }
                 *auth_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
