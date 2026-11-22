@@ -1002,6 +1002,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_admin = Arc::new(HttpAuthAdmin::new());
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
+    let upstream_faults_path = paths.upstream_faults.clone();
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);
@@ -1012,6 +1013,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::thread::spawn(move || {
             let mut has_success = false;
             let mut last_failure: Option<String> = None;
+            let mut last_faults: Option<overview::FaultHistory> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1043,6 +1045,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // The window was hidden or minimized while the probe was
                     // in flight; the resume pass reads again before applying.
                     continue;
+                }
+                let faults = overview::read_fault_history(&upstream_faults_path);
+                if last_faults.as_ref() != Some(&faults) {
+                    last_faults = Some(faults.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            overview::apply_fault_history(&window, &faults);
+                        }
+                    });
                 }
                 *auth_state
                     .lock()

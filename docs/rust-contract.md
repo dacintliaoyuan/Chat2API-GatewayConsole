@@ -489,6 +489,14 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | GET/POST | 未列入别名的 `/api/*` | 本地控制令牌；仅 local 角色装配，cloud 角色 501 `local_api_surface_s1a` | 上游 `api/*` 透传 |
 | GET | `/admin/auth/status`、`/admin/auth/verify` | 本地控制令牌 | 认证状态观察；单次只读凭据核验 |
 | POST | `/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 启动/加入一轮登录；取消本轮登录（服务继续运行） |
+| GET | `/admin/models` | 本地控制令牌 | 桌面实例模型目录：名称/ID、声明上下文、思考档位、最近测试 |
+| GET/POST/DELETE | `/admin/model-context/probes` | 本地控制令牌 | 读探测历史/队列；POST 执行探测；DELETE 停止后续请求 |
+| GET | `/admin/um/services` | 本地控制令牌 | 本实例网关服务状态：端口/PID/状态 |
+| POST | `/admin/um/services/start` | 本地控制令牌 | 幂等启动；不拉起第二个进程 |
+| GET | `/admin/um/login-rounds` | 本地控制令牌 | 登录轮次历史（读网关已写的 `login-history.jsonl`） |
+| GET | `/admin/um/logs` | 本地控制令牌 | 有界服务日志历史；`since`/`until`/`level`/`source`/`cursor`/`limit` |
+| GET | `/admin/um/maintenance` | 本地控制令牌 | 维护操作记录；本实例无来源时明确 `unavailable` |
+| GET | `/admin/connection` | 本地控制令牌 | 接入信息：Base URL、接口类型、hints |
 | POST | `/admin/share/revoke` | 本地控制令牌 | 关闭某分享 Key 的在途请求 |
 | POST | `/admin/shutdown` | 本地控制令牌 | 异步停止进程 |
 | OPTIONS | 任意路径 | 无 | 204，CORS 允许方法与头 |
@@ -503,6 +511,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 目录只允许规范 `/v1/models`、`beta=true` 和单个 `limit`（1..1000，规范十进制）查询；其他查询 404 `route_not_shared`（`chat2api/share_auth.py:32-72`）。
 - 目录默认附加 `--effort-model` 注册的 virtual effort 模型（`<base>-Fast/-Low/-Medium/-High`）；base 不在上游快照时不附加，已存在的 variant id 不重复。`X-Chat2Api-Models: raw-fresh` 跳过 virtual 模型、要求 fresh 上游结果并在响应带 `X-Chat2Api-Raw-Models: 1`（`chat2api/chat2api.py:6172-6235,8259-8291`）。
 - `/api/*` 兼容别名是本机/非分享面，不在 Cloudflare 白名单内，也不经分享 Key 门；分享模式只保证四条 `/v1` 路径的公网语义（`chat2api/chat2api.py:6196-6236`、`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
+- 桌面实例 admin 读面（#146）只读本实例回环端口：`/admin/models` 复用上游 `/api/models` 与缓存；`/admin/model-context/probes` 复用同一上游客户端与凭据回退，不新建 UM 客户端；探测历史写入显式 `CHAT2API_MODEL_PROBE_STATE_FILE` 或 `usage_log` 同目录的 `model-context-probes.json`，没有路径时只在进程内。`/admin/um/logs` 是有界尾读（1 MiB / 200 行），缺失文件是带 `missing` 覆盖状态的合法空读。`/admin/um/maintenance` 在本实例不运行 8001 控制台时返回 `unavailable`，不伪造空表。所有读面都要求 loopback + 控制令牌，错误分别是 `control_denied_endpoint` 与 `control_denied_token`。
 - 未列入别名的 `/api/*` 透传只在 local 角色装配：控制令牌 `X-Admin-Control`、loopback peer/Host、无 Origin；GET/POST 都转发上游 `api/*`，POST body 必须是 JSON object（空 body 视为 `{}`）。cloud 角色保持 501 `local_api_surface_s1a`，不转发（`chat2api/chat2api.py:7892-7930,8292-8326,8447-8482`）。
 
 ### 5.2 请求与响应

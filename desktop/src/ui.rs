@@ -3,8 +3,12 @@
 //! The binary and the headless tests share one generated copy so the config
 //! bridge can set the same properties the running window uses.
 
+use std::rc::Rc;
+
+use slint::{ModelRc, VecModel};
+
 use crate::account::AccountSurface;
-use crate::overview::Tone;
+use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
 
 slint::include_modules!();
 
@@ -52,5 +56,46 @@ impl AccountSurface for MainWindow {
 
     fn set_credential_status(&self, value: &str) {
         self.set_credential_status(value.into());
+    }
+}
+
+impl FaultSurface for MainWindow {
+    fn set_fault_status(&self, status: &str) {
+        self.set_upstream_fault_status(status.into());
+    }
+
+    fn set_fault_tone(&self, tone: Tone) {
+        self.set_upstream_fault_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+    }
+
+    fn set_fault_check(&self, check: &str) {
+        self.set_upstream_fault_check(check.into());
+    }
+
+    fn set_fault_active(&self, active: Option<&FaultViewRow>) {
+        self.set_upstream_fault_active(active.is_some());
+        let (title, detail) = match active {
+            Some(row) => (row.title.as_str(), row.detail.as_str()),
+            None => ("", ""),
+        };
+        self.set_upstream_fault_active_title(title.into());
+        self.set_upstream_fault_active_detail(detail.into());
+    }
+
+    fn set_fault_history(&self, rows: &[FaultViewRow]) {
+        let rows: Vec<FaultRow> = rows
+            .iter()
+            .map(|row| FaultRow {
+                title: row.title.as_str().into(),
+                detail: row.detail.as_str().into(),
+                evidence: row.evidence.as_str().into(),
+            })
+            .collect();
+        self.set_upstream_fault_history(ModelRc::from(Rc::new(VecModel::from(rows))));
     }
 }

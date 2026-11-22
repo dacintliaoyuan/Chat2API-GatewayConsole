@@ -27,6 +27,14 @@ export struct RequestRow {
     detail: string,
 }
 
+// One row of the upstream fault history card. `evidence` stays empty for the
+// active fault; a recovered row keeps the recovery source, status and detail.
+export struct FaultRow {
+    title: string,
+    detail: string,
+    evidence: string,
+}
+
 // One navigation entry. The page number lives next to its label so the rail and
 // the page title can never drift apart again.
 export struct NavEntry {
@@ -362,6 +370,21 @@ export component MainWindow inherits Window {
     in property <string> upstream-detail;
     in property <int> upstream-tone: 3;
     in property <bool> upstream-pulse: true;
+    // The fault history card reads the record the app instance's gateway wrote.
+    // A missing record is the legal empty state; an unreadable record keeps its
+    // reason instead of folding into 「当前无上游故障」.
+    in property <string> upstream-fault-status: "读取中";
+    in property <int> upstream-fault-tone: 3;
+    in property <string> upstream-fault-check;
+    in property <bool> upstream-fault-active;
+    in property <string> upstream-fault-active-title;
+    in property <string> upstream-fault-active-detail;
+    in property <[FaultRow]> upstream-fault-history: [];
+    in-out property <bool> show-fault-evidence: false;
+    out property <bool> upstream-fault-evidence-shown:
+        root.show-fault-evidence && root.upstream-fault-history.length > 0;
+    out property <bool> upstream-fault-evidence-toggle-visible:
+        root.upstream-fault-history.length > 0;
     in property <string> account-label: "读取中";
     in property <string> account-detail;
     in property <int> account-tone: 3;
@@ -552,6 +575,13 @@ export component MainWindow inherits Window {
     out property <length> overview-state-gateway-width: state-gateway.width;
     out property <length> overview-state-login-width: state-login.width;
     out property <length> overview-state-upstream-width: state-upstream.width;
+    out property <length> upstream-fault-card-height: upstream-fault-card.height;
+    out property <length> upstream-fault-evidence-toggle-x:
+        fault-evidence-toggle.absolute-position.x;
+    out property <length> upstream-fault-evidence-toggle-y:
+        fault-evidence-toggle.absolute-position.y;
+    out property <length> upstream-fault-evidence-toggle-width: fault-evidence-toggle.width;
+    out property <length> upstream-fault-evidence-toggle-height: fault-evidence-toggle.height;
     out property <length> usage-metric-x: usage-chart.metric-x;
     out property <length> usage-metric-y: usage-chart.metric-y;
     out property <length> usage-metric-width: usage-chart.metric-width;
@@ -1438,6 +1468,88 @@ export component MainWindow inherits Window {
                         updated-at: root.overview-updated-at;
                         refresh => { root.refresh-current-page(); }
                         period-changed(index) => { root.usage-range-changed(index); }
+                    }
+                    upstream-fault-card := Card {
+                        gap: 10px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                SectionLabel {
+                                    text: "上游故障历史";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                DataText {
+                                    text: root.upstream-fault-check;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            Hint {
+                                text: root.upstream-fault-status;
+                                color: Theme.status_ink(root.upstream-fault-tone);
+                            }
+                            if root.upstream-fault-active : VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    cross-axis-alignment: center;
+                                    StatusDot { tone: 2; }
+                                    Text {
+                                        text: root.upstream-fault-active-title;
+                                        color: Theme.ink;
+                                        font-weight: 600;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Hint { text: root.upstream-fault-active-detail; }
+                            }
+                            if root.upstream-fault-history.length > 0 : VerticalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                for row in root.upstream-fault-history : VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 7px;
+                                        cross-axis-alignment: center;
+                                        StatusDot { tone: 0; }
+                                        Text {
+                                            text: row.title;
+                                            color: Theme.ink;
+                                            font-weight: 600;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Hint { text: row.detail; }
+                                    if root.upstream-fault-evidence-shown : Hint {
+                                        text: row.evidence;
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                visible: root.upstream-fault-evidence-toggle-visible;
+                                spacing: 8px;
+                                fault-evidence-toggle := ActionButton {
+                                    label: root.show-fault-evidence
+                                        ? "收起恢复证据" : "展开恢复证据";
+                                    icon: root.show-fault-evidence
+                                        ? "chevron-down" : "chevron-right";
+                                    quiet: true;
+                                    clicked => {
+                                        root.show-fault-evidence = !root.show-fault-evidence;
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
                     }
                 }
             }
