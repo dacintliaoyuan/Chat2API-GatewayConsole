@@ -27,10 +27,90 @@ export struct ModelSpeedRow {
 
 // Request-page analytics: five metric cards, a Token/请求/速度 chart with an
 // optional per-model split, and the per-model speed table.
+component RequestTrendChart inherits Rectangle {
+    in property <[string]> labels;
+    in property <[ChartDataset]> datasets;
+    in property <bool> show-legend: false;
+    in property <bool> integer-ticks: true;
+    in property <int> value-decimals: 0;
+    in property <bool> allow-motion: true;
+
+    BarChart {
+        width: parent.width;
+        height: parent.height;
+        labels: root.labels;
+        datasets: root.datasets;
+        begin-at-zero: true;
+        integer-ticks: root.integer-ticks;
+        value-decimals: root.value-decimals;
+        show-legend: root.show-legend;
+        show-points: false;
+        show-tooltip: false;
+        animated: root.allow-motion;
+        bar-radius: 3px;
+        fill-opacity: 0.78;
+        accessible-label: "请求趋势图";
+    }
+}
+
+// Column order follows Magpie's model speed table: model, speed, first-token,
+// requests, then output tokens.
+component ModelSpeedTable inherits VerticalLayout {
+    in property <[ModelSpeedRow]> rows;
+    // Guards the empty state against being pushed below the card edge.
+    out property <bool> empty-hint-fits: empty-hint.absolute-position.y + empty-hint.height
+        <= self.absolute-position.y + self.height;
+    spacing: 3px;
+    SectionLabel { text: "模型速度"; }
+    HorizontalLayout {
+        spacing: 6px;
+        Hint { text: "模型"; horizontal-stretch: 1; }
+        Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
+        Hint { text: "首字耗时"; width: 72px; horizontal-alignment: right; }
+        Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
+        Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
+    }
+    // The empty-state hint must sit inside the remaining height;
+    // a trailing sibling would overflow the fixed-height card row.
+    Rectangle {
+        vertical-stretch: 1;
+        min-height: 0px;
+        ListView {
+            width: parent.width;
+            height: parent.height;
+            for row in root.rows : HorizontalLayout {
+                spacing: 6px;
+                height: 20px;
+                Text {
+                    text: row.model;
+                    color: Theme.ink;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
+                DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
+                DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
+                DataText { text: row.output; width: 58px; horizontal-alignment: right; }
+            }
+        }
+        empty-hint := Hint {
+            text: "暂无模型速度数据";
+            visible: root.rows.length == 0;
+            width: parent.width;
+            height: parent.height;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component RequestAnalytics inherits Panel {
     // The request page gives the list the remaining height; at the minimum
-    // window size this card may clip instead of pushing the status row down.
+    // window size the page scrolls and this card keeps its preferred height.
     min-height: 0px;
+    in property <bool> compact: false;
     in property <[RequestMetric]> metrics;
     in property <[string]> labels;
     in property <[float]> token-counts;
@@ -55,23 +135,26 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
-    // Guards the empty state against being pushed below the card edge.
-    out property <bool> empty-hint-fits: empty-hint.absolute-position.y + empty-hint.height
-        <= root.absolute-position.y + root.height;
+    // Reads the table that is actually laid out at the current width.
+    out property <bool> empty-hint-fits: root.compact
+        ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
 
-    VerticalLayout {
+    content := VerticalLayout {
         padding: 12px;
         spacing: 8px;
 
-        HorizontalLayout {
+        cards := HorizontalLayout {
             spacing: 8px;
+            // Equal fixed widths keep the five cards the same size; the
+            // content-based stretch alone made the short cards narrower.
             for metric in root.metrics : Rectangle {
+                width: (root.width - 24px - 32px) / 5;
                 horizontal-stretch: 1;
                 height: 62px;
                 border-radius: 8px;
                 background: Theme.surface-2;
                 VerticalLayout {
-                    padding: 8px;
+                    padding: root.compact ? 6px : 8px;
                     spacing: 2px;
                     Hint { text: metric.label; }
                     DataText {
@@ -85,7 +168,7 @@ export component RequestAnalytics inherits Panel {
             }
         }
 
-        HorizontalLayout {
+        header := HorizontalLayout {
             spacing: 8px;
             alignment: center;
             Heading { text: "请求趋势"; vertical-alignment: center; }
@@ -106,88 +189,66 @@ export component RequestAnalytics inherits Panel {
             }
         }
 
-        HorizontalLayout {
+        // Wide: the chart and the speed table share one row. Compact: the table
+        // moves below the chart so neither is squeezed below its readable width.
+        compact-stack := VerticalLayout {
+            visible: root.compact;
+            width: 100%;
+            // Hidden layouts still feed the parent's preferred height, so the
+            // inactive stack collapses to zero explicitly.
+            height: root.compact ? self.preferred-height : 0px;
+            spacing: 8px;
+            RequestTrendChart {
+                width: 100%;
+                height: 148px;
+                labels: root.labels;
+                datasets: root.split-by-model
+                    ? (root.metric == 1 ? root.request-series
+                        : root.metric == 2 ? root.speed-series : root.token-series)
+                    : [{
+                        label: root.metric-label,
+                        values: root.metric == 1 ? root.request-counts
+                            : root.metric == 2 ? root.speed-counts : root.token-counts,
+                        series-type: ChartSeriesType.bar,
+                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
+                    }];
+                show-legend: root.split-by-model;
+                integer-ticks: root.metric != 2;
+                value-decimals: root.metric == 2 ? 1 : 0;
+                allow-motion: root.allow-motion;
+            }
+            compact-table := ModelSpeedTable {
+                width: 100%;
+                height: 146px;
+                rows: root.model-speeds;
+            }
+        }
+        wide-row := HorizontalLayout {
+            visible: !root.compact;
             spacing: 12px;
-            height: 148px;
-
-            Rectangle {
+            height: root.compact ? 0px : 148px;
+            RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
-                BarChart {
-                    width: parent.width;
-                    height: parent.height;
-                    labels: root.labels;
-                    datasets: root.split-by-model
-                        ? (root.metric == 1 ? root.request-series
-                            : root.metric == 2 ? root.speed-series : root.token-series)
-                        : [{
-                            label: root.metric-label,
-                            values: root.metric == 1 ? root.request-counts
-                                : root.metric == 2 ? root.speed-counts : root.token-counts,
-                            series-type: ChartSeriesType.bar,
-                            color: root.metric == 1 ? Theme.series-b : Theme.accent,
-                        }];
-                    begin-at-zero: true;
-                    integer-ticks: root.metric != 2;
-                    value-decimals: root.metric == 2 ? 1 : 0;
-                    show-legend: root.split-by-model;
-                    show-points: false;
-                    show-tooltip: false;
-                    animated: root.allow-motion;
-                    bar-radius: 3px;
-                    fill-opacity: 0.78;
-                    accessible-label: "请求趋势图";
-                }
+                labels: root.labels;
+                datasets: root.split-by-model
+                    ? (root.metric == 1 ? root.request-series
+                        : root.metric == 2 ? root.speed-series : root.token-series)
+                    : [{
+                        label: root.metric-label,
+                        values: root.metric == 1 ? root.request-counts
+                            : root.metric == 2 ? root.speed-counts : root.token-counts,
+                        series-type: ChartSeriesType.bar,
+                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
+                    }];
+                show-legend: root.split-by-model;
+                integer-ticks: root.metric != 2;
+                value-decimals: root.metric == 2 ? 1 : 0;
+                allow-motion: root.allow-motion;
             }
-
-            VerticalLayout {
+            wide-table := ModelSpeedTable {
                 width: 336px;
-                spacing: 3px;
-                SectionLabel { text: "模型速度"; }
-                // Column order follows Magpie's model speed table: model,
-                // speed, first-token, requests, then output tokens.
-                HorizontalLayout {
-                    spacing: 6px;
-                    Hint { text: "模型"; horizontal-stretch: 1; }
-                    Hint { text: "速度"; width: 58px; horizontal-alignment: right; }
-                    Hint { text: "首字耗时"; width: 72px; horizontal-alignment: right; }
-                    Hint { text: "请求"; width: 44px; horizontal-alignment: right; }
-                    Hint { text: "输出"; width: 58px; horizontal-alignment: right; }
-                }
-                // The empty-state hint must sit inside the remaining height;
-                // a trailing sibling would overflow the fixed-height card row.
-                Rectangle {
-                    vertical-stretch: 1;
-                    min-height: 0px;
-                    ListView {
-                        width: parent.width;
-                        height: parent.height;
-                        for row in root.model-speeds : HorizontalLayout {
-                            spacing: 6px;
-                            height: 20px;
-                            Text {
-                                text: row.model;
-                                color: Theme.ink;
-                                font-size: 12px;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                                wrap: no-wrap;
-                            }
-                            DataText { text: row.speed; width: 58px; horizontal-alignment: right; }
-                            DataText { text: row.first-token; width: 72px; horizontal-alignment: right; }
-                            DataText { text: row.requests; width: 44px; horizontal-alignment: right; }
-                            DataText { text: row.output; width: 58px; horizontal-alignment: right; }
-                        }
-                    }
-                    empty-hint := Hint {
-                        text: "暂无模型速度数据";
-                        visible: root.model-speeds.length == 0;
-                        width: parent.width;
-                        height: parent.height;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
+                rows: root.model-speeds;
             }
         }
     }

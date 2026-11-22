@@ -1731,7 +1731,8 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
         window.get_request_list_visible(),
     );
     let page_left = 84.0 + 12.0;
-    let page_right = window.get_window_width() - 12.0;
+    // The page keeps an 8 px gutter for the scrollbar thumb at compact width.
+    let page_right = page_left + window.get_request_page_width() - 8.0;
     assert!(
         (window.get_request_filter_width() - (page_right - page_left)).abs() < 1.0,
         "the filter rows fill the compact page content"

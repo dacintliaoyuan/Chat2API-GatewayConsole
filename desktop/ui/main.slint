@@ -1335,11 +1335,19 @@ export component MainWindow inherits Window {
                 }
             }
 
-            request-page := VerticalLayout {
+            request-scroll := ScrollView {
                 visible: root.page == 1;
-                width: 100%;
                 vertical-stretch: 1;
-                min-height: 0px;
+                content-width: self.visible-width;
+                // Stretch the list into the viewport when the cards leave room,
+                // but never shrink the page below its preferred height; the
+                // ScrollView takes over at the minimum window size.
+                request-page := VerticalLayout {
+                width: 100%;
+                min-height: max(self.preferred-height, request-scroll.visible-height);
+                // Leave a gutter on the right so the scrollbar thumb lands on
+                // the page, never inside a card.
+                padding-right: root.compact ? 8px : 0px;
                 spacing: 8px;
                 // The request page follows Magpie's 用量/请求 order: the two
                 // filter rows first, then the summary hint, the metric cards and
@@ -1420,6 +1428,7 @@ export component MainWindow inherits Window {
                 request-analytics := RequestAnalytics {
                     width: 100%;
                     horizontal-stretch: 1;
+                    compact: root.compact;
                     metrics: root.request-metrics;
                     labels: root.request-chart-labels;
                     token-counts: root.request-chart-token-counts;
@@ -1433,13 +1442,16 @@ export component MainWindow inherits Window {
                     split-by-model <=> root.request-split-by-model;
                     allow-motion: root.allow-motion;
                 }
-                HorizontalLayout {
+                request-row := HorizontalLayout {
                     width: 100%;
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
                     spacing: root.compact && !root.selected-request.is-empty ? 0px : 12px;
                     request-list-pane := VerticalLayout {
                     horizontal-stretch: 0;
+                    // At compact width the page scrolls; keep the list tall
+                    // enough to read several rows instead of collapsing it.
+                    min-height: root.compact ? 320px : 0px;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
                     width: root.compact
@@ -1511,12 +1523,16 @@ export component MainWindow inherits Window {
                 }
                 request-details := TextDetails {
                     visible: !root.selected-request.is-empty || self.width > 1px;
+                    // The detail fills the list row; its own content must not
+                    // raise the page's preferred height.
+                    preferred-height: 0px;
                     width: root.selected-request.is-empty ? 0px : root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
                     clip: true;
                     animate width { duration: Theme.settle; easing: ease-out; }
                     title: root.request-detail-title;
                     body: root.request-detail;
                     closed => { root.selected-request = ""; }
+                }
                 }
                 }
             }
