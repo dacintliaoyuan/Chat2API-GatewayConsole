@@ -51,7 +51,7 @@ component StateCell inherits VerticalLayout {
     in property <string> detail;
     in property <int> tone: 3;
     in property <bool> pulse: false;
-    spacing: 4px;
+    spacing: 2px;
     alignment: start;
     Text { text: root.label; color: Theme.muted; font-size: 11px; font-weight: 600; }
     HorizontalLayout {
@@ -370,6 +370,21 @@ export component MainWindow inherits Window {
     in property <string> upstream-detail;
     in property <int> upstream-tone: 3;
     in property <bool> upstream-pulse: true;
+    // The UM service card reads the app instance gateway's service snapshot.
+    // A failed read keeps its reason and never invents a PID; a stopped service
+    // offers the start action, and a missing gateway points at the gateway entry.
+    in property <string> um-service-state: "检测中";
+    in property <string> um-service-detail;
+    in property <int> um-service-tone: 3;
+    in property <string> um-service-checked-at;
+    in property <bool> um-service-can-start;
+    in property <bool> um-service-gateway-missing;
+    in property <string> um-service-gateway-detail;
+    in property <bool> um-service-can-start-gateway;
+    in-out property <bool> um-service-busy: false;
+    in property <string> um-service-start-status;
+    in property <int> um-service-start-tone: 3;
+    callback start-um-service();
     // The fault history card reads the record the app instance's gateway wrote.
     // A missing record is the legal empty state; an unreadable record keeps its
     // reason instead of folding into 「当前无上游故障」.
@@ -595,6 +610,20 @@ export component MainWindow inherits Window {
         fault-evidence-toggle.absolute-position.y;
     out property <length> upstream-fault-evidence-toggle-width: fault-evidence-toggle.width;
     out property <length> upstream-fault-evidence-toggle-height: fault-evidence-toggle.height;
+    // Test seams: the UM service card's start controls and geometry.
+    out property <length> um-service-card-height: state-card.height;
+    out property <bool> um-service-start-visible: start-um-service.visible;
+    out property <string> um-service-start-label: start-um-service.label;
+    out property <bool> um-service-start-gateway-visible: start-gateway.visible;
+    out property <string> um-service-start-gateway-label: start-gateway.label;
+    out property <length> um-service-start-x: start-um-service.absolute-position.x;
+    out property <length> um-service-start-y: start-um-service.absolute-position.y;
+    out property <length> um-service-start-width: start-um-service.width;
+    out property <length> um-service-start-height: start-um-service.height;
+    out property <length> um-service-start-gateway-x: start-gateway.absolute-position.x;
+    out property <length> um-service-start-gateway-y: start-gateway.absolute-position.y;
+    out property <length> um-service-start-gateway-width: start-gateway.width;
+    out property <length> um-service-start-gateway-height: start-gateway.height;
     out property <length> usage-metric-x: usage-chart.metric-x;
     out property <length> usage-metric-y: usage-chart.metric-y;
     out property <length> usage-metric-width: usage-chart.metric-width;
@@ -1389,13 +1418,50 @@ export component MainWindow inherits Window {
                                 // Equal thirds keep the long detail text from
                                 // squeezing the other two columns into vertical
                                 // text at the wide layout.
+                                // The service cell replaces the old gateway cell
+                                // in the overview: the service state and the
+                                // gateway supervision now share one status
+                                // surface, while the settings instance card
+                                // keeps the supervisor detail. It offers the
+                                // start action only while the service is
+                                // stopped; a failed read keeps the reason
+                                // instead of a PID.
                                 state-gateway := StateCell {
                                     horizontal-stretch: 1;
                                     min-width: 0px;
                                     preferred-width: 0px;
-                                    label: "网关"; value: root.gateway-value;
-                                    detail: root.gateway-detail; tone: root.gateway-tone;
-                                    pulse: root.gateway-pulse;
+                                    label: "UM 服务"; value: root.um-service-state;
+                                    detail: root.um-service-detail; tone: root.um-service-tone;
+                                    if !root.um-service-checked-at.is-empty : Hint {
+                                        text: root.um-service-checked-at;
+                                    }
+                                    if !root.um-service-start-status.is-empty : Hint {
+                                        text: root.um-service-start-status;
+                                        color: Theme.status_ink(root.um-service-start-tone);
+                                    }
+                                    if root.um-service-gateway-missing : Hint {
+                                        text: root.um-service-gateway-detail;
+                                        color: Theme.status_ink(root.um-service-tone);
+                                    }
+                                    start-um-service := ActionButton {
+                                        visible: root.um-service-can-start
+                                            && !root.um-service-busy;
+                                        height: self.visible ? self.preferred-height : 0px;
+                                        label: "启动 UM 服务";
+                                        icon: "play";
+                                        quiet: true;
+                                        enabled: !root.um-service-busy;
+                                        clicked => { root.start-um-service(); }
+                                    }
+                                    start-gateway := ActionButton {
+                                        visible: root.um-service-gateway-missing
+                                            && root.um-service-can-start-gateway;
+                                        height: self.visible ? self.preferred-height : 0px;
+                                        label: "启动网关";
+                                        icon: "play";
+                                        quiet: true;
+                                        clicked => { root.restart-gateway(); }
+                                    }
                                 }
                                 state-login := StateCell {
                                     horizontal-stretch: 1;
@@ -1417,9 +1483,34 @@ export component MainWindow inherits Window {
                             if root.compact : VerticalLayout {
                                 spacing: 12px;
                                 StateCell {
-                                    horizontal-stretch: 1; label: "网关"; value: root.gateway-value;
-                                    detail: root.gateway-detail; tone: root.gateway-tone;
-                                    pulse: root.gateway-pulse;
+                                    horizontal-stretch: 1; label: "UM 服务";
+                                    value: root.um-service-state;
+                                    detail: root.um-service-detail; tone: root.um-service-tone;
+                                    if !root.um-service-checked-at.is-empty : Hint {
+                                        text: root.um-service-checked-at;
+                                    }
+                                    if !root.um-service-start-status.is-empty : Hint {
+                                        text: root.um-service-start-status;
+                                        color: Theme.status_ink(root.um-service-start-tone);
+                                    }
+                                    if root.um-service-gateway-missing : Hint {
+                                        text: root.um-service-gateway-detail;
+                                        color: Theme.status_ink(root.um-service-tone);
+                                    }
+                                    if root.um-service-can-start && !root.um-service-busy : ActionButton {
+                                        label: "启动 UM 服务";
+                                        icon: "play";
+                                        quiet: true;
+                                        enabled: !root.um-service-busy;
+                                        clicked => { root.start-um-service(); }
+                                    }
+                                    if root.um-service-gateway-missing
+                                        && root.um-service-can-start-gateway : ActionButton {
+                                        label: "启动网关";
+                                        icon: "play";
+                                        quiet: true;
+                                        clicked => { root.restart-gateway(); }
+                                    }
                                 }
                                 StateCell {
                                     horizontal-stretch: 1; label: "UM 登录"; value: root.account-label;

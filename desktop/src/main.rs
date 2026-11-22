@@ -46,6 +46,7 @@ use um_desktop::logstream::{
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 use um_desktop::ui::*;
+use um_desktop::um_service;
 use um_desktop::usage::{self, Coverage, Range, UsageView};
 
 static PAUSED: AtomicBool = AtomicBool::new(false);
@@ -283,6 +284,26 @@ fn read_live_overview(
     };
     let account = account_view(saved, Some(&auth));
     (overview, account, auth)
+}
+
+/// One UM service read: the gateway answers only while the supervisor says it is
+/// running; otherwise the card points at the gateway start entry.
+fn service_view(
+    gateway: &GatewayStatus,
+    api: &um_service::HttpServiceApi,
+    token_path: &Path,
+    base: &str,
+) -> um_service::ServiceView {
+    match gateway.state {
+        GatewayState::Running { .. } => match load_control_token(token_path) {
+            Ok(token) => um_service::read(api, base, token.expose()),
+            Err(error) => um_service::ServiceView::failure(error),
+        },
+        GatewayState::Starting => {
+            um_service::ServiceView::gateway_starting(&gateway.state.detail())
+        }
+        _ => um_service::ServiceView::gateway_unavailable(&gateway.state.detail()),
+    }
 }
 
 fn apply_logs(window: &MainWindow, update: &LogUpdate) {
@@ -998,11 +1019,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *status
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+            // The first read may have landed while the supervisor was still
+            // starting; read the service card again now that the state is known.
+            OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
         });
     }
 
     let probe = HttpProbe::new();
     let auth_admin = Arc::new(HttpAuthAdmin::new());
+    let service_api = Arc::new(um_service::HttpServiceApi::new());
+    let service_state: Arc<Mutex<Option<um_service::ServiceView>>> = Arc::new(Mutex::new(None));
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
     let upstream_faults_path = paths.upstream_faults.clone();
@@ -1013,10 +1039,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let saved_state = Arc::clone(&saved_state);
         let auth_state = Arc::clone(&auth_state);
         let auth_admin = Arc::clone(&auth_admin);
+        let service_api = Arc::clone(&service_api);
+        let service_state = Arc::clone(&service_state);
         std::thread::spawn(move || {
             let mut has_success = false;
             let mut last_failure: Option<String> = None;
             let mut last_faults: Option<overview::FaultHistory> = None;
+            let mut last_service: Option<um_service::ServiceView> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1028,10 +1057,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
-                let supervision = gateway_status
+                let gateway = gateway_status
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .card();
+                    .clone();
+                let supervision = gateway.card();
+                let service = service_view(&gateway, &service_api, &control_token_path, &base);
                 let saved = saved_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1056,6 +1087,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
                             overview::apply_fault_history(&window, &faults);
+                        }
+                    });
+                }
+                if last_service.as_ref() != Some(&service) {
+                    last_service = Some(service.clone());
+                    *service_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            um_service::apply_service(&window, &service);
                         }
                     });
                 }
@@ -1248,12 +1291,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(state) => (format!("重启失败：{}", state.detail()), Tone::Bad),
                 None => ("本实例网关未接入，无法重启".to_string(), Tone::Bad),
             };
+            if matches!(
+                restarted.as_ref().map(|status| &status.state),
+                Some(GatewayState::Running { .. })
+            ) {
+                // The service card now has a gateway to read again.
+                OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+                USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     window.set_gateway_restarting(false);
                     if !QUIT_REQUESTED.load(Ordering::SeqCst) {
                         window.set_settings_status(message.into());
                         window.set_settings_tone(status_tone(tone));
+                    }
+                }
+            });
+        });
+    });
+
+    // The UM service cell starts the service through the gateway control route
+    // and re-reads the snapshot; a failure keeps the stopped state and reason.
+    let weak_start_service = window.as_weak();
+    let start_service_api = Arc::clone(&service_api);
+    let start_service_port = Arc::clone(&current_port);
+    let start_service_token = paths.control_token.clone();
+    let start_service_status = Arc::clone(&gateway_status);
+    let start_service_state = Arc::clone(&service_state);
+    window.on_start_um_service(move || {
+        let Some(window) = weak_start_service.upgrade() else {
+            return;
+        };
+        if window.get_um_service_busy() || QUIT_REQUESTED.load(Ordering::SeqCst) {
+            return;
+        }
+        let gateway = start_service_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if !matches!(gateway.state, GatewayState::Running { .. }) {
+            window.set_um_service_start_status("网关未运行，先启动网关".into());
+            window.set_um_service_start_tone(status_tone(Tone::Warn));
+            return;
+        }
+        let token = match load_control_token(&start_service_token) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_um_service_start_status(format!("启动失败：{error}").into());
+                window.set_um_service_start_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let previous = start_service_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .unwrap_or_else(|| um_service::ServiceView::failure("尚未读取 UM 服务状态"));
+        window.set_um_service_busy(true);
+        window.set_um_service_start_status("正在启动 UM 服务…".into());
+        window.set_um_service_start_tone(status_tone(Tone::Warn));
+        let api = Arc::clone(&start_service_api);
+        let base = format!(
+            "http://127.0.0.1:{}",
+            start_service_port.load(Ordering::SeqCst)
+        );
+        let weak = window.as_weak();
+        let state = Arc::clone(&start_service_state);
+        std::thread::spawn(move || {
+            let result = um_service::start_and_refresh(&*api, &base, token.expose(), &previous);
+            let service = result.service.clone();
+            let refreshed = result.refreshed;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_um_service_busy(false);
+                    if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                        um_service::apply_start_result(&window, &result);
+                        if refreshed {
+                            *state
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                Some(service);
+                        }
                     }
                 }
             });

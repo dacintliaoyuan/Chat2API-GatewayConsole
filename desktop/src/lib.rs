@@ -18,4 +18,5 @@ pub mod overview;
 pub mod shell;
 pub mod tail;
 pub mod ui;
+pub mod um_service;
 pub mod usage;
