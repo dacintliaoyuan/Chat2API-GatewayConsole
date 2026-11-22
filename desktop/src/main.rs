@@ -568,6 +568,63 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
         .collect()
 }
 
+fn apply_request_page(window: &MainWindow, page: &usage::RequestPage) {
+    let mut models = vec![String::from("全部模型")];
+    models.extend(page.models.iter().cloned());
+    let selected = window.get_request_model_filter().to_string();
+    let model_index = if selected.is_empty() {
+        0
+    } else {
+        models
+            .iter()
+            .position(|model| model == &selected)
+            .map_or(0, |index| index as i32)
+    };
+    let model_options = models
+        .iter()
+        .map(|model| model.as_str().into())
+        .collect::<Vec<slint::SharedString>>();
+    window.set_request_model_options(ModelRc::from(model_options.as_slice()));
+    window.set_request_model_index(model_index);
+    let rows = page
+        .rows
+        .iter()
+        .map(|row| RequestRow {
+            id: row.key.clone().into(),
+            at: row.at.clone().into(),
+            model: row.model.clone().into(),
+            outcome: row.result.clone().into(),
+            tone: match row.result.as_str() {
+                "成功" => status_tone(Tone::Good),
+                "失败" | "截断" => status_tone(Tone::Bad),
+                "客户端断开" => status_tone(Tone::Warn),
+                _ => status_tone(Tone::Neutral),
+            },
+            summary: format!(
+                "耗时 {} · ID {}",
+                row.duration,
+                row.request_id.as_deref().unwrap_or("—")
+            )
+            .into(),
+            first_token: row.first_token.clone().into(),
+            detail: "".into(),
+        })
+        .collect::<Vec<_>>();
+    let count = rows.len();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    apply_request_analytics(window, page);
+    if count == 0 || !page.message.is_empty() {
+        window.set_request_status(page.message.clone().into());
+    } else {
+        window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
+    }
+    window.set_request_tone(coverage_tone(page.coverage));
+    window.set_older_requests(page.earlier.is_some());
+    if page.coverage != Coverage::Unavailable {
+        window.set_request_updated_at(clock_now().into());
+    }
+}
+
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
     let cards = page.summary.cards();
     // The compact request page folds the five cards into two readable lines;
@@ -669,20 +726,34 @@ fn load_requests(
     };
     let result = window.get_request_result();
     let keyword = window.get_request_keyword().to_string();
+    let model = window.get_request_model_filter().to_string();
     let scroll = window.get_request_scroll_y();
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
     if !refresh {
         window.set_selected_request("".into());
-        window.set_request_scroll_y(0.0);
+        // Filter changes keep the reader where they were; only a page jump
+        // starts at the top of the new page.
+        if mode == RequestLoad::Page {
+            window.set_request_scroll_y(0.0);
+        }
         window.set_request_status("正在读取请求记录…".into());
         window.set_request_tone(3);
         window.set_older_requests(false);
         window.set_newer_requests(false);
     }
     std::thread::spawn(move || {
-        let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
+        let model = if model.is_empty() { None } else { Some(model) };
+        let page = usage::read_requests(
+            &ledger,
+            range,
+            model.as_deref(),
+            result,
+            &keyword,
+            cursor.as_deref(),
+            now,
+        );
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return; };
             let mut nav = nav.lock().expect("request navigation poisoned");
@@ -696,47 +767,18 @@ fn load_requests(
                     summary: nav.summary.clone(),
                     model_speeds: nav.model_speeds.clone(),
                     chart: nav.chart.clone(),
+                    models: nav.models.clone(),
                 };
                 usage::keep_previous_page_on_failure(&previous, page)
             } else {
                 page
             };
-            let rows = page.rows.iter().map(|row| RequestRow {
-                id: row.key.clone().into(),
-                at: row.at.clone().into(),
-                model: row.model.clone().into(),
-                outcome: row.result.clone().into(),
-                tone: match row.result.as_str() {
-                    "成功" => status_tone(Tone::Good),
-                    "失败" => status_tone(Tone::Bad),
-                    _ => status_tone(Tone::Warn),
-                },
-                summary: format!(
-                    "耗时 {} · ID {}",
-                    row.duration,
-                    row.request_id.as_deref().unwrap_or("—")
-                )
-                .into(),
-                first_token: row.first_token.clone().into(),
-                detail: "".into(),
-            }).collect::<Vec<_>>();
-            let count = rows.len();
-            window.set_requests(ModelRc::from(rows.as_slice()));
-            apply_request_analytics(&window, &page);
-            if count == 0 || !page.message.is_empty() {
-                window.set_request_status(page.message.into());
-            } else {
-                window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
-            }
-            window.set_request_tone(coverage_tone(page.coverage));
-            window.set_older_requests(page.earlier.is_some());
+            apply_request_page(&window, &page);
             window.set_newer_requests(nav.pages.len() > 1);
-            if page.coverage != Coverage::Unavailable {
-                window.set_request_updated_at(clock_now().into());
-            }
             nav.summary = page.summary.clone();
             nav.model_speeds = page.model_speeds.clone();
             nav.chart = page.chart.clone();
+            nav.models = page.models.clone();
             nav.rows = page.rows;
             nav.earlier = page.earlier;
             if refresh {

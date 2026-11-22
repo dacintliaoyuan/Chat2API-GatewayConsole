@@ -113,14 +113,18 @@ impl TimeRange {
     }
 }
 
-/// The request-result filter. The current page exposes all/success/failed; the
-/// stable JSON names leave room for the remaining result kinds.
+/// The request-result filter. The six result kinds match the request page's
+/// dropdown; `All` is the first entry and the default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RequestResult {
     #[default]
     All,
     Success,
     Failed,
+    Truncated,
+    ClientDisconnected,
+    Cancelled,
+    Unknown,
 }
 
 impl RequestResult {
@@ -129,6 +133,10 @@ impl RequestResult {
             Self::All => 0,
             Self::Success => 1,
             Self::Failed => 2,
+            Self::Truncated => 3,
+            Self::ClientDisconnected => 4,
+            Self::Cancelled => 5,
+            Self::Unknown => 6,
         }
     }
 
@@ -136,6 +144,10 @@ impl RequestResult {
         match index {
             1 => Self::Success,
             2 => Self::Failed,
+            3 => Self::Truncated,
+            4 => Self::ClientDisconnected,
+            5 => Self::Cancelled,
+            6 => Self::Unknown,
             _ => Self::All,
         }
     }
@@ -145,6 +157,10 @@ impl RequestResult {
             Self::All => "all",
             Self::Success => "success",
             Self::Failed => "failed",
+            Self::Truncated => "truncated",
+            Self::ClientDisconnected => "client_disconnected",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -153,6 +169,10 @@ impl RequestResult {
             "all" => Some(Self::All),
             "success" => Some(Self::Success),
             "failed" => Some(Self::Failed),
+            "truncated" => Some(Self::Truncated),
+            "client_disconnected" => Some(Self::ClientDisconnected),
+            "cancelled" => Some(Self::Cancelled),
+            "unknown" => Some(Self::Unknown),
             _ => None,
         }
     }
@@ -544,7 +564,7 @@ fn parse_settings(body: &Value) -> (Settings, Vec<String>) {
             Some(parsed) => settings.request_result = parsed,
             None => warnings.push(invalid_setting(
                 "request_result",
-                "all、success 或 failed",
+                "all、success、failed、truncated、client_disconnected、cancelled 或 unknown",
                 "all",
             )),
         }

@@ -1,5 +1,5 @@
 import { ListView, ScrollView, TextEdit } from "std-widgets.slint";
-import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
+import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Dropdown, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
 import { ChartEngine, ChartDataset, ChartTheme } from "@slintplot";
 import { AppIcon } from "icons.slint";
 export { ChartEngine }
@@ -522,6 +522,13 @@ export component MainWindow inherits Window {
     in-out property <string> request-keyword;
     in-out property <int> request-period;
     in-out property <int> request-result;
+    // The model dropdown lists the window's models; the first entry is the
+    // "all models" choice and keeps the filter empty.
+    in property <[string]> request-model-options: ["全部模型"];
+    in-out property <int> request-model-index: 0;
+    in-out property <string> request-model-filter: "";
+    // All + the six result kinds in the same order the view model maps.
+    in property <[string]> request-result-options: ["全部结果", "成功", "失败", "截断", "客户端断开", "已取消", "未知"];
     in-out property <string> selected-request;
     in property <string> request-detail-title;
     in property <string> request-detail;
@@ -653,10 +660,29 @@ export component MainWindow inherits Window {
     out property <length> request-period-y: request-period-control.absolute-position.y;
     out property <length> request-period-width: request-period-control.width;
     out property <length> request-period-height: request-period-control.height;
+    out property <length> request-model-x: request-model-control.absolute-position.x;
+    out property <length> request-model-y: request-model-control.absolute-position.y;
+    out property <length> request-model-width: request-model-control.width;
+    out property <length> request-model-height: request-model-control.height;
+    out property <bool> request-model-open: request-model-control.open;
+    out property <string> request-model-current: request-model-control.current-text;
+    out property <length> request-model-option-x: request-model-control.list-x;
+    out property <length> request-model-option-y: request-model-control.list-y;
+    out property <length> request-model-option-width: request-model-control.list-width;
+    out property <length> request-model-option-height: request-model-control.list-height;
+    out property <length> request-model-option-row-height: request-model-control.option-height;
     out property <length> request-result-x: request-result-control.absolute-position.x;
     out property <length> request-result-y: request-result-control.absolute-position.y;
     out property <length> request-result-width: request-result-control.width;
     out property <length> request-result-height: request-result-control.height;
+    out property <bool> request-result-open: request-result-control.open;
+    out property <string> request-result-current: request-result-control.current-text;
+    out property <length> request-result-option-x: request-result-control.list-x;
+    out property <length> request-result-option-y: request-result-control.list-y;
+    out property <length> request-result-option-width: request-result-control.list-width;
+    out property <length> request-result-option-height: request-result-control.list-height;
+    out property <length> request-result-option-row-height: request-result-control.option-height;
+    out property <string> request-search-placeholder: request-search.placeholder;
     out property <length> request-search-x: request-search.absolute-position.x;
     out property <length> request-search-y: request-search.absolute-position.y;
     out property <length> request-search-width: request-search.width;
@@ -1666,6 +1692,9 @@ export component MainWindow inherits Window {
                     width: 100%;
                     horizontal-stretch: 1;
                     spacing: 8px;
+                    // The model select opens over the status row and the
+                    // analytics card; the filter group must paint above them.
+                    z: 10;
                     // First filter row: the time range on the left, the manual
                     // refresh on the right, like Magpie's range/refresh row.
                     request-filter-row := HorizontalLayout {
@@ -1693,16 +1722,29 @@ export component MainWindow inherits Window {
                             clicked => { root.refresh-current-page(); }
                         }
                     }
-                    // Second filter row: the result filter, the search field and
-                    // the query action. The search keeps the model-or-request-ID
-                    // scope; no agent/provider/account filters are added.
+                    // Second filter row: the model and result selects, the search
+                    // field and the query action. The search covers request ID,
+                    // model and error text; no agent/provider/account filters
+                    // are added.
                     request-filter-result-row := HorizontalLayout {
                         width: 100%;
                         horizontal-stretch: 1;
                         spacing: 8px;
-                        request-result-control := Segmented {
-                            width: root.compact ? 208px : 268px;
-                            options: [{ text: "全部结果" }, { text: "成功" }, { text: "失败" }];
+                        request-model-control := Dropdown {
+                            width: root.compact ? 110px : 180px;
+                            options: root.request-model-options;
+                            current-index <=> root.request-model-index;
+                            label: "请求模型";
+                            selected(index) => {
+                                root.request-model-filter = index > 0
+                                    && index < root.request-model-options.length
+                                    ? root.request-model-options[index] : "";
+                                root.query-requests(0);
+                            }
+                        }
+                        request-result-control := Dropdown {
+                            width: root.compact ? 110px : 160px;
+                            options: root.request-result-options;
                             current-index <=> root.request-result;
                             label: "请求结果";
                             selected(_) => { root.query-requests(0); }
@@ -1710,7 +1752,7 @@ export component MainWindow inherits Window {
                         request-search := MaterialField {
                             horizontal-stretch: 1;
                             icon: "search";
-                            placeholder: "模型或请求 ID";
+                            placeholder: "请求 ID、模型或错误";
                             clearable: true;
                             text <=> root.request-keyword;
                             accepted => { root.query-requests(0); }
@@ -1828,8 +1870,8 @@ export component MainWindow inherits Window {
                             // and its paging read as one surface.
                             HorizontalLayout {
                                 spacing: 8px; alignment: end;
-                                ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.query-requests(-1); } }
-                                ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.query-requests(1); } }
+                                ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(-1); } }
+                                ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(1); } }
                             }
                         }
                     }

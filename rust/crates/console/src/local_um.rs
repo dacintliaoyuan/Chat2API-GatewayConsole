@@ -637,30 +637,37 @@ fn http_status(status: Option<&Value>) -> Option<i64> {
     }
 }
 
+fn failure_note(status: &str) -> Option<&'static str> {
+    match status {
+        "upstream_unavailable" => Some("上游不可用"),
+        "reauthentication_required" => Some("上游认证失效"),
+        "request_deadline_exceeded" => Some("请求超过截止时间"),
+        "concurrency_limit" => Some("并发上限"),
+        "unexpected_upstream_response" => Some("上游响应不符合预期"),
+        "upstream_stream_error" => Some("上游流失败"),
+        "upstream_read_error" => Some("上游读取失败"),
+        "upstream_prelude_overflow" => Some("上游预读超出上限"),
+        "upstream_first_byte_timeout" => Some("上游首字节超时"),
+        "upstream_explicit_error" => Some("上游明确报错"),
+        "upstream_bad_frame" => Some("上游返回无效帧"),
+        "upstream_missing_terminal" => Some("上游流缺少完整终止"),
+        "upstream_error" => Some("上游错误"),
+        "degenerate_repetition" => Some("上游重复输出"),
+        "error" | "failed" => Some("请求失败"),
+        _ => None,
+    }
+}
+
 fn status_note(status: &str) -> String {
     let lower = status.trim().to_lowercase();
-    let note = match lower.as_str() {
-        "upstream_unavailable" => "上游不可用",
-        "reauthentication_required" => "上游认证失效",
-        "request_deadline_exceeded" => "请求超过截止时间",
-        "concurrency_limit" => "并发上限",
-        "unexpected_upstream_response" => "上游响应不符合预期",
-        "upstream_stream_error" => "上游流失败",
-        "upstream_read_error" => "上游读取失败",
-        "upstream_prelude_overflow" => "上游预读超出上限",
-        "upstream_first_byte_timeout" => "上游首字节超时",
-        "upstream_explicit_error" => "上游明确报错",
-        "upstream_bad_frame" => "上游返回无效帧",
-        "upstream_missing_terminal" => "上游流缺少完整终止",
-        "upstream_error" => "上游错误",
-        "degenerate_repetition" => "上游重复输出",
-        _ => "",
-    };
-    if !note.is_empty() {
+    if let Some(note) = failure_note(&lower) {
         return note.to_string();
     }
     if lower.starts_with("aggregate_") {
-        return format!("上游流失败（{}）", status.chars().take(64).collect::<String>());
+        return format!(
+            "上游流失败（{}）",
+            status.chars().take(64).collect::<String>()
+        );
     }
     format!("账本状态：{}", status.chars().take(64).collect::<String>())
 }
@@ -703,7 +710,16 @@ fn result_of(event: &Event) -> (&'static str, String, Option<i64>) {
         }
         return ("failed", status_note(text), Some(status));
     }
-    ("failed", status_note(text), None)
+    // A status the reader cannot classify is unknown, not a failure: the six
+    // filters must not fold an unfamiliar value into success or failure.
+    if known_failure_status(&lower) {
+        return ("failed", status_note(text), None);
+    }
+    ("unknown", status_note(text), None)
+}
+
+fn known_failure_status(status: &str) -> bool {
+    failure_note(status).is_some() || status.starts_with("aggregate_")
 }
 
 fn token_reading(event: &Event, side: &str) -> Reading {

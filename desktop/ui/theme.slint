@@ -1,4 +1,4 @@
-import { Palette } from "std-widgets.slint";
+import { Palette, ListView } from "std-widgets.slint";
 import { AppIcon } from "icons.slint";
 
 // Magpie's product palette: near-neutral surfaces, one blue accent, green for
@@ -388,6 +388,147 @@ export component Segmented inherits Rectangle {
     }
     accessible-role: radio-group;
     accessible-label: root.label;
+}
+
+// A compact select for short option lists: the button keeps the field language,
+// and the option list opens below it without changing the row height.
+export component Dropdown inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current-index: 0;
+    in property <string> label: "选项";
+    in property <bool> enabled: true;
+    callback selected(int);
+    out property <bool> open: self.is-open;
+    in-out property <bool> is-open: false;
+    out property <length> option-height: 30px;
+    out property <length> list-x: options-panel.absolute-position.x;
+    out property <length> list-y: options-panel.absolute-position.y;
+    out property <length> list-width: options-panel.width;
+    out property <length> list-height: options-panel.height;
+    out property <int> option-count: root.options.length;
+    out property <string> current-text: root.options.length > 0
+        && root.current-index >= 0 && root.current-index < root.options.length
+        ? root.options[root.current-index] : "";
+
+    height: Theme.control-height;
+    background: focus.has-focus ? Theme.field-strong : Theme.field;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: focus.has-focus ? Theme.edge-control-strong : Theme.edge-control;
+    opacity: root.enabled ? 1 : 0.55;
+    animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 4px;
+        Text {
+            text: root.current-text.is-empty ? "全部" : root.current-text;
+            color: Theme.ink;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        AppIcon {
+            width: 14px;
+            height: 14px;
+            kind: "chevron-down";
+            tint: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.is-open = !root.is-open;
+                return accept;
+            }
+            if (event.text == Key.Escape && root.is-open) {
+                root.is-open = false;
+                return accept;
+            }
+            if (event.text == Key.LeftArrow && root.current-index > 0) {
+                root.current-index -= 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.current-index + 1 < root.options.length) {
+                root.current-index += 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            if (!root.enabled) { return; }
+            focus.focus();
+            root.is-open = !root.is-open;
+        }
+    }
+    // The list floats above the page; z keeps it above the next filter row and
+    // the analytics card without changing the layout height.
+    options-panel := Rectangle {
+        x: 0;
+        y: root.height + 2px;
+        width: max(root.width, 168px);
+        height: root.options.length == 0 ? 0px
+            : min(root.options.length * root.option-height + 8px, 240px);
+        visible: root.is-open && root.options.length > 0;
+        z: 50;
+        background: Theme.surface;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000022;
+        ListView {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            for item[index] in root.options : Rectangle {
+                height: root.option-height;
+                border-radius: 4px;
+                background: index == root.current-index ? Theme.accent-soft : transparent;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height;
+                    text: item;
+                    color: Theme.ink;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => {
+                        root.current-index = index;
+                        root.is-open = false;
+                        root.selected(index);
+                    }
+                }
+                accessible-role: radio-button;
+                accessible-label: item;
+                accessible-checked: index == root.current-index;
+                accessible-action-default => {
+                    root.current-index = index;
+                    root.is-open = false;
+                    root.selected(index);
+                }
+            }
+        }
+    }
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-expanded: root.is-open;
+    accessible-action-default => { root.is-open = !root.is-open; }
 }
 
 export component Field inherits VerticalLayout {
