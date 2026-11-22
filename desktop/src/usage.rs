@@ -214,6 +214,10 @@ pub struct RequestPage {
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
     pub chart: RequestChart,
+    /// Models seen anywhere in the selected time window, sorted and deduplicated.
+    /// The model dropdown uses these options; the result and search filters do
+    /// not shrink them.
+    pub models: Vec<String>,
 }
 
 /// Page cursor stack and last good page for the request list. `pages` always
@@ -228,6 +232,7 @@ pub struct RequestNav {
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
     pub chart: RequestChart,
+    pub models: Vec<String>,
     pub now: i64,
     pub generation: u64,
 }
@@ -466,6 +471,7 @@ pub fn keep_previous_on_failure(previous: &UsageView, next: UsageView) -> UsageV
 pub fn read_requests(
     ledger: &Path,
     range: Range,
+    model: Option<&str>,
     result_index: i32,
     search: &str,
     cursor: Option<&str>,
@@ -475,14 +481,16 @@ pub fn read_requests(
         1 => "success",
         2 => "failed",
         3 => "truncated",
-        4 => "cancelled",
-        5 => "client_disconnected",
+        4 => "client_disconnected",
+        5 => "cancelled",
+        6 => "unknown",
         _ => "all",
     };
+    let model = model.filter(|model| !model.is_empty());
     let value = match desktop_requests(
         ledger,
         range.key(),
-        None,
+        model,
         result,
         search,
         cursor,
@@ -499,6 +507,7 @@ pub fn read_requests(
                 summary: RequestSummary::default(),
                 model_speeds: Vec::new(),
                 chart: RequestChart::default(),
+                models: Vec::new(),
             };
         }
     };
@@ -507,7 +516,31 @@ pub fn read_requests(
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let (coverage, message) = coverage(&page["coverage"], rows.is_empty(), "没有符合条件的请求。");
+    // An empty page says which empty it is: a filter that matched nothing or a
+    // time window with no requests at all.
+    let filtered = model.is_some() || result_index != 0 || !search.is_empty();
+    let empty_message = if filtered {
+        "没有符合条件的请求。"
+    } else {
+        "所选时间没有请求记录。"
+    };
+    let (coverage, message) = coverage(&page["coverage"], rows.is_empty(), empty_message);
+    let mut models = value["models"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|model| text(model, ""))
+        .collect::<Vec<_>>();
+    // Keep the active model visible even when the selected window has no row
+    // for it; the empty result then explains the filter instead of showing a
+    // dropdown that silently disagrees with the rows.
+    if let Some(model) = model {
+        if !models.iter().any(|candidate| candidate == model) {
+            models.push(model.to_string());
+            models.sort();
+        }
+    }
     RequestPage {
         rows: rows.iter().map(request_row).collect(),
         earlier: page["earlier"].as_str().map(str::to_owned),
@@ -522,6 +555,7 @@ pub fn read_requests(
             .map(model_speed)
             .collect(),
         chart: request_chart(&value),
+        models,
     }
 }
 
@@ -603,6 +637,7 @@ pub fn keep_previous_page_on_failure(previous: &RequestPage, next: RequestPage) 
         summary: previous.summary.clone(),
         model_speeds: previous.model_speeds.clone(),
         chart: previous.chart.clone(),
+        models: previous.models.clone(),
     }
 }
 
@@ -616,10 +651,10 @@ fn request_row(row: &Value) -> RequestRow {
     let result = match row["result"].as_str() {
         Some("success") => "成功",
         Some("failed") => "失败",
-        Some("truncated") => "回复截断",
-        Some("cancelled") => "已取消",
+        Some("truncated") => "截断",
         Some("client_disconnected") => "客户端断开",
-        _ => "结果未知",
+        Some("cancelled") => "已取消",
+        _ => "未知",
     };
     let note = text(&row["resultNote"], "未知");
     let retries = row["retries"].as_array().map(Vec::len);
