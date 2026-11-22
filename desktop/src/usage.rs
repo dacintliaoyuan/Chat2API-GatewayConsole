@@ -311,7 +311,16 @@ fn amount_display(reading: &Value) -> String {
     format!("{prefix}{}", grouped(value))
 }
 
+/// Large counts use 亿/万 so a nine-digit total does not crowd the cards, the
+/// chart axis or the model speed table; small counts stay exact.
 fn grouped(value: i64) -> String {
+    let magnitude = value.unsigned_abs();
+    if magnitude >= 100_000_000 {
+        return format!("{} 亿", scaled(value as f64 / 100_000_000.0));
+    }
+    if magnitude >= 10_000 {
+        return format!("{} 万", scaled(value as f64 / 10_000.0));
+    }
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -321,6 +330,12 @@ fn grouped(value: i64) -> String {
         out.push(digit);
     }
     out
+}
+
+fn scaled(value: f64) -> String {
+    let text = format!("{value:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    text.to_string()
 }
 
 fn float_amount(reading: &Value) -> Option<f64> {

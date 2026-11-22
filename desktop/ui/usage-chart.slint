@@ -70,10 +70,10 @@ component ModelSpeedTable inherits VerticalLayout {
     HorizontalLayout {
         spacing: 6px;
         Hint { text: "模型"; horizontal-stretch: 1; }
-        Hint { text: "速度"; width: 52px; horizontal-alignment: right; }
+        Hint { text: "速度"; width: 46px; horizontal-alignment: right; }
         Hint { text: "首字耗时"; width: 64px; horizontal-alignment: right; }
         Hint { text: "请求"; width: 36px; horizontal-alignment: right; }
-        Hint { text: "输出"; width: 56px; horizontal-alignment: right; }
+        Hint { text: "输出"; width: 64px; horizontal-alignment: right; }
     }
     // The empty-state hint must sit inside the remaining height;
     // a trailing sibling would overflow the fixed-height card row.
@@ -94,10 +94,10 @@ component ModelSpeedTable inherits VerticalLayout {
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                DataText { text: row.speed; width: 52px; horizontal-alignment: right; }
+                DataText { text: row.speed; width: 46px; horizontal-alignment: right; }
                 DataText { text: row.first-token; width: 64px; horizontal-alignment: right; }
                 DataText { text: row.requests; width: 36px; horizontal-alignment: right; }
-                DataText { text: row.output; width: 56px; horizontal-alignment: right; }
+                DataText { text: row.output; width: 64px; horizontal-alignment: right; }
             }
         }
         empty-hint := Hint {

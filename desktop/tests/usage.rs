@@ -117,16 +117,16 @@ fn one_real_ledger_supplies_calendar_buckets_and_logical_request_counts() {
     assert_eq!(today.coverage, Coverage::Complete);
     assert_eq!(today.buckets.len(), 24);
     assert_eq!(today.buckets[0].label, "00:00");
-    assert_eq!(today.buckets[0].tokens, "4,300,000,009");
+    assert_eq!(today.buckets[0].tokens, "43 亿");
     assert_eq!(today.buckets[0].requests, "1");
     assert_eq!(today.buckets[0].token_count, Some(4_300_000_009));
     assert_eq!(today.buckets[0].request_count, Some(1));
-    assert_eq!(today.token_total, "4,300,000,009");
+    assert_eq!(today.token_total, "43 亿");
     assert_eq!(today.request_total, "1");
     let week = read_usage(&ledger, Range::Week, now);
     assert_eq!(week.buckets.len(), 7);
     assert_eq!(week.buckets.last().unwrap().label, "2026-11-20");
-    assert_eq!(week.token_total, "4,300,000,513");
+    assert_eq!(week.token_total, "43 亿");
     assert_eq!(week.request_total, "2");
     assert_eq!(read_usage(&ledger, Range::Month, now).buckets.len(), 30);
 }
