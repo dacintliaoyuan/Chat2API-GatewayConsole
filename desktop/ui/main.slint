@@ -12,6 +12,7 @@ export struct LogRow {
     id: string,
     at: string,
     level: string,
+    source: string,
     text: string,
     detail: string,
 }
@@ -98,6 +99,24 @@ export struct ProbeHistoryRow {
     result: string,
     summary: string,
     tone: int,
+}
+
+// One row of the settings page's UM login-round table (#159). The words are
+// already mapped; an unknown closed-set value reads 未知 and keeps its raw value
+// only in `detail`.
+export struct LoginRoundRow {
+    key: string,
+    at: string,
+    round: string,
+    state: string,
+    state-tone: int,
+    mode: string,
+    trigger: string,
+    submit: string,
+    outcome: string,
+    reason: string,
+    upstream: string,
+    detail: string,
 }
 
 // One navigation entry. The page number lives next to its label so the rail and
@@ -878,6 +897,24 @@ export component MainWindow inherits Window {
     in-out property <bool> log-refreshed: false;
     in-out property <bool> log-refresh-pending: false;
     in property <[LogRow]> logs: [];
+    // The log page has two layers. `log-mode` 0 tails the instance's own file;
+    // 1 reads the gateway's bounded server-side history. The history filters
+    // never touch the live follow, pause or new-log count.
+    in-out property <int> log-mode: 0;
+    // 今天 / 24 小时 / 7 天 / 30 天 / 全部. `log-period` keeps the saved
+    // desktop.json index; the history control owns the five visible ranges.
+    in-out property <int> log-range: 0;
+    in-out property <bool> log-level-error: false;
+    in-out property <bool> log-level-warn: false;
+    in-out property <bool> log-level-info: false;
+    in-out property <bool> log-level-debug: false;
+    // Gateway `sources` closed set; the first entry is "all sources".
+    in property <[string]> log-source-options: ["全部来源"];
+    in-out property <int> log-source-index: 0;
+    in-out property <string> log-source;
+    // "没有更早记录" once the last history page is loaded.
+    in property <string> log-history-note;
+    // Legacy single-level index kept for desktop.json persistence.
     in-out property <int> log-filter-level: 0;
     in-out property <string> log-filter-keyword;
     in-out property <bool> log-follow: true;
@@ -887,7 +924,6 @@ export component MainWindow inherits Window {
     in property <int> log-version;
     in-out property <int> log-period;
     in property <bool> older-logs;
-    in property <bool> newer-logs;
     // Test seam: the log detail state is set by row activation and read by the
     // layout test that checks the list height after closing the detail.
     in-out property <string> open-log-id;
@@ -987,6 +1023,27 @@ export component MainWindow inherits Window {
     callback clear-probe-selection();
     callback run-context-probe();
     callback stop-context-probe();
+    // The settings page's UM login-round table (#159): round/reason filters,
+    // the bounded rows and the read-only detail. A legal empty history says
+    // 暂无登录轮次; an unreadable one keeps its reason and hides the table.
+    in property <[LoginRoundRow]> login-rounds: [];
+    in property <string> login-rounds-status: "尚未读取登录轮次";
+    in property <int> login-rounds-tone: 3;
+    in property <string> login-rounds-scope;
+    in property <string> login-rounds-empty-text;
+    in property <bool> login-rounds-table-visible;
+    in property <bool> login-rounds-truncated;
+    in property <bool> login-rounds-loading;
+    in-out property <string> login-rounds-round-filter;
+    in-out property <string> login-rounds-reason-filter;
+    in-out property <string> login-rounds-selected;
+    in property <string> login-rounds-detail-title;
+    in property <string> login-rounds-detail;
+    callback filter-login-rounds(string, string);
+    callback refresh-login-rounds();
+    callback open-login-round(string);
+    out property <length> login-rounds-list-height: login-rounds-list.height;
+    out property <length> login-rounds-row-height: root.compact ? 72px : 44px;
     in property <string> config-path;
     in property <string> instance-path;
     // Test seam: the layout tests expand the instance card without a pointer.
@@ -1289,14 +1346,51 @@ export component MainWindow inherits Window {
     out property <length> log-list-y: log-list.absolute-position.y;
     out property <length> log-list-height: log-list.height;
     out property <length> log-details-height: log-details.height;
-    out property <length> log-period-x: log-period-control.absolute-position.x;
-    out property <length> log-period-y: log-period-control.absolute-position.y;
-    out property <length> log-period-width: log-period-control.width;
-    out property <length> log-period-height: log-period-control.height;
-    out property <length> log-level-x: log-level-control.absolute-position.x;
-    out property <length> log-level-y: log-level-control.absolute-position.y;
-    out property <length> log-level-width: log-level-control.width;
-    out property <length> log-level-height: log-level-control.height;
+    out property <length> log-mode-x: log-mode-control.absolute-position.x;
+    out property <length> log-mode-y: log-mode-control.absolute-position.y;
+    out property <length> log-mode-width: log-mode-control.width;
+    out property <length> log-mode-height: log-mode-control.height;
+    out property <length> log-range-x: log-range-control.absolute-position.x;
+    out property <length> log-range-y: log-range-control.absolute-position.y;
+    out property <length> log-range-width: log-range-control.width;
+    out property <length> log-range-height: log-range-control.height;
+    out property <bool> log-range-visible: log-range-control.visible;
+    out property <length> log-level-error-x: log-level-error.absolute-position.x;
+    out property <length> log-level-error-y: log-level-error.absolute-position.y;
+    out property <length> log-level-error-width: log-level-error.width;
+    out property <length> log-level-error-height: log-level-error.height;
+    out property <length> log-level-warn-x: log-level-warn.absolute-position.x;
+    out property <length> log-level-warn-y: log-level-warn.absolute-position.y;
+    out property <length> log-level-warn-width: log-level-warn.width;
+    out property <length> log-level-warn-height: log-level-warn.height;
+    out property <length> log-level-info-x: log-level-info.absolute-position.x;
+    out property <length> log-level-info-y: log-level-info.absolute-position.y;
+    out property <length> log-level-info-width: log-level-info.width;
+    out property <length> log-level-info-height: log-level-info.height;
+    out property <length> log-level-debug-x: log-level-debug.absolute-position.x;
+    out property <length> log-level-debug-y: log-level-debug.absolute-position.y;
+    out property <length> log-level-debug-width: log-level-debug.width;
+    out property <length> log-level-debug-height: log-level-debug.height;
+    out property <length> log-source-x: log-source-control.absolute-position.x;
+    out property <length> log-source-y: log-source-control.absolute-position.y;
+    out property <length> log-source-width: log-source-control.width;
+    out property <length> log-source-height: log-source-control.height;
+    out property <bool> log-source-open: log-source-control.open;
+    out property <string> log-source-current: log-source-control.current-text;
+    out property <length> log-source-option-x: log-source-control.list-x;
+    out property <length> log-source-option-y: log-source-control.list-y;
+    out property <length> log-source-option-width: log-source-control.list-width;
+    out property <length> log-source-option-height: log-source-control.list-height;
+    out property <length> log-source-option-row-height: log-source-control.option-height;
+    out property <length> log-earlier-x: log-earlier.absolute-position.x;
+    out property <length> log-earlier-y: log-earlier.absolute-position.y;
+    out property <length> log-earlier-width: log-earlier.width;
+    out property <length> log-earlier-height: log-earlier.height;
+    out property <bool> log-earlier-enabled: log-earlier.enabled;
+    out property <bool> log-history-note-visible: !root.log-history-note.is-empty;
+    out property <string> log-history-note-text: root.log-history-note;
+    out property <bool> log-follow-visible: log-follow.visible;
+    out property <string> log-layer-label: root.log-mode == 0 ? "实时" : "历史";
     out property <length> log-search-x: log-search.absolute-position.x;
     out property <length> log-search-y: log-search.absolute-position.y;
     out property <length> log-search-width: log-search.width;
@@ -1469,8 +1563,12 @@ export component MainWindow inherits Window {
     callback refresh-settings();
     callback refresh-page();
     callback refresh-logs();
-    callback apply-log-filter(int, string);
-    callback log-history(int, int);
+    callback select-log-mode(int);
+    callback select-log-range(int);
+    callback toggle-log-level(int);
+    callback sync-log-level();
+    callback query-log-history();
+    callback load-earlier-logs();
     callback query-requests(int);
     callback open-request(string);
     callback usage-range-changed(int);
@@ -1489,7 +1587,7 @@ export component MainWindow inherits Window {
         }
     }
     changed log-version => {
-        if (root.log-period == 0 && root.log-follow && root.logs.length > 0) {
+        if (root.log-mode == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
     }
@@ -1497,7 +1595,7 @@ export component MainWindow inherits Window {
         root.confirm-clear = false;
         root.confirm-quit = false;
         root.apply-chart-theme();
-        if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
+        if (root.page == 3 && root.log-mode == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
         if (root.page == 2 && root.account-form-visible) {
@@ -1597,8 +1695,8 @@ export component MainWindow inherits Window {
         else if (root.page == 1) { root.refresh-requests(); }
         else if (root.page == 2) { root.refresh-settings(); }
         else if (root.page == 3) {
-            if (root.log-period == 0) { root.refresh-logs(); }
-            else { root.log-history(root.log-period, 0); }
+            if (root.log-mode == 0) { root.refresh-logs(); }
+            else { root.query-log-history(); }
         }
     }
     public function refresh-current-page() {
@@ -1622,6 +1720,10 @@ export component MainWindow inherits Window {
     changed log-period => { root.settings-changed(); }
     changed log-filter-level => { root.settings-changed(); }
     changed log-filter-keyword => { root.settings-changed(); }
+    changed log-level-error => { root.settings-changed(); }
+    changed log-level-warn => { root.settings-changed(); }
+    changed log-level-info => { root.settings-changed(); }
+    changed log-level-debug => { root.settings-changed(); }
     changed refreshing => {
         if (root.refreshing) {
             root.refresh-rotation = 0deg;
@@ -2479,33 +2581,83 @@ export component MainWindow inherits Window {
                 FlexboxLayout {
                     flex-wrap: wrap;
                     spacing: 8px;
-                    log-period-control := Segmented {
-                        width: root.compact ? 190px : 228px;
-                        options: [{ text: "实时" }, { text: "今天" }, { text: "7 天" }, { text: "30 天" }];
-                        current-index <=> root.log-period;
-                        label: "日志日期范围";
-                        selected(_) => { root.log-history(root.log-period, 0); }
+                    // Two layers, one control: 实时 keeps the file tail; 历史
+                    // switches to the gateway's bounded server-side history.
+                    log-mode-control := Segmented {
+                        width: root.compact ? 140px : 160px;
+                        options: [{ text: "实时" }, { text: "历史" }];
+                        current-index <=> root.log-mode;
+                        label: "日志层";
+                        selected(_) => { root.select-log-mode(root.log-mode); }
                     }
-                    // One 5-item segmented control at every width, so the level
-                    // filter keeps the console's field/edge/radius language.
-                    log-level-control := Segmented {
-                        width: root.compact ? 170px : 248px;
-                        options: [{ text: "全部" }, { text: "信息" }, { text: "警告" }, { text: "错误" }, { text: "原始日志" }];
-                        current-index <=> root.log-filter-level;
-                        label: "日志级别";
-                        selected(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                    // The five history windows only exist in the history layer.
+                    log-range-control := Segmented {
+                        visible: root.log-mode == 1;
+                        width: root.compact ? 200px : 252px;
+                        options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
+                        current-index <=> root.log-range;
+                        label: "日志日期范围";
+                        selected(_) => { root.select-log-range(root.log-range); }
+                    }
+                    // The four levels are independent toggles; no selection means
+                    // every level, including the ungraded rows.
+                    log-level-error := Toggle {
+                        visible: root.log-mode == 1;
+                        label: "错误";
+                        checked <=> root.log-level-error;
+                        toggled => { root.sync-log-level(); root.query-log-history(); }
+                    }
+                    log-level-warn := Toggle {
+                        visible: root.log-mode == 1;
+                        label: "警告";
+                        checked <=> root.log-level-warn;
+                        toggled => { root.sync-log-level(); root.query-log-history(); }
+                    }
+                    log-level-info := Toggle {
+                        visible: root.log-mode == 1;
+                        label: "信息";
+                        checked <=> root.log-level-info;
+                        toggled => { root.sync-log-level(); root.query-log-history(); }
+                    }
+                    log-level-debug := Toggle {
+                        visible: root.log-mode == 1;
+                        label: "调试";
+                        checked <=> root.log-level-debug;
+                        toggled => { root.sync-log-level(); root.query-log-history(); }
+                    }
+                }
+                // The source and the page actions share the second filter row,
+                // so the first row keeps its controls without wrapping at the
+                // common window width.
+                FlexboxLayout {
+                    flex-wrap: wrap;
+                    spacing: 8px;
+                    // The source list is the gateway's closed set; the first entry
+                    // is "all sources".
+                    log-source-control := Dropdown {
+                        visible: root.log-mode == 1;
+                        width: root.compact ? 120px : 150px;
+                        options: root.log-source-options;
+                        current-index <=> root.log-source-index;
+                        label: "日志来源";
+                        selected(index) => {
+                            root.log-source = index > 0 && index < root.log-source-options.length
+                                ? root.log-source-options[index] : "";
+                            root.query-log-history();
+                        }
                     }
                     // The whole toolbar reads like the Magpie session list:
                     // filters first, then search, the page actions and the one
                     // jump to settings. It wraps at the minimum width.
                     log-search := MaterialField {
+                        visible: root.log-mode == 1;
                         width: root.compact ? 140px : 160px;
                         icon: "search";
                         placeholder: "关键词";
                         clearable: true;
                         text <=> root.log-filter-keyword;
-                        edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
-                        cleared => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                        edited(_) => { root.query-log-history(); }
+                        cleared => { root.query-log-history(); }
                     }
                     // The slot keeps its width; only the glyph swaps to a
                     // check so the neighbouring actions never shift.
@@ -2521,10 +2673,10 @@ export component MainWindow inherits Window {
                         enabled: !root.refreshing;
                         clicked => { root.refresh-current-page(); }
                     }
-                    // Live follow stays next to the filters it belongs to; pausing
-                    // only stops the list from jumping, never the log read.
+                    // Live follow stays next to the live layer it belongs to;
+                    // pausing only stops the list from jumping, never the read.
                     log-follow := ActionButton {
-                        visible: root.log-period == 0;
+                        visible: root.log-mode == 0;
                         width: Theme.icon-button;
                         height: Theme.icon-button;
                         quiet: true;
@@ -2558,11 +2710,25 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     spacing: 8px;
                     alignment: start;
+                    Tag {
+                        label: root.log-layer-label;
+                        tone: root.log-mode == 0 ? 0 : 3;
+                        y: (parent.height - self.height) / 2;
+                    }
                     StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
                     Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
+                    Hint { visible: root.log-mode == 1 && !root.log-history-note.is-empty; text: root.log-history-note; vertical-alignment: center; }
                     DataText { text: root.log-updated-at-label; vertical-alignment: center; }
-                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.newer-logs; label: "较新"; icon: "chevron-left"; icon-only: true; tooltip: "较新的日志"; clicked => { root.log-history(root.log-period, -1); } }
-                    ActionButton { visible: root.log-period != 0; width: Theme.icon-button; height: Theme.icon-button; quiet: true; enabled: root.older-logs; label: "较早"; icon: "chevron-right"; icon-only: true; tooltip: "较早的日志"; clicked => { root.log-history(root.log-period, 1); } }
+                    log-earlier := ActionButton {
+                        visible: root.log-mode == 1;
+                        height: Theme.icon-button;
+                        quiet: true;
+                        label: "加载更早";
+                        icon: "chevron-down";
+                        tooltip: "加载更早的历史日志";
+                        enabled: root.older-logs;
+                        clicked => { root.load-earlier-logs(); }
+                    }
                 }
                 Panel {
                     vertical-stretch: 1;
@@ -2575,20 +2741,30 @@ export component MainWindow inherits Window {
                             vertical-stretch: 1;
                             alignment: center;
                             spacing: 4px;
-                            Hint { text: "暂无日志"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
-                            Hint { text: "网关输出会实时显示在这里"; horizontal-alignment: center; }
+                            Hint {
+                                text: root.log-mode == 0
+                                    ? "暂无日志"
+                                    : root.log-tone == 2 ? "历史日志读取失败" : "读取范围内没有符合条件的日志";
+                                color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center;
+                            }
+                            Hint {
+                                text: root.log-mode == 0
+                                    ? "网关输出会实时显示在这里"
+                                    : root.log-tone == 2 ? "原因见上方状态行" : "调整筛选或加载更早";
+                                horizontal-alignment: center;
+                            }
                         }
                         log-list := ListView {
                             visible: root.logs.length > 0;
                             vertical-stretch: 1;
                             content-y <=> root.log-scroll-y;
                             scrolled => {
-                                if (root.log-period == 0 && (-self.content-y + self.visible-height) < self.content-height - 8px) {
+                                if (root.log-mode == 0 && (-self.content-y + self.visible-height) < self.content-height - 8px) {
                                     root.log-follow = false;
                                 }
                             }
                             for row in root.logs : Selectable {
-                                label: row.at + " " + row.level + " " + row.text;
+                                label: row.at + " " + row.level + " " + row.source + " " + row.text;
                                 height: 36px;
                                 selected: row.id == root.open-log-id;
                                 activate => {
@@ -2602,6 +2778,10 @@ export component MainWindow inherits Window {
                                     Tag {
                                         label: row.level;
                                         tone: row.level == "错误" ? 2 : row.level == "警告" ? 1 : 3;
+                                    }
+                                    if root.log-mode == 1 : Tag {
+                                        label: row.source;
+                                        tone: 3;
                                     }
                                     Text { text: row.text; horizontal-stretch: 1; color: Theme.ink; font-size: 12px; vertical-alignment: center; overflow: elide; }
                                 }
@@ -3321,6 +3501,159 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    login-rounds-card := Card {
+                        inset: 16px;
+                        gap: 12px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                login-rounds-title := SectionLabel {
+                                    text: "UM 登录轮次";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                login-rounds-refresh := ActionButton {
+                                    width: Theme.icon-button;
+                                    height: Theme.icon-button;
+                                    label: "刷新登录轮次";
+                                    icon: "refresh";
+                                    icon-only: true;
+                                    quiet: true;
+                                    enabled: !root.login-rounds-loading;
+                                    tooltip: "重新读取本实例网关的登录历史";
+                                    clicked => { root.refresh-login-rounds(); }
+                                }
+                            }
+                            Hint { text: "来源：本实例网关的登录历史（只读，不触发探测或登录）。"; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                login-rounds-round-filter := MaterialField {
+                                    width: root.compact ? 110px : 130px;
+                                    placeholder: "轮次";
+                                    numeric: true;
+                                    text <=> root.login-rounds-round-filter;
+                                    accepted => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                login-rounds-reason-filter := MaterialField {
+                                    width: root.compact ? 150px : 220px;
+                                    placeholder: "按原因或结果查找";
+                                    clearable: true;
+                                    text <=> root.login-rounds-reason-filter;
+                                    accepted => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                    cleared => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                login-rounds-filter := FocusAction {
+                                    label: "筛选";
+                                    icon: "search";
+                                    quiet: true;
+                                    clicked => { root.filter-login-rounds(root.login-rounds-round-filter, root.login-rounds-reason-filter); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                StatusDot {
+                                    tone: root.login-rounds-tone;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                Hint {
+                                    text: root.login-rounds-status;
+                                    color: Theme.status_ink(root.login-rounds-tone);
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                                if root.login-rounds-truncated : Hint {
+                                    text: "已达单页上限";
+                                    color: Theme.status_ink(1);
+                                    vertical-alignment: center;
+                                }
+                            }
+                            login-rounds-scope-hint := Hint {
+                                visible: !root.login-rounds-scope.is-empty;
+                                text: root.login-rounds-scope;
+                            }
+                            if root.login-rounds-table-visible && !root.compact : HorizontalLayout {
+                                height: 20px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Hint { text: "开始（北京时间）"; width: 118px; vertical-alignment: center; }
+                                Hint { text: "轮次"; width: 36px; vertical-alignment: center; }
+                                Hint { text: "状态"; width: 64px; vertical-alignment: center; }
+                                Hint { text: "模式"; width: 56px; vertical-alignment: center; }
+                                Hint { text: "触发来源"; width: 72px; vertical-alignment: center; }
+                                Hint { text: "提交"; width: 36px; vertical-alignment: center; }
+                                Hint { text: "结果"; width: 72px; vertical-alignment: center; }
+                                Hint { text: "原因"; horizontal-stretch: 1; vertical-alignment: center; }
+                                Hint { text: "上游 / 证据"; width: 120px; vertical-alignment: center; }
+                            }
+                            login-rounds-list := ListView {
+                                visible: root.login-rounds-table-visible;
+                                height: min(280px, root.login-rounds.length * root.login-rounds-row-height);
+                                for row in root.login-rounds : Selectable {
+                                    label: row.at + " 轮次 " + row.round + " " + row.state
+                                        + " " + row.mode + " " + row.trigger + " 提交 " + row.submit
+                                        + " " + row.outcome + " " + row.reason + " " + row.upstream;
+                                    height: root.login-rounds-row-height;
+                                    selected: root.login-rounds-selected == row.key;
+                                    activate => { root.open-login-round(row.key); }
+                                    if root.compact : VerticalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        padding-top: 4px;
+                                        padding-bottom: 4px;
+                                        spacing: 1px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            DataText { text: row.at; horizontal-stretch: 1; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                            DataText { text: "轮次 " + row.round; width: 52px; vertical-alignment: center; }
+                                            Tag { label: row.state; tone: row.state-tone; width: 64px; }
+                                            Hint { text: row.mode; width: 56px; vertical-alignment: center; }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Hint { text: "触发 " + row.trigger; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                            Hint { text: "提交 " + row.submit; width: 52px; vertical-alignment: center; }
+                                            Hint { text: row.outcome; width: 72px; vertical-alignment: center; overflow: elide; }
+                                            Hint { text: row.upstream; width: 110px; vertical-alignment: center; overflow: elide; }
+                                        }
+                                        Hint { text: "原因 " + row.reason; overflow: elide; }
+                                    }
+                                    if !root.compact : HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+                                        DataText { text: row.at; width: 118px; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                                        DataText { text: row.round; width: 36px; vertical-alignment: center; }
+                                        Tag { label: row.state; tone: row.state-tone; width: 64px; }
+                                        Hint { text: row.mode; width: 56px; vertical-alignment: center; }
+                                        Hint { text: row.trigger; width: 72px; vertical-alignment: center; overflow: elide; }
+                                        DataText { text: row.submit; width: 36px; vertical-alignment: center; }
+                                        Hint { text: row.outcome; width: 72px; vertical-alignment: center; overflow: elide; }
+                                        Hint { text: row.reason; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                        Hint { text: row.upstream; width: 120px; vertical-alignment: center; overflow: elide; }
+                                    }
+                                }
+                            }
+                            login-rounds-empty-hint := Hint {
+                                visible: !root.login-rounds-empty-text.is-empty;
+                                text: root.login-rounds-empty-text;
+                            }
+                            login-rounds-detail := TextDetails {
+                                visible: !root.login-rounds-selected.is-empty || self.height > 0px;
+                                height: root.login-rounds-selected.is-empty ? 0px : root.compact ? 150px : 190px;
+                                animate height { duration: Theme.settle; easing: ease-out; }
+                                title: root.login-rounds-detail-title;
+                                body: root.login-rounds-detail;
+                                closed => { root.open-login-round(""); }
                             }
                         }
                     }

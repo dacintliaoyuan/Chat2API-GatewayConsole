@@ -53,9 +53,9 @@ fn click(window: &MainWindow, x: f32, y: f32) {
     window
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
-        position,
-        button: PointerEventButton::Left,
-    });
+            position,
+            button: PointerEventButton::Left,
+        });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 }
 
@@ -374,7 +374,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
 
     // The appearance row is the left label plus a right-aligned control.
     assert!(
-        (window.get_appearance_row_label_x() - (window.get_appearance_card_x() + inset)).abs() < 0.5,
+        (window.get_appearance_row_label_x() - (window.get_appearance_card_x() + inset)).abs()
+            < 0.5,
         "外观行标签必须与卡片内边距对齐"
     );
     assert!(
@@ -415,7 +416,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
         "端口输入必须排在标签右侧"
     );
     assert!(
-        window.get_port_apply_x() >= window.get_port_input_x() + window.get_port_input_width() - 0.5,
+        window.get_port_apply_x()
+            >= window.get_port_input_x() + window.get_port_input_width() - 0.5,
         "应用按钮必须排在端口输入右侧"
     );
     assert!(
@@ -436,7 +438,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
     );
     assert!(
         window.get_gateway_address_x()
-            >= window.get_gateway_address_label_x() + window.get_gateway_address_label_width() - 0.5,
+            >= window.get_gateway_address_label_x() + window.get_gateway_address_label_width()
+                - 0.5,
         "地址值必须排在标签右侧"
     );
     assert!(
@@ -576,8 +579,7 @@ fn the_instance_card_aligns_its_detail_rows() {
 
     let inset = 16.0;
     assert!(
-        window.get_instance_supervision_y()
-            < window.get_instance_config_y()
+        window.get_instance_supervision_y() < window.get_instance_config_y()
             && window.get_instance_config_y() < window.get_instance_data_y(),
         "实例卡详情必须按网关监督、配置文件、实例数据排列"
     );
@@ -941,6 +943,7 @@ fn log_row(index: usize) -> LogRow {
         id: format!("row-{index}").into(),
         at: "10:00:00".into(),
         level: "信息".into(),
+        source: "chat2api".into(),
         text: format!("line-{index}").into(),
         detail: format!("2026-11-21 10:00:00 +08:00  信息\n\nline-{index}").into(),
     }
@@ -950,6 +953,7 @@ fn log_row(index: usize) -> LogRow {
 fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     let window = window_at(540.0, 420.0);
     window.set_page(3);
+    window.set_log_mode(1);
     let rows: Vec<LogRow> = (0..20).map(log_row).collect();
     window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
@@ -961,16 +965,16 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     );
 
     window.set_log_filter_keyword("timeout".into());
-    let applied = Rc::new(RefCell::new(None));
-    window.on_apply_log_filter({
+    let applied = Rc::new(RefCell::new(0));
+    window.on_query_log_history({
         let applied = Rc::clone(&applied);
-        move |level, keyword| *applied.borrow_mut() = Some((level, keyword))
+        move || *applied.borrow_mut() += 1
     });
 
-    // At the minimum width the level filter stays a 5-item segmented control;
-    // click the second item ("信息").
-    let x = window.get_log_level_x() + window.get_log_level_width() * 0.3;
-    let y = window.get_log_level_y() + window.get_log_level_height() / 2.0;
+    // At the minimum width the four level filters are independent toggles;
+    // click the third one ("信息") and then the first one ("错误").
+    let x = window.get_log_level_info_x() + window.get_log_level_info_width() / 2.0;
+    let y = window.get_log_level_info_y() + window.get_log_level_info_height() / 2.0;
     let position = slint::LogicalPosition::new(x, y);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position,
@@ -979,11 +983,39 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     window
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_log_level_info(),
+        "the info level toggle must be on"
+    );
+    assert_eq!(*applied.borrow(), 1);
+
+    let x = window.get_log_level_error_x() + window.get_log_level_error_width() / 2.0;
+    let y = window.get_log_level_error_y() + window.get_log_level_error_height() / 2.0;
+    let position = slint::LogicalPosition::new(x, y);
+    window.window().dispatch_event(WindowEvent::PointerPressed {
         position,
         button: PointerEventButton::Left,
     });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(*applied.borrow(), Some((1, "timeout".into())));
+    assert!(
+        window.get_log_level_error(),
+        "the error level toggle must be on"
+    );
+    assert!(
+        window.get_log_level_info(),
+        "the earlier level toggle stays on"
+    );
+    assert_eq!(*applied.borrow(), 2);
 
     window
         .window()
@@ -993,7 +1025,8 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
         .window()
         .set_size(slint::LogicalSize::new(540.0, 420.0));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_log_filter_level(), 1);
+    assert!(window.get_log_level_info());
+    assert!(window.get_log_level_error());
 }
 
 #[test]
@@ -1311,7 +1344,10 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1900));
     assert!(window.get_copy_status_visible());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
-    assert!(!window.get_copy_status_visible(), "the copy status clears after two seconds");
+    assert!(
+        !window.get_copy_status_visible(),
+        "the copy status clears after two seconds"
+    );
     assert_eq!(window.get_copy_base_icon(), "copy");
 
     click(
@@ -1811,8 +1847,7 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
     );
     assert!(
         window.get_request_search_width() > 140.0
-            && (window.get_request_query_x() + window.get_request_query_width() - page_right)
-                .abs()
+            && (window.get_request_query_x() + window.get_request_query_width() - page_right).abs()
                 < 1.0,
         "the compact search and query stay inside the page"
     );
@@ -1826,7 +1861,8 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
     );
     assert!(
         window.get_request_detail_x() >= 96.0 - 1.0
-            && window.get_request_detail_x() + detail_width <= window.get_window_width() - 12.0 + 1.0,
+            && window.get_request_detail_x() + detail_width
+                <= window.get_window_width() - 12.0 + 1.0,
         "the compact detail stays inside the page content"
     );
 }
@@ -2029,7 +2065,11 @@ fn tray_less_quit_requires_a_second_click() {
         window.get_quit_confirm_x() + window.get_quit_confirm_width() / 2.0,
         window.get_quit_confirm_y() + window.get_quit_confirm_height() / 2.0,
     );
-    assert_eq!(quits.get(), 1, "the second click stops the gateway and quits");
+    assert_eq!(
+        quits.get(),
+        1,
+        "the second click stops the gateway and quits"
+    );
 }
 
 #[test]
@@ -2082,22 +2122,60 @@ fn the_log_page_opens_settings_from_its_toolbar() {
 fn the_log_filter_row_keeps_every_control_above_the_list() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
+    window.set_log_mode(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
-    let controls = [
+    let first_row = [
         (
-            "time range",
-            window.get_log_period_x(),
-            window.get_log_period_y(),
-            window.get_log_period_width(),
-            window.get_log_period_height(),
+            "mode",
+            window.get_log_mode_x(),
+            window.get_log_mode_y(),
+            window.get_log_mode_width(),
+            window.get_log_mode_height(),
         ),
         (
-            "level",
-            window.get_log_level_x(),
-            window.get_log_level_y(),
-            window.get_log_level_width(),
-            window.get_log_level_height(),
+            "time range",
+            window.get_log_range_x(),
+            window.get_log_range_y(),
+            window.get_log_range_width(),
+            window.get_log_range_height(),
+        ),
+        (
+            "error level",
+            window.get_log_level_error_x(),
+            window.get_log_level_error_y(),
+            window.get_log_level_error_width(),
+            window.get_log_level_error_height(),
+        ),
+        (
+            "warn level",
+            window.get_log_level_warn_x(),
+            window.get_log_level_warn_y(),
+            window.get_log_level_warn_width(),
+            window.get_log_level_warn_height(),
+        ),
+        (
+            "info level",
+            window.get_log_level_info_x(),
+            window.get_log_level_info_y(),
+            window.get_log_level_info_width(),
+            window.get_log_level_info_height(),
+        ),
+        (
+            "debug level",
+            window.get_log_level_debug_x(),
+            window.get_log_level_debug_y(),
+            window.get_log_level_debug_width(),
+            window.get_log_level_debug_height(),
+        ),
+    ];
+    let second_row = [
+        (
+            "source",
+            window.get_log_source_x(),
+            window.get_log_source_y(),
+            window.get_log_source_width(),
+            window.get_log_source_height(),
         ),
         (
             "search",
@@ -2114,13 +2192,6 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
             window.get_log_refresh_height(),
         ),
         (
-            "follow",
-            window.get_log_follow_x(),
-            window.get_log_follow_y(),
-            window.get_log_follow_width(),
-            window.get_log_follow_height(),
-        ),
-        (
             "settings",
             window.get_log_settings_x(),
             window.get_log_settings_y(),
@@ -2128,28 +2199,39 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
             window.get_log_settings_height(),
         ),
     ];
-    for (label, x, y, width, height) in controls {
+    for (label, x, y, width, height) in first_row.iter().chain(second_row.iter()) {
         assert!(
-            x >= 0.0 && width > 0.0 && height > 0.0,
+            *x >= 0.0 && *width > 0.0 && *height > 0.0,
             "{label} control must have a visible box"
         );
         assert!(
-            y + height <= window.get_log_list_y() + 1.0,
+            *y + *height <= window.get_log_list_y() + 1.0,
             "{label} control must sit above the log list"
         );
     }
-    for (index, (label, _, y, _, height)) in controls.iter().enumerate() {
-        for (other, _, other_y, _, other_height) in &controls[index + 1..] {
-            assert!(
-                *y < other_y + other_height && *other_y < y + height,
-                "{label} and {other} must share the filter row"
-            );
-        }
+    let first_y = first_row[0].2;
+    for (label, _, y, _, _) in &first_row {
+        assert!(
+            (*y - first_y).abs() < 1.0,
+            "{label} must stay in the first filter row"
+        );
     }
-    let order: Vec<f32> = controls.iter().map(|(_, x, _, _, _)| *x).collect();
+    let first_order: Vec<f32> = first_row.iter().map(|(_, x, _, _, _)| *x).collect();
     assert!(
-        order.windows(2).all(|pair| pair[0] < pair[1]),
-        "filter controls must read left to right in ticket order: {order:?}"
+        first_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "the mode, range and four level toggles must read left to right: {first_order:?}"
+    );
+    let second_y = second_row[0].2;
+    for (label, _, y, _, _) in &second_row {
+        assert!(
+            (*y - second_y).abs() < 1.0,
+            "{label} must stay in the second filter row"
+        );
+    }
+    let second_order: Vec<f32> = second_row.iter().map(|(_, x, _, _, _)| *x).collect();
+    assert!(
+        second_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "the source, search, refresh and settings must read left to right: {second_order:?}"
     );
 }
 
@@ -2254,7 +2336,10 @@ fn focusing_the_port_field_selects_the_whole_value() {
         window.get_port_input_y() + window.get_port_input_height() / 2.0,
     );
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert!(window.get_port_input_focused(), "the click focuses the port field");
+    assert!(
+        window.get_port_input_focused(),
+        "the click focuses the port field"
+    );
     assert!(
         window.get_port_input_selected(),
         "focusing the port field selects its whole value"
