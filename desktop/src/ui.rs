@@ -9,6 +9,7 @@ use slint::{ModelRc, VecModel};
 
 use crate::account::AccountSurface;
 use crate::overview::{FaultRow as FaultViewRow, FaultSurface, Tone};
+use crate::um_service::ServiceSurface;
 
 slint::include_modules!();
 
@@ -97,5 +98,57 @@ impl FaultSurface for MainWindow {
             })
             .collect();
         self.set_upstream_fault_history(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+}
+
+impl ServiceSurface for MainWindow {
+    fn set_service_state(&self, value: &str) {
+        self.set_um_service_state(value.into());
+    }
+
+    fn set_service_detail(&self, value: &str) {
+        self.set_um_service_detail(value.into());
+    }
+
+    fn set_service_tone(&self, tone: Tone) {
+        self.set_um_service_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
+    }
+
+    fn set_service_checked_at(&self, value: &str) {
+        self.set_um_service_checked_at(value.into());
+    }
+
+    fn set_service_can_start(&self, value: bool) {
+        self.set_um_service_can_start(value);
+    }
+
+    fn set_service_gateway_missing(&self, value: bool) {
+        self.set_um_service_gateway_missing(value);
+    }
+
+    fn set_service_gateway_detail(&self, value: &str) {
+        self.set_um_service_gateway_detail(value.into());
+    }
+
+    fn set_service_can_start_gateway(&self, value: bool) {
+        self.set_um_service_can_start_gateway(value);
+    }
+
+    fn set_service_start_status(&self, value: &str) {
+        self.set_um_service_start_status(value.into());
+    }
+
+    fn set_service_start_tone(&self, tone: Tone) {
+        self.set_um_service_start_tone(match tone {
+            Tone::Good => 0,
+            Tone::Warn => 1,
+            Tone::Bad => 2,
+            Tone::Neutral => 3,
+        });
     }
 }
