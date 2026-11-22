@@ -957,6 +957,22 @@ export component MainWindow inherits Window {
     in-out property <bool> confirm-restart: false;
     in-out property <bool> gateway-restarting: false;
     in property <int> settings-tone: 3;
+    // Access info (#152): the existing model API address row also carries the
+    // gateway's interface type and hints. A failed read keeps its reason and
+    // never shows a made-up address; a gateway that is not running shows the
+    // port-derived address with an explicit note and never claims a connection.
+    in property <string> access-address;
+    in property <string> access-full-base-url;
+    in property <string> access-interface-type: "尚未读取接入信息";
+    in property <int> access-tone: 3;
+    in property <[string]> access-hints;
+    in property <string> access-status;
+    in property <string> access-address-note;
+    in property <bool> access-address-available: true;
+    private property <string> access-display-address:
+        root.access-address-available
+            ? (root.access-address.is-empty ? root.base-url : root.access-address)
+            : "地址不可用";
     // The settings page's UM model catalog: a failed refresh keeps the previous
     // rows and marks them stale; a legal empty catalog says 无模型.
     in property <[ModelRow]> um-models;
@@ -1242,6 +1258,12 @@ export component MainWindow inherits Window {
     out property <length> gateway-address-width: gateway-address.width;
     out property <length> gateway-address-height: gateway-address.height;
     out property <string> gateway-address-text: gateway-address.text;
+    out property <bool> copy-base-enabled: copy-base.enabled;
+    out property <bool> copy-v1-enabled: copy-v1.enabled;
+    out property <length> access-type-row-y: access-type-row.absolute-position.y;
+    out property <length> access-hints-y: access-hints.absolute-position.y;
+    out property <string> access-address-note-text: access-address-note.text;
+    out property <bool> access-address-note-visible: access-address-note.visible;
     out property <length> copy-base-x: copy-base.absolute-position.x;
     out property <length> copy-base-y: copy-base.absolute-position.y;
     out property <length> copy-base-width: copy-base.width;
@@ -3101,7 +3123,7 @@ export component MainWindow inherits Window {
                             gateway-address-row := SettingRow {
                                 label: "模型 API 地址";
                                 gateway-address := DataText {
-                                    text: root.base-url;
+                                    text: root.access-display-address;
                                     horizontal-stretch: 1;
                                     horizontal-alignment: right;
                                     vertical-alignment: center;
@@ -3114,8 +3136,9 @@ export component MainWindow inherits Window {
                                     label: root.base-copied ? "已复制" : "复制";
                                     icon: root.base-copied ? "check" : "copy";
                                     quiet: true;
+                                    enabled: root.access-address-available;
                                     tooltip: "复制模型 API 地址";
-                                    clicked => { root.request-copy(root.base-url, 1); }
+                                    clicked => { root.request-copy(root.access-display-address, 1); }
                                 }
                                 copy-v1 := ActionButton {
                                     width: Theme.icon-button;
@@ -3123,9 +3146,47 @@ export component MainWindow inherits Window {
                                     label: root.v1-copied ? "已复制" : "复制";
                                     icon: root.v1-copied ? "check" : "copy";
                                     quiet: true;
+                                    enabled: root.access-address-available;
                                     tooltip: "复制 /v1 地址";
-                                    clicked => { root.request-copy(root.base-url + "/v1", 2); }
+                                    clicked => {
+                                        root.request-copy(
+                                            root.access-full-base-url.is-empty
+                                                ? root.access-display-address + "/v1"
+                                                : root.access-full-base-url,
+                                            2
+                                        );
+                                    }
                                 }
+                            }
+                            access-address-note := Hint {
+                                visible: !root.access-address-note.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: root.access-address-note;
+                                color: Theme.status_ink(root.access-tone);
+                            }
+                            access-type-row := SettingRow {
+                                label: "接口类型";
+                                access-type-value := Hint {
+                                    text: root.access-interface-type;
+                                    color: Theme.status_ink(root.access-tone);
+                                    horizontal-stretch: 1;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            access-hints := VerticalLayout {
+                                visible: root.access-hints.length > 0;
+                                height: self.visible ? self.preferred-height : 0px;
+                                spacing: 4px;
+                                for hint in root.access-hints : Hint { text: hint; }
+                            }
+                            access-status-hint := Hint {
+                                visible: !root.access-status.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: root.access-status;
+                                color: Theme.status_ink(root.access-tone);
                             }
                         }
                     }

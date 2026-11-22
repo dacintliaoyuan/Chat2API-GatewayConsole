@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc, VecModel};
 
+use crate::access_info::AccessInfoSurface;
 use crate::account::{AccountSurface, VerifySurface};
 use crate::login_rounds::{
     LoginRoundRow as LoginRoundViewRow, LoginRoundsSurface,
@@ -253,6 +254,42 @@ impl LoginRoundsSurface for MainWindow {
     fn set_detail(&self, title: &str, body: &str) {
         self.set_login_rounds_detail_title(title.into());
         self.set_login_rounds_detail(body.into());
+    }
+}
+
+impl AccessInfoSurface for MainWindow {
+    fn set_access_address(&self, address: &str) {
+        self.set_access_address(address.into());
+    }
+
+    fn set_access_full_base_url(&self, base_url: &str) {
+        self.set_access_full_base_url(base_url.into());
+    }
+
+    fn set_access_interface_type(&self, interface_type: &str) {
+        self.set_access_interface_type(interface_type.into());
+    }
+
+    fn set_access_hints(&self, hints: &[String]) {
+        let hints: Vec<slint::SharedString> =
+            hints.iter().map(|hint| hint.as_str().into()).collect();
+        self.set_access_hints(ModelRc::from(Rc::new(VecModel::from(hints))));
+    }
+
+    fn set_access_status(&self, status: &str) {
+        self.set_access_status(status.into());
+    }
+
+    fn set_access_tone(&self, tone: Tone) {
+        self.set_access_tone(tone_index(tone));
+    }
+
+    fn set_access_address_note(&self, note: &str) {
+        self.set_access_address_note(note.into());
+    }
+
+    fn set_access_address_available(&self, available: bool) {
+        self.set_access_address_available(available);
     }
 }
 
