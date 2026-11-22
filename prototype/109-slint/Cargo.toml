@@ -1,0 +1,25 @@
+[package]
+name = "proto109-slint"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone prototype: deliberately outside the rust/ workspace so the product
+# build stays untouched (issue #109).
+[workspace]
+
+[dependencies]
+slint = { version = "=1.19.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
+chrono = "0.4"
+ureq = { version = "2.12", features = ["json"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+slint-build = "=1.19.0"

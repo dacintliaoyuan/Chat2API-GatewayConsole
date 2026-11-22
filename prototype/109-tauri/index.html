@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>本机控制台 · 109 原型 (Tauri)</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>本机控制台</h1>
+          <p class="muted">状态总览与实时日志 · 只读 8000/8001</p>
+        </div>
+        <div class="actions">
+          <button id="hide">隐藏到托盘</button>
+          <button id="quit">退出</button>
+        </div>
+      </header>
+
+      <section class="cards">
+        <article class="card">
+          <span class="label">8000 网关</span>
+          <strong id="gateway-value">检测中</strong>
+          <span class="detail" id="gateway-detail">—</span>
+        </article>
+        <article class="card">
+          <span class="label">8001 控制台</span>
+          <strong id="console-value">检测中</strong>
+          <span class="detail" id="console-detail">—</span>
+        </article>
+        <article class="card">
+          <span class="label">UM 认证</span>
+          <strong id="auth-value">读取中</strong>
+          <span class="detail" id="auth-detail">—</span>
+        </article>
+        <article class="card">
+          <span class="label">上游</span>
+          <strong id="upstream-value">读取中</strong>
+          <span class="detail" id="upstream-detail">—</span>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>运行日志（chat2api 主链，最新在前）</h2>
+          <span class="muted" id="log-count">0 条</span>
+        </div>
+        <div class="log-list" id="logs"></div>
+      </section>
+
+      <footer>
+        <span class="muted" id="poll-status">正在连接 8000/8001</span>
+        <span class="muted" id="last-update">—</span>
+      </footer>
+    </main>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
