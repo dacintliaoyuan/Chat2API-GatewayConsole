@@ -129,6 +129,25 @@ fn switching_bar_line_and_token_request_keeps_the_pinned_value() {
     assert_eq!(chart.get_usage_selection_label(), "北京时间 01:00");
     assert_eq!(chart.get_usage_selection_value(), "120");
     assert!(chart.get_usage_can_unpin());
+    assert!(
+        chart.get_usage_pinned_marker_visible(),
+        "the pinned bar carries a 2 px marker rule"
+    );
+    let plot_x = chart.get_usage_plot_x();
+    let plot_width = chart.get_usage_plot_width();
+    let marker_x = chart.get_usage_pinned_marker_x();
+    let marker_width = chart.get_usage_pinned_marker_width();
+    assert!(
+        marker_x >= plot_x - 0.5 && marker_x + marker_width <= plot_x + plot_width + 0.5,
+        "the marker stays inside the plot: {marker_x} + {marker_width} vs {plot_x} + {plot_width}"
+    );
+    // The chart's inner plot is a little narrower than the card, so the band
+    // is within a tenth of a third instead of an exact pixel match.
+    let expected_band = plot_width / 3.0;
+    assert!(
+        (marker_width - expected_band).abs() < expected_band * 0.1,
+        "the marker spans the pinned bucket's band: {marker_width} vs {expected_band}"
+    );
 
     chart.set_usage_show_line(true);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
@@ -154,13 +173,19 @@ fn clicking_the_same_bucket_again_or_the_unpin_option_clears_the_pin() {
     click_bucket(&chart, 1);
     assert_eq!(chart.get_usage_pinned_index(), -1);
     assert!(!chart.get_usage_can_unpin());
+    assert!(
+        !chart.get_usage_pinned_marker_visible(),
+        "the marker leaves with the pin"
+    );
 
     click_bucket(&chart, 2);
     assert_eq!(chart.get_usage_pinned_index(), 2);
     assert!(chart.get_usage_can_unpin());
+    assert!(chart.get_usage_pinned_marker_visible());
     click_unpin(&chart);
     assert_eq!(chart.get_usage_pinned_index(), -1);
     assert!(!chart.get_usage_can_unpin());
+    assert!(!chart.get_usage_pinned_marker_visible());
 }
 
 #[test]
@@ -502,6 +527,19 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
         "the five metric cards are part of the analytics card"
     );
     assert_eq!(window.get_request_kpi_count(), 5);
+    assert!(
+        window.get_request_kpi_scope_visible(),
+        "the KPI row names its scope"
+    );
+    assert_eq!(
+        window.get_request_kpi_scope_text().as_str(),
+        "所选范围"
+    );
+    assert!(
+        window.get_request_kpi_scope_y() + window.get_request_kpi_scope_height()
+            <= window.get_request_kpi_first_card_y() + 0.5,
+        "所选范围 sits above the KPI cards"
+    );
     assert_eq!(
         window
             .get_request_metrics()
@@ -881,13 +919,12 @@ fn an_empty_request_window_shows_one_reason_instead_of_five_dash_cards() {
         "an empty window must not draw five 76 px cards of dashes"
     );
     assert!(
-        window.get_request_analytics_empty_visible(),
-        "the analytics card names the reason in one line"
+        !window.get_request_analytics_card_visible(),
+        "the analytics card must not draw a second empty reason"
     );
     assert!(
-        window.get_request_analytics_empty_text().contains("暂无请求"),
-        "{}",
-        window.get_request_analytics_empty_text()
+        window.get_request_list_empty_visible(),
+        "the list card is the one empty state"
     );
 }
 
@@ -1027,4 +1064,47 @@ fn the_usage_chart_shows_a_visible_keyboard_focus_and_starts_on_the_first_bucket
         "the usage chart must draw a visible focus border"
     );
     assert_eq!(window.get_usage_active_index(), 0);
+}
+
+#[test]
+fn the_request_page_marks_the_pinned_bucket() {
+    let window = request_window();
+    window.set_request_chart_collapsed(false);
+    window.set_request_chart_collapsed_explicit(true);
+    window.set_request_chart_labels(ModelRc::from([
+        SharedString::from("10:00"),
+        "10:05".into(),
+        "10:10".into(),
+    ]));
+    window.set_request_chart_token_counts(ModelRc::from([1.0f32, 2.0, 1.5]));
+    window.set_request_chart_request_counts(ModelRc::from([10.0f32, 20.0, 15.0]));
+    window.set_request_chart_speed_counts(ModelRc::from([30.0f32, 40.0, 35.0]));
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(window.get_request_chart_visible());
+    assert!(
+        !window.get_request_pinned_marker_visible(),
+        "no pin means no marker"
+    );
+
+    window.invoke_pin_request_bucket(1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(
+        window.get_request_pinned_marker_visible(),
+        "the pinned bar carries a 2 px marker rule"
+    );
+    assert_eq!(window.get_request_pinned_marker_height(), 2.0);
+    let marker_x = window.get_request_pinned_marker_x();
+    let marker_width = window.get_request_pinned_marker_width();
+    assert!(
+        marker_width > 0.0
+            && marker_x >= 0.0
+            && marker_x + marker_width <= window.get_request_analytics_width() + 0.5,
+        "the marker stays inside the analytics card: {marker_x} + {marker_width}"
+    );
+
+    window.invoke_pin_request_bucket(1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(!window.get_request_pinned_marker_visible());
 }

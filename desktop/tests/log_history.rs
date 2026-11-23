@@ -69,13 +69,17 @@ fn the_log_page_separates_live_and_history_without_pausing_live_follow() {
     let window = log_window();
     window.set_log_follow(false);
     window.set_new_log_count(3);
-    assert_eq!(window.get_log_layer_label().as_str(), "实时");
+    assert_eq!(window.get_log_mode(), 0, "the live layer starts selected");
     assert!(!window.get_log_range_visible());
     assert!(window.get_log_follow_visible());
 
     window.set_log_mode(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_log_layer_label().as_str(), "历史");
+    assert_eq!(
+        window.get_log_mode(),
+        1,
+        "the segmented control is the one layer name"
+    );
     assert!(window.get_log_range_visible());
     assert!(!window.get_log_follow_visible());
     assert!(

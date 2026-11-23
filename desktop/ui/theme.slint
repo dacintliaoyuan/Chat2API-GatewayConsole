@@ -234,10 +234,19 @@ export component FocusAction inherits Rectangle {
     // Test seams: a quiet button keeps a 1 px transparent frame so keyboard
     // focus can step it up to the 3:1 control edge instead of relying on the
     // ~1.1:1 hover fill alone.
+    // Test seams: the colours the danger label, icon and frame actually draw.
+    // The label and icon use `bad-text` so a 12 px red label clears 4.5:1 on
+    // both surfaces; the frame keeps the vivid red for its 3:1 non-text edge.
+    out property <color> label-tint: root.primary ? Theme.on-accent
+        : root.danger ? Theme.bad-text
+        : root.link ? Theme.accent : Theme.ink;
+    out property <color> icon-tint: root.label-tint;
+    out property <color> frame-tint: root.border-color;
     out property <color> focus-ring-color: root.border-color;
     out property <length> focus-ring-width: root.border-width;
     out property <bool> focus-visible:
-        focus.has-focus && root.border-color == Theme.edge-control-strong;
+        focus.has-focus && (root.border-color == Theme.edge-control-strong
+            || (root.danger && root.border-color == Theme.bad-text));
     callback clicked();
     public function take-focus() { focus.focus(); }
     height: Theme.control-height;
@@ -249,11 +258,15 @@ export component FocusAction inherits Rectangle {
         : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
         : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
     // Quiet and link actions keep the transparent frame at rest so their focus
-    // border never shifts the text by a pixel.
+    // border never shifts the text by a pixel. A danger action keeps the red
+    // edge, but its label and icon use `bad-text`: #ff3b30 is only 3.6:1 on
+    // white, while #a9271c clears 4.5:1 for the 12 px label. Focus steps the
+    // edge to the same readable red instead of the neutral control edge, so the
+    // red identity survives keyboard focus.
     border-width: 1px;
     border-color: root.quiet || root.link
         ? (focus.has-focus ? Theme.edge-control-strong : transparent)
-        : root.danger ? Theme.bad
+        : root.danger ? (focus.has-focus ? Theme.bad-text : Theme.bad)
         : root.primary ? Theme.accent
         : focus.has-focus ? Theme.edge-control-strong
         : Theme.edge;
@@ -272,7 +285,7 @@ export component FocusAction inherits Rectangle {
         if !root.icon.is-empty : AppIcon {
             size: root.icon-only ? 17px : 15px;
             kind: root.icon;
-            tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+            tint: root.icon-tint;
             transform-rotation: root.icon-rotation;
             animate transform-rotation {
                 duration: root.icon-rotation == 0deg ? 0ms : 150ms;
@@ -281,7 +294,7 @@ export component FocusAction inherits Rectangle {
         }
         if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
-            color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+            color: root.label-tint;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;

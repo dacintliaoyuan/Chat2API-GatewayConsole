@@ -2896,3 +2896,184 @@ fn the_request_detail_copies_the_request_id() {
         "复制请求 ID copies the selected request's stable ID"
     );
 }
+
+// WCAG relative luminance, so the danger-label check is a real contrast
+// measurement instead of a token-name comparison.
+fn relative_luminance(color: slint::Color) -> f64 {
+    fn channel(value: u8) -> f64 {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.039_28 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(color.red())
+        + 0.7152 * channel(color.green())
+        + 0.0722 * channel(color.blue())
+}
+
+fn contrast_ratio(foreground: slint::Color, background: slint::Color) -> f64 {
+    let (first, second) = (
+        relative_luminance(foreground),
+        relative_luminance(background),
+    );
+    let (lighter, darker) = if first > second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[test]
+fn danger_action_label_and_icon_clear_the_aa_text_floor_in_both_themes() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_account_can_clear(true);
+    for theme in [1, 2] {
+        window.set_theme_mode(theme);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        let surface = window.get_console_surface_color();
+        for (name, tint) in [
+            ("label", window.get_danger_action_label_tint()),
+            ("icon", window.get_danger_action_icon_tint()),
+        ] {
+            let ratio = contrast_ratio(tint, surface);
+            assert!(
+                ratio >= 4.5,
+                "the danger {name} must clear 4.5:1 on the card surface, got {ratio:.2} in theme {theme}"
+            );
+        }
+        let frame = contrast_ratio(window.get_danger_action_frame_tint(), surface);
+        assert!(
+            frame >= 3.0,
+            "the danger frame keeps the 3:1 non-text floor, got {frame:.2} in theme {theme}"
+        );
+    }
+}
+
+#[test]
+fn the_request_kpi_scope_caption_sits_above_the_five_cards() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_request_chart_collapsed(false);
+    window.set_request_chart_collapsed_explicit(true);
+    let metrics = vec![
+        RequestMetric {
+            label: "Token".into(),
+            value: "84 亿".into(),
+            detail: "入 42 亿 · 出 42 亿".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "请求".into(),
+            value: "2,100".into(),
+            detail: "失败 3".into(),
+            detail_tone: 2,
+        },
+        RequestMetric {
+            label: "缓存命中率".into(),
+            value: "62.4%".into(),
+            detail: "缓存读取 / 输入 Token".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "输出速度".into(),
+            value: "38.6 Token/秒".into(),
+            detail: "整次平均".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "首字耗时".into(),
+            value: "420 ms".into(),
+            detail: "请求开始到首个输出".into(),
+            detail_tone: 3,
+        },
+    ];
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert!(window.get_request_kpi_scope_visible());
+    assert_eq!(window.get_request_kpi_scope_text().as_str(), "所选范围");
+    let analytics_y = window.get_request_analytics_y();
+    let scope_y = window.get_request_kpi_scope_y();
+    let scope_height = window.get_request_kpi_scope_height();
+    let card_y = window.get_request_kpi_first_card_y();
+    assert!(
+        scope_y >= analytics_y,
+        "所选范围 stays inside the analytics card: {scope_y} vs {analytics_y}"
+    );
+    assert!(
+        scope_y + scope_height <= card_y + 0.5,
+        "所选范围 sits above the KPI cards: {} + {} vs {card_y}",
+        scope_y,
+        scope_height
+    );
+}
+
+#[test]
+fn the_first_run_footer_hint_retires_after_help_and_answers_ctrl_r() {
+    let window = window_at(1060.0, 720.0);
+    assert!(
+        window.get_footer_help_hint_visible(),
+        "the first-run footer points at the help page"
+    );
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "按 F1 查看帮助"
+    );
+
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "opening help retires the first-run hint"
+    );
+
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_footer_help_hint_visible());
+
+    window.set_page(4);
+    window.invoke_show_help_no_refresh();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_footer_help_hint_visible());
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "帮助页无刷新",
+        "Ctrl+R on the static help page names the no-op instead of spinning a hidden icon"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "the note is transient"
+    );
+}
+
+#[test]
+fn the_history_level_filter_names_the_empty_selection() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_mode(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(window.get_log_level_hint_visible());
+    assert_eq!(
+        window.get_log_level_hint_text().as_str(),
+        "未选级别 = 全部"
+    );
+}
+
+#[test]
+fn the_maintenance_menu_uses_a_wrench_not_the_settings_gear() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_maintenance_toggle_icon().as_str(),
+        "wrench",
+        "the maintenance menu must not reuse the settings page's gear"
+    );
+}

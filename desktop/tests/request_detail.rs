@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use serde_json::{json, Value};
+use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalSize};
 use um_desktop::usage::{read_requests, request_detail, Range};
 
@@ -48,6 +49,24 @@ fn write_rows(path: &Path, rows: &[Value]) {
         .map(|row| format!("{row}\n"))
         .collect::<String>();
     std::fs::write(path, lines).unwrap();
+}
+
+fn click_center(window: &main_ui::MainWindow, x: f32, y: f32, width: f32, height: f32) {
+    let position = slint::LogicalPosition::new(x + width / 2.0, y + height / 2.0);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 }
 
 fn ledger_row(at: &str, status: &str, request_id: Option<&str>) -> Value {
@@ -92,7 +111,29 @@ fn detail_for(ledger: &Path, status: &str, request_id: Option<&str>) -> String {
     );
     let page = read_requests(ledger, Range::Today, None, 0, "", None, now);
     let row = page.rows.first().expect("one ledger row");
-    request_detail(row, None)
+    request_detail(row, None).body
+}
+
+#[test]
+fn detail_is_sectioned_by_result_duration_tokens_and_error() {
+    let tmp = common::TempDir::new("request-detail-sections");
+    let ledger = tmp.path().join("usage.jsonl");
+
+    let detail = detail_for(&ledger, "upstream_unavailable", Some(REQUEST));
+    for section in ["结果", "耗时", "Token", "错误"] {
+        assert!(
+            detail.contains(section),
+            "missing section {section:?} in {detail}"
+        );
+    }
+    let result = detail.find("结果").expect("result section");
+    let duration = detail.find("耗时").expect("duration section");
+    let tokens = detail.find("Token").expect("token section");
+    let error = detail.find("错误").expect("error section");
+    assert!(
+        result < duration && duration < tokens && tokens < error,
+        "the sections keep the 结果 → 耗时 → Token → 错误 order: {detail}"
+    );
 }
 
 #[test]
@@ -102,7 +143,11 @@ fn detail_shows_http_status_and_keeps_error_code_separate_from_the_message() {
 
     let success = detail_for(&ledger, "ok", Some(REQUEST));
     assert!(success.contains("HTTP 状态  200"), "{success}");
-    assert!(success.contains("错误  无"), "{success}");
+    assert!(success.contains("错误\n  无"), "{success}");
+    assert!(
+        !success.contains("请求 ID"),
+        "the body must not repeat the panel header's request ID: {success}"
+    );
 
     let failed = detail_for(&ledger, "upstream_unavailable", Some(REQUEST));
     assert!(
@@ -144,7 +189,7 @@ fn missing_readings_say_unavailable_instead_of_zero() {
     let now = time("2026-11-20T19:00:00+08:00");
     let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let row = page.rows.first().expect("one ledger row");
-    let detail = request_detail(row, None);
+    let detail = request_detail(row, None).body;
 
     assert!(
         detail.contains("HTTP 状态  不可用（连接在响应前结束或没有记录）"),
@@ -202,7 +247,7 @@ fn missing_input_and_output_tokens_say_unavailable_with_the_ledger_reason() {
     let now = time("2026-11-20T19:00:00+08:00");
     let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let row = page.rows.first().expect("one ledger row");
-    let detail = request_detail(row, None);
+    let detail = request_detail(row, None).body;
 
     assert!(
         detail.contains("输入  不可用（上游没有报告 input Token（写端记为 0 表示未知））"),
@@ -277,21 +322,33 @@ fn retry_steps_expand_with_each_retry_and_logs_keep_only_this_request() {
     let logs = um_desktop::usage::read_request_logs(&log, row.request_id.as_deref(), now);
     assert_eq!(logs.lines.len(), 2, "only this request ID's events");
     let detail = request_detail(row, Some(&logs));
-    assert!(detail.contains("重试步骤"), "{detail}");
+    assert!(detail.body.contains("重试步骤"), "{}", detail.body);
     assert!(
-        detail.contains(
+        detail.body.contains(
             "- 11-20 00:00:58  物理重试记录：upstream_transient_retried；本次记录是估算下界"
         ),
-        "{detail}"
+        "{}",
+        detail.body
     );
-    assert!(detail.contains("request_summary"), "{detail}");
-    assert!(detail.contains("upstream_retry"), "{detail}");
+    assert!(detail.log_text.contains("request_summary"), "{}", detail.log_text);
+    assert!(detail.log_text.contains("upstream_retry"), "{}", detail.log_text);
     assert!(
-        !detail.contains("upstream_unavailable"),
-        "another request's event leaked into the detail: {detail}"
+        !detail.log_text.contains("upstream_unavailable"),
+        "another request's event leaked into the detail: {}",
+        detail.log_text
+    );
+    assert_eq!(detail.log_label, "原始日志（2 条）");
+    assert!(
+        detail.log_note.contains("仅列出近期运行日志"),
+        "{}",
+        detail.log_note
     );
     for secret in ["hunter2", "sk-secret", "top-secret"] {
-        assert!(!detail.contains(secret), "{secret} leaked: {detail}");
+        assert!(
+            !detail.log_text.contains(secret),
+            "{secret} leaked: {}",
+            detail.log_text
+        );
     }
 }
 
@@ -307,6 +364,7 @@ fn the_detail_panel_renders_the_ledger_fields_in_its_visible_text() {
 
     let tmp = common::TempDir::new("request-detail-panel");
     let ledger = tmp.path().join("usage.jsonl");
+    let log = tmp.path().join("gateway.log");
     write_rows(
         &ledger,
         &[
@@ -318,6 +376,17 @@ fn the_detail_panel_renders_the_ledger_fields_in_its_visible_text() {
             ledger_row("2026-11-20T00:01:00+08:00", "ok", Some(REQUEST)),
         ],
     );
+    write_rows(
+        &log,
+        &[json!({
+            "time": "2026-11-20T00:01:00+08:00",
+            "request_id": REQUEST,
+            "event": "request_summary",
+            "protocol": "chat",
+            "final": "ok",
+            "tries": 1,
+        })],
+    );
     let now = time("2026-11-20T19:00:00+08:00");
     let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let row = page
@@ -325,17 +394,27 @@ fn the_detail_panel_renders_the_ledger_fields_in_its_visible_text() {
         .iter()
         .find(|row| row.request_id.as_deref() == Some(REQUEST))
         .expect("the logical request");
-    let detail = request_detail(row, None);
+    let logs = um_desktop::usage::read_request_logs(&log, row.request_id.as_deref(), now);
+    let detail = request_detail(row, Some(&logs));
 
     window.set_selected_request(row.key.clone().into());
-    window.set_request_detail(detail.clone().into());
-    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    window.set_request_detail(detail.body.clone().into());
+    window.set_request_log_label(detail.log_label.clone().into());
+    window.set_request_log_note(detail.log_note.clone().into());
+    window.set_request_log_text(detail.log_text.clone().into());
+    // The detail panel opens with a 160 ms width animation; settle it so the
+    // toggle has its final on-screen geometry.
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
 
     let shown = window.get_request_detail_shown();
-    assert_eq!(shown.as_str(), detail.as_str());
+    assert_eq!(shown.as_str(), detail.body.as_str());
+    assert!(
+        !shown.contains("请求 ID"),
+        "the body must not repeat the panel header's request ID: {shown}"
+    );
     for expected in [
         "HTTP 状态  200",
-        "错误  无",
+        "错误\n  无",
         "缓存读取  ≥ 12 Token（已含在输入中）",
         "思考 Token  ≥ 5（已计入输出）",
         "首字耗时  120 ms",
@@ -346,4 +425,29 @@ fn the_detail_panel_renders_the_ledger_fields_in_its_visible_text() {
     ] {
         assert!(shown.contains(expected), "missing {expected:?} in {shown}");
     }
+    assert!(
+        window.get_request_log_available(),
+        "the raw log disclosure exists for a request with logs"
+    );
+    assert!(
+        !window.get_request_log_shown(),
+        "the raw log stays folded until asked for"
+    );
+    assert_eq!(
+        window.get_request_log_shown_text().as_str(),
+        "",
+        "the folded raw log draws no text"
+    );
+    click_center(
+        &window,
+        window.get_request_log_toggle_x(),
+        window.get_request_log_toggle_y(),
+        window.get_request_log_toggle_width(),
+        window.get_request_log_toggle_height(),
+    );
+    assert!(window.get_request_log_shown(), "the toggle opens the raw log");
+    assert!(
+        window.get_request_log_shown_text().contains("request_summary"),
+        "the folded raw log carries the linked events"
+    );
 }
