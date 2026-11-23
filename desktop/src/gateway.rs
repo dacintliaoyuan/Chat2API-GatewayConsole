@@ -454,7 +454,7 @@ impl GatewayHttp for HttpGateway {
             .into_json()
             .map_err(|error| format!("{url}: {error}"))?;
         if body.get("chat2api_version").is_none() {
-            return Err(format!("{url}: 不是本实例网关"));
+            return Err(format!("{url}: 不是本机网关"));
         }
         let status = body
             .get("status")
@@ -620,7 +620,10 @@ impl ProcessLauncher for SystemLauncher {
             command.creation_flags(CREATE_NO_WINDOW);
         }
         let child = command.spawn().map_err(|error| {
-            format!("启动网关进程失败（{}）：{error}", program.program.display())
+            format!(
+                "启动本机网关进程失败（{}）：{error}",
+                program.program.display()
+            )
         })?;
         Ok(Box::new(SystemChild { child }))
     }
@@ -704,8 +707,8 @@ impl GatewayState {
 
     pub fn detail(&self) -> String {
         match self {
-            Self::Starting => "正在等待本实例网关的 /health".to_string(),
-            Self::Stopped => "本实例网关未运行".to_string(),
+            Self::Starting => "正在等待本机网关的 /health".to_string(),
+            Self::Stopped => "本机网关未运行".to_string(),
             Self::Running {
                 ownership: Ownership::Managed,
             } => "App 拉起并监督".to_string(),
@@ -953,7 +956,7 @@ impl GatewaySupervisor {
         {
             Ok(child) => child,
             Err(error) => {
-                let reason = format!("启动网关进程失败：{error}");
+                let reason = format!("启动本机网关进程失败：{error}");
                 self.state = GatewayState::StartFailed {
                     reason: reason.clone(),
                 };

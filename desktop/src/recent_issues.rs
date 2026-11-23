@@ -50,6 +50,10 @@ pub struct RecentIssues {
     pub total: i64,
     /// Read faces that failed or were not available; the status line keeps them.
     pub failures: Vec<String>,
+    /// Today's failed request count, independent of the other issue classes.
+    /// `None` means the ledger could not be read; a legal empty ledger is `Some(0)`
+    /// so the overview can hide the failure signal without claiming zero.
+    pub failure_count: Option<i64>,
 }
 
 /// The login-round read the overview holds for this refresh.
@@ -151,7 +155,7 @@ pub fn read_recent_issues(
     let mut rows = Vec::new();
     let mut failures = Vec::new();
 
-    request_issues(ledger, now_ms, &mut rows, &mut failures);
+    let failure_count = request_issues(ledger, now_ms, &mut rows, &mut failures);
     login_issue(login, &mut rows, &mut failures);
     service_issue(service, &mut rows, &mut failures);
     catalog_test_issue(catalog, probe, &mut rows, &mut failures);
@@ -185,6 +189,7 @@ pub fn read_recent_issues(
         rows,
         total,
         failures,
+        failure_count,
     }
 }
 
@@ -198,13 +203,7 @@ impl IssueRow {
             .unwrap_or(0)
     }
 
-    fn request(
-        title: &str,
-        count: i64,
-        detail: String,
-        tone: Tone,
-        result: RequestResult,
-    ) -> Self {
+    fn request(title: &str, count: i64, detail: String, tone: Tone, result: RequestResult) -> Self {
         Self {
             title: title.to_string(),
             count: format!("{count} 次"),
@@ -235,7 +234,7 @@ fn request_issues(
     now_ms: i64,
     rows: &mut Vec<IssueRow>,
     failures: &mut Vec<String>,
-) {
+) -> Option<i64> {
     let payload = match desktop_requests(ledger, "today", None, "all", "", None, 1, now_ms as f64) {
         Ok(payload) => payload,
         Err(error) => {
@@ -245,7 +244,7 @@ fn request_issues(
                 format!("读取失败：{error}"),
                 "证据不可用：请求结果读取失败".to_string(),
             ));
-            return;
+            return None;
         }
     };
     let status = payload
@@ -254,7 +253,7 @@ fn request_issues(
         .unwrap_or("unavailable");
     if status == "missing" {
         // No ledger file is the legal empty state: no requests were recorded.
-        return;
+        return Some(0);
     }
     if status == "unavailable" {
         let note = payload
@@ -267,7 +266,7 @@ fn request_issues(
             format!("读取失败：{note}"),
             "证据不可用：请求结果读取失败".to_string(),
         ));
-        return;
+        return None;
     }
     let counts = payload
         .pointer("/summary/requests/counts")
@@ -325,6 +324,7 @@ fn request_issues(
             RequestResult::ClientDisconnected,
         ));
     }
+    Some(failed)
 }
 
 fn login_issue(login: &LoginRounds, rows: &mut Vec<IssueRow>, failures: &mut Vec<String>) {
@@ -449,22 +449,22 @@ fn service_issue(
     failures: &mut Vec<String>,
 ) {
     let Some(service) = service else {
-        failures.push("UM 服务状态读取失败".to_string());
+        failures.push("本机网关状态读取失败".to_string());
         rows.push(IssueRow::unavailable(
             "服务",
-            "不可用（本机实例无操作记录来源）：尚未读取 UM 服务状态".to_string(),
-            "证据不可用：尚未读取 UM 服务状态".to_string(),
+            "不可用（本机实例无操作记录来源）：尚未读取本机网关状态".to_string(),
+            "证据不可用：尚未读取本机网关状态".to_string(),
         ));
         return;
     };
     if service.gateway_missing {
         rows.push(IssueRow {
-            title: "本实例网关未运行".to_string(),
+            title: "本机网关未运行".to_string(),
             count: "1 项".to_string(),
             detail: service.gateway_detail.clone(),
             tone: Tone::Bad,
             evidence: None,
-            evidence_note: "证据不在请求页：网关状态在网关卡与维护菜单".to_string(),
+            evidence_note: "证据不在请求页：本机网关状态在网关卡与维护菜单".to_string(),
         });
         return;
     }
@@ -472,16 +472,16 @@ fn service_issue(
         return;
     }
     if service.state == "读取失败" {
-        failures.push("UM 服务状态读取失败".to_string());
+        failures.push("本机网关状态读取失败".to_string());
         rows.push(IssueRow::unavailable(
-            "UM 服务状态读取失败",
+            "本机网关状态读取失败",
             format!("读取失败：{}", service.detail),
-            "证据不可用：UM 服务状态读取失败".to_string(),
+            "证据不可用：本机网关状态读取失败".to_string(),
         ));
         return;
     }
     rows.push(IssueRow {
-        title: format!("UM 服务{}", service.state),
+        title: format!("本机网关{}", service.state),
         count: "1 项".to_string(),
         detail: service.detail.clone(),
         tone: service.tone,
@@ -567,6 +567,9 @@ pub trait RecentIssuesSurface {
     fn set_issue_rows(&self, rows: &[IssueRow]);
     fn set_issue_status(&self, status: &str);
     fn set_issue_tone(&self, tone: Tone);
+    /// Today's failed request count; `None` hides the overview failure signal
+    /// instead of claiming a clean day.
+    fn set_failure_count(&self, count: Option<i64>);
 }
 
 /// Apply one read result to the recent-issues card.
@@ -574,4 +577,5 @@ pub fn apply_recent_issues<S: RecentIssuesSurface>(surface: &S, issues: &RecentI
     surface.set_issue_rows(&issues.rows);
     surface.set_issue_status(&issues.status);
     surface.set_issue_tone(issues.tone);
+    surface.set_failure_count(issues.failure_count);
 }

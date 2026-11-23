@@ -56,9 +56,9 @@ fn action_label(action: &str) -> String {
         "account.um_status" => "读取 UM 状态".to_string(),
         "account.um_verify" | "verify" => "核验登录".to_string(),
         "account.login" | "login" => "检查并按需登录".to_string(),
-        "service.start" | "start" => "启动 UM 服务".to_string(),
-        "service.stop" | "stop" => "停止 UM 服务".to_string(),
-        "service.restart" | "restart" => "重启 UM 服务".to_string(),
+        "service.start" | "start" => "启动本机网关".to_string(),
+        "service.stop" | "stop" => "停止本机网关".to_string(),
+        "service.restart" | "restart" => "重启本机网关".to_string(),
         "" => "未知操作".to_string(),
         other => other.to_string(),
     }
@@ -129,9 +129,9 @@ impl Action {
         match self {
             Self::Verify => "向上游确认当前登录是否有效；不调用模型，不自动登录。",
             Self::Login => "先核验；只有凭据缺失或被拒时才打开专用登录窗口。",
-            Self::Start => "启动本实例网关；启动后客户端请求重新被受理。",
-            Self::Stop => "停止本实例网关；经它的请求会失败，需要手动启动。",
-            Self::Restart => "重启期间经本实例网关的请求会失败，进行中的请求会被中断。",
+            Self::Start => "启动本机网关；启动后客户端请求重新被受理。",
+            Self::Stop => "停止本机网关；经它的请求会失败，需要手动启动。",
+            Self::Restart => "重启期间经本机网关的请求会失败，进行中的请求会被中断。",
         }
     }
 
@@ -154,19 +154,19 @@ impl Action {
                 danger: false,
             },
             Self::Start => Confirm {
-                title: "启动本实例网关？".to_string(),
+                title: "启动本机网关？".to_string(),
                 body: self.impact().to_string(),
                 label: "启动".to_string(),
                 danger: false,
             },
             Self::Stop => Confirm {
-                title: "停止本实例网关？".to_string(),
+                title: "停止本机网关？".to_string(),
                 body: self.impact().to_string(),
                 label: "停止".to_string(),
                 danger: true,
             },
             Self::Restart => Confirm {
-                title: "重启本实例网关？".to_string(),
+                title: "重启本机网关？".to_string(),
                 body: self.impact().to_string(),
                 label: "重启".to_string(),
                 danger: true,
@@ -338,7 +338,7 @@ fn availability(state: &MenuState, action: Action) -> (bool, Option<&'static str
         },
         Action::Start => {
             if state.service_running || state.gateway == GatewayPhase::Running {
-                (false, Some("UM 服务运行中不需要启动"))
+                (false, Some("本机网关运行中不需要启动"))
             } else if state.gateway == GatewayPhase::Starting {
                 (false, Some("网关正在启动，请稍候"))
             } else {
@@ -604,7 +604,7 @@ pub fn delegated_status(action: Action) -> (String, Tone) {
             Tone::Neutral,
         ),
         Action::Restart => (
-            "已发起重启本实例网关；结果见设置页网关状态".to_string(),
+            "已发起重启本机网关；结果见设置页本机网关状态".to_string(),
             Tone::Neutral,
         ),
         _ => (String::new(), Tone::Neutral),

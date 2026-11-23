@@ -298,6 +298,21 @@ fn model_window() -> um_desktop::ui::MainWindow {
     window
 }
 
+fn scroll<T: slint::ComponentHandle>(component: &T, x: f32, y: f32, delta_y: f32) {
+    use slint::platform::WindowEvent;
+    use slint::LogicalPosition;
+
+    let position = LogicalPosition::new(x, y);
+    let window = component.window();
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y,
+    });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
 fn click<T: slint::ComponentHandle>(component: &T, x: f32, y: f32) {
     use slint::platform::{PointerEventButton, WindowEvent};
     use slint::LogicalPosition;
@@ -449,6 +464,9 @@ fn clicking_a_model_row_opens_that_model() {
         let opened = opened.clone();
         move |id| *opened.borrow_mut() = id.to_string()
     });
+    // The export card and the taller appearance card push the model catalog
+    // down; bring the model list into view before clicking its first row.
+    scroll(&window, 600.0, 400.0, -700.0);
     let x = window.get_um_model_list_x() + 20.0;
     let y = window.get_um_model_list_y() + 28.0;
     click(&window, x, y);

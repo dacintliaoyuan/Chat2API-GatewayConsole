@@ -61,7 +61,7 @@ pub fn parse_connection(payload: &Value) -> Result<AccessInfoView, String> {
         full_base_url: base_url.to_string(),
         interface_type: interface_type(payload),
         hints: hints(payload),
-        status: "接入信息已从本实例网关读取".to_string(),
+        status: "接入信息已从本机网关读取".to_string(),
         tone: Tone::Good,
         connected: true,
         address_available: true,
@@ -264,15 +264,15 @@ fn connection_error(url: &str, error: ureq::Error) -> String {
                 })
                 .filter(|detail| !detail.is_empty() && detail.len() <= 120);
             match detail {
-                Some(detail) => format!("{url}: 本实例网关返回 HTTP {code}（{detail}）"),
-                None => format!("{url}: 本实例网关返回 HTTP {code}"),
+                Some(detail) => format!("{url}: 本机网关返回 HTTP {code}（{detail}）"),
+                None => format!("{url}: 本机网关返回 HTTP {code}"),
             }
         }
         ureq::Error::Transport(error) => match error.kind() {
             ureq::ErrorKind::ConnectionFailed => {
-                format!("{url}: 无法连接本实例网关（连接被拒绝）")
+                format!("{url}: 无法连接本机网关（连接被拒绝）")
             }
-            _ => format!("{url}: 无法连接本实例网关"),
+            _ => format!("{url}: 无法连接本机网关"),
         },
     }
 }

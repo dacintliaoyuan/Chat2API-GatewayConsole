@@ -46,9 +46,7 @@ use um_desktop::log_history::{
     LevelSelection,
 };
 use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
-use um_desktop::logstream::{
-    format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine,
-};
+use um_desktop::logstream::{format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine};
 use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
@@ -171,7 +169,7 @@ fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved
 
 fn read_auth(auth_admin: &HttpAuthAdmin, token_path: &Path, gateway: &GatewayStatus) -> AuthRead {
     if !matches!(gateway.state, GatewayState::Running { .. }) {
-        return AuthRead::Unavailable(format!("本实例网关未就绪：{}", gateway.state.detail()));
+        return AuthRead::Unavailable(format!("本机网关未就绪：{}", gateway.state.detail()));
     }
     let token = match load_control_token(token_path) {
         Ok(token) => token,
@@ -207,10 +205,7 @@ fn save_message(auth: &AuthRead, view: &AccountView) -> (String, Tone) {
     match auth {
         AuthRead::Status(status) => match status.state {
             AuthState::Valid => ("账号已保存；本实例已登录".to_string(), Tone::Good),
-            AuthState::LoggingIn => (
-                "账号已保存；本实例网关正在自动重登…".to_string(),
-                Tone::Warn,
-            ),
+            AuthState::LoggingIn => ("账号已保存；本机网关正在自动重登…".to_string(), Tone::Warn),
             _ => (format!("账号已保存；{}", view.state_detail), Tone::Warn),
         },
         AuthRead::Unavailable(reason) => {
@@ -617,6 +612,28 @@ fn coverage_tone(coverage: Coverage) -> i32 {
 }
 
 fn apply_usage(window: &MainWindow, view: UsageView) {
+    // Export is only enabled for a readable range with rows; both a legal
+    // empty range and an unreadable ledger carry their own reason instead of a
+    // successful export with no data.
+    let export_available =
+        view.scanned > 0 && matches!(view.coverage, Coverage::Complete | Coverage::Partial);
+    let export_note = if matches!(view.coverage, Coverage::Unavailable) {
+        format!("无法导出用量：{}", view.message)
+    } else if matches!(view.coverage, Coverage::Empty)
+        || view.scanned == 0
+        || view.buckets.is_empty()
+    {
+        format!(
+            "{}没有可导出的用量",
+            Range::from_index(window.get_usage_period()).label()
+        )
+    } else {
+        format!(
+            "可导出{}的 {} 个时段",
+            Range::from_index(window.get_usage_period()).label(),
+            view.buckets.len()
+        )
+    };
     let points = if matches!(view.coverage, Coverage::Empty) {
         Vec::new()
     } else {
@@ -634,11 +651,24 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
                 request_value: bucket.requests.into(),
                 // The axis reads in 亿 so nine-digit labels do not crowd the
                 // plot; the exact total stays in the card and the selection line.
-                token_count: bucket.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0),
+                token_count: bucket
+                    .token_count
+                    .map_or(f32::NAN, |value| value as f32 / 100_000_000.0),
                 request_count: bucket.request_count.map_or(f32::NAN, |value| value as f32),
             })
             .collect::<Vec<_>>()
     };
+    window.set_export_available(export_available);
+    window.set_export_note(export_note.into());
+    if !export_available {
+        // A previous success must not outlive the data it described.
+        window.set_export_status("".into());
+    }
+    window.set_export_tone(if export_available {
+        status_tone(Tone::Neutral)
+    } else {
+        status_tone(Tone::Warn)
+    });
     window.set_token_total(view.token_total.into());
     window.set_request_total(view.request_total.into());
     let points = ModelRc::from(points.as_slice());
@@ -676,22 +706,21 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
         .models
         .iter()
         .map(|model| {
-            let values = page
-                .chart
-                .points
-                .iter()
-                .map(|point| {
-                    point
-                        .models
-                        .iter()
-                        .find(|row| &row.model == model)
-                        .map_or(f32::NAN, |row| match metric {
-                            1 => row.requests.map_or(f32::NAN, |value| value as f32),
-                            2 => row.speed.map_or(f32::NAN, |value| value as f32),
-                            _ => row.tokens.map_or(f32::NAN, |value| value as f32),
-                        })
-                })
-                .collect::<Vec<_>>();
+            let values =
+                page.chart
+                    .points
+                    .iter()
+                    .map(|point| {
+                        point.models.iter().find(|row| &row.model == model).map_or(
+                            f32::NAN,
+                            |row| match metric {
+                                1 => row.requests.map_or(f32::NAN, |value| value as f32),
+                                2 => row.speed.map_or(f32::NAN, |value| value as f32),
+                                _ => row.tokens.map_or(f32::NAN, |value| value as f32),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
             chart_dataset(model, values)
         })
         .collect()
@@ -770,8 +799,15 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
         .iter()
         .map(|card| format!("{} {}", card.label, card.value))
         .collect::<Vec<_>>();
-    window.set_request_summary(format!("{}
-{}", summary[..3].join(" · "), summary[3..].join(" · ")).into());
+    window.set_request_summary(
+        format!(
+            "{}
+{}",
+            summary[..3].join(" · "),
+            summary[3..].join(" · ")
+        )
+        .into(),
+    );
     let metrics = cards
         .into_iter()
         .map(|card| RequestMetric {
@@ -795,7 +831,11 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
             .points
             .iter()
             // The request chart plots the same 亿 scale as the overview.
-            .map(|point| point.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0))
+            .map(|point| {
+                point
+                    .token_count
+                    .map_or(f32::NAN, |value| value as f32 / 100_000_000.0)
+            })
             .collect::<Vec<_>>()
             .as_slice(),
     ));
@@ -916,9 +956,13 @@ fn load_requests(
             now,
         );
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else { return; };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             let mut nav = nav.lock().expect("request navigation poisoned");
-            if nav.generation != generation { return; }
+            if nav.generation != generation {
+                return;
+            }
             if earlier {
                 match nav.finish_earlier(page) {
                     usage::EarlierOutcome::Appended { added } => {
@@ -979,12 +1023,7 @@ fn load_requests(
     });
 }
 
-fn show_request(
-    window: &MainWindow,
-    log: &Path,
-    nav: &Mutex<usage::RequestNav>,
-    key: &str,
-) {
+fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<usage::RequestNav>, key: &str) {
     let nav = nav.lock().expect("request navigation poisoned");
     let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else {
         return;
@@ -1078,7 +1117,7 @@ fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &Sha
     let supervisor = Arc::clone(supervisor);
     let status = Arc::clone(status);
     let weak = window.as_weak();
-    window.set_status_line("正在停止本实例网关…".into());
+    window.set_status_line("正在停止本机网关…".into());
     window.set_status_tone(status_tone(Tone::Warn));
     std::thread::spawn(move || {
         let stopped = {
@@ -1138,14 +1177,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match outcome {
                 ConfigLoadOutcome::Missing => (
                     DesktopConfig::default(),
-                    "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关"
+                    "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本机网关"
                         .to_string(),
                     Tone::Neutral,
                 ),
                 ConfigLoadOutcome::Loaded(config) if warnings.is_empty() => (
                     config,
                     format!(
-                        "已加载配置：{}；启动时接入已有实例或拉起本实例网关",
+                        "已加载配置：{}；启动时接入已有实例或拉起本机网关",
                         path.display()
                     ),
                     Tone::Good,
@@ -1185,6 +1224,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into(),
     );
     window.set_instance_path(paths.instance_dir.display().to_string().into());
+    window.set_export_path(
+        paths
+            .instance_dir
+            .join("exports")
+            .join("usage.csv")
+            .display()
+            .to_string()
+            .into(),
+    );
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(status_tone(settings_tone));
     window.set_theme_mode(theme_mode_index(loaded_config.theme));
@@ -1288,8 +1336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // writes the history; this read only loads it when the gateway becomes
     // running, after a port change, and on every filter or manual refresh. A
     // failed read keeps its reason and never becomes an empty table.
-    let login_rounds_state: Arc<Mutex<Option<LoginRoundsView>>> =
-        Arc::new(Mutex::new(None));
+    let login_rounds_state: Arc<Mutex<Option<LoginRoundsView>>> = Arc::new(Mutex::new(None));
     let login_rounds_query: Arc<Mutex<LoginRoundsQuery>> =
         Arc::new(Mutex::new(LoginRoundsQuery::default()));
     {
@@ -1312,8 +1359,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .clone();
                 let running = matches!(gateway.state, GatewayState::Running { .. });
                 let port = current_port.load(Ordering::SeqCst);
-                let transition = last_state.as_ref() != Some(&gateway.state)
-                    || last_port != Some(port);
+                let transition =
+                    last_state.as_ref() != Some(&gateway.state) || last_port != Some(port);
                 if epoch == last_epoch && !transition {
                     std::thread::sleep(Duration::from_millis(100));
                     continue;
@@ -1327,7 +1374,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .clone();
                 let view = if !running {
                     LoginRoundsView::unavailable(format!(
-                        "本实例网关未就绪：{}",
+                        "本机网关未就绪：{}",
                         gateway.state.detail()
                     ))
                 } else {
@@ -1393,7 +1440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .clone();
                 let view = if !running {
                     models::catalog_failure(
-                        format!("本实例网关未就绪：{}", gateway.state.detail()),
+                        format!("本机网关未就绪：{}", gateway.state.detail()),
                         previous.as_ref(),
                     )
                 } else {
@@ -1726,13 +1773,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // records read; a changed set is applied once, so a refresh never
                 // resets an armed confirmation the user is still looking at.
                 let records = match gateway.state {
-                    GatewayState::Running { .. } => match load_control_token(&control_token_path)
-                    {
-                        Ok(token) => maintenance::read_records(
-                            records_api.as_ref(),
-                            &base,
-                            token.expose(),
-                        ),
+                    GatewayState::Running { .. } => match load_control_token(&control_token_path) {
+                        Ok(token) => {
+                            maintenance::read_records(records_api.as_ref(), &base, token.expose())
+                        }
                         Err(error) => maintenance::RecordsView::failure(error),
                     },
                     _ => maintenance::RecordsView::failure(format!(
@@ -1787,7 +1831,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     recent_issues::LoginRounds::Unavailable(format!(
-                        "本实例网关未运行：{}",
+                        "本机网关未运行：{}",
                         gateway.state.detail()
                     ))
                 };
@@ -1867,12 +1911,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     || last_failure.is_some() =>
                             {
                                 Some(LogUpdate {
-                                previous,
-                                entries: opened.lines().iter().cloned().collect(),
-                                appended: outcome.appended,
-                                reset: outcome.reset || last_failure.is_some(),
-                                trimmed: outcome.trimmed,
-                                failure: None,
+                                    previous,
+                                    entries: opened.lines().iter().cloned().collect(),
+                                    appended: outcome.appended,
+                                    reset: outcome.reset || last_failure.is_some(),
+                                    trimmed: outcome.trimmed,
+                                    failure: None,
                                 })
                             }
                             Ok(_) => None,
@@ -1971,7 +2015,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
         window.set_gateway_restarting(true);
-        window.set_settings_status("正在重启本实例网关…".into());
+        window.set_settings_status("正在重启本机网关…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
         let supervisor = Arc::clone(&restart_gateway_supervisor);
         let status = Arc::clone(&restart_gateway_status);
@@ -1987,15 +2031,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                 });
                 if let Some(restarted) = &restarted {
-                    *status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                        restarted.clone();
+                    *status
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
                 }
                 restarted
             };
             let (message, tone) = match restarted.as_ref().map(|status| &status.state) {
-                Some(GatewayState::Running { .. }) => ("网关已重启".to_string(), Tone::Good),
+                Some(GatewayState::Running { .. }) => ("本机网关已重启".to_string(), Tone::Good),
                 Some(state) => (format!("重启失败：{}", state.detail()), Tone::Bad),
-                None => ("本实例网关未接入，无法重启".to_string(), Tone::Bad),
+                None => ("本机网关未接入，无法重启".to_string(), Tone::Bad),
             };
             if matches!(
                 restarted.as_ref().map(|status| &status.state),
@@ -2082,7 +2127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             maintenance::Action::Start | maintenance::Action::Stop => {
                 window.set_maintenance_action_busy(true);
-                window.set_maintenance_status(format!("正在{}本实例网关…", row.label).into());
+                window.set_maintenance_status(format!("正在{}本机网关…", row.label).into());
                 window.set_maintenance_status_tone(status_tone(Tone::Warn));
                 let supervisor = Arc::clone(&maintenance_supervisor);
                 let status_slot = Arc::clone(&maintenance_gateway);
@@ -2107,10 +2152,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     status.clone();
                                 let outcome = match (&status.state, action) {
                                     (GatewayState::Running { .. }, maintenance::Action::Start) => {
-                                        Ok(format!("本实例网关运行于 {}", status.base_url))
+                                        Ok(format!("本机网关运行于 {}", status.base_url))
                                     }
                                     (GatewayState::Stopped, maintenance::Action::Stop) => {
-                                        Ok("本实例网关已停止".to_string())
+                                        Ok("本机网关已停止".to_string())
                                     }
                                     _ => Err(status.state.detail()),
                                 };
@@ -2122,7 +2167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None => (
                                 maintenance::action_result(
                                     action,
-                                    Err("本实例网关未接入，无法执行维护动作".to_string()),
+                                    Err("本机网关未接入，无法执行维护动作".to_string()),
                                 ),
                                 false,
                             ),
@@ -2201,6 +2246,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let request_log = service_log.clone();
+    let export_requests_nav = Arc::clone(&request_nav);
+    let export_requests_dir = paths.instance_dir.clone();
+    let weak_export_requests = window.as_weak();
+    window.on_export_requests(move || {
+        let Some(window) = weak_export_requests.upgrade() else {
+            return;
+        };
+        let rows = export_requests_nav
+            .lock()
+            .expect("request navigation poisoned")
+            .rows
+            .clone();
+        let path = export_requests_dir.join("exports").join("requests.csv");
+        match usage::export_requests_csv(&rows, &path) {
+            Ok(message) => {
+                window.set_request_status(message.into());
+                window.set_request_tone(status_tone(Tone::Good));
+            }
+            Err(reason) => {
+                window.set_request_status(format!("导出失败：{reason}").into());
+                window.set_request_tone(status_tone(Tone::Bad));
+            }
+        }
+    });
     let weak_request = window.as_weak();
     window.on_open_request(move |key| {
         if let Some(window) = weak_request.upgrade() {
@@ -2336,6 +2405,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window.set_copy_error(reason.into());
             }
         }
+    });
+
+    // Export usage writes the overview's current range as CSV to the path the
+    // user typed in the settings card. A failed write keeps its reason.
+    let export_ledger = paths.usage_log.clone();
+    let weak_export = window.as_weak();
+    window.on_export_usage(move |path| {
+        let Some(window) = weak_export.upgrade() else {
+            return;
+        };
+        if window.get_export_busy() || !window.get_export_available() {
+            return;
+        }
+        let range = Range::from_index(window.get_usage_period());
+        let ledger = export_ledger.clone();
+        let path = PathBuf::from(path.as_str());
+        window.set_export_busy(true);
+        window.set_export_status("正在导出…".into());
+        window.set_export_status_tone(status_tone(Tone::Neutral));
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let result = usage::export_usage_csv(
+                &ledger,
+                range,
+                chrono::Utc::now().timestamp_millis(),
+                &path,
+            );
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_export_busy(false);
+                    match result {
+                        Ok(message) => {
+                            window.set_export_status(message.into());
+                            window.set_export_status_tone(status_tone(Tone::Good));
+                        }
+                        Err(reason) => {
+                            window.set_export_status(format!("导出失败：{reason}").into());
+                            window.set_export_status_tone(status_tone(Tone::Bad));
+                        }
+                    }
+                }
+            });
+        });
     });
 
     // Ctrl+R dispatches to the page-specific refresh callback in the UI.
@@ -2699,7 +2811,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.set_password_input_invalid(false);
         window.set_password_input_error("".into());
         window.set_account_busy(true);
-        window.set_credential_status("正在保存账号密码并应用到本实例网关…".into());
+        window.set_credential_status("正在保存账号密码并应用到本机网关…".into());
         window.set_credential_tone(status_tone(Tone::Warn));
 
         let supervisor = Arc::clone(&supervisor_save_credentials);
@@ -2834,12 +2946,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let view = account_view(&LoadOutcome::Missing, Some(&auth));
             let (message, tone) = if cleared {
                 (
-                    "已清除已保存的账号密码；本实例网关已重启".to_string(),
+                    "已清除已保存的账号密码；本机网关已重启".to_string(),
                     Tone::Good,
                 )
             } else {
                 (
-                    "没有已保存的账号密码；本实例网关已重启".to_string(),
+                    "没有已保存的账号密码；本机网关已重启".to_string(),
                     Tone::Warn,
                 )
             };

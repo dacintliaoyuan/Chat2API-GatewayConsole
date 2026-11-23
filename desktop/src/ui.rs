@@ -9,9 +9,7 @@ use slint::{Model, ModelRc, VecModel};
 
 use crate::access_info::AccessInfoSurface;
 use crate::account::{AccountSurface, VerifySurface};
-use crate::login_rounds::{
-    LoginRoundRow as LoginRoundViewRow, LoginRoundsSurface,
-};
+use crate::login_rounds::{LoginRoundRow as LoginRoundViewRow, LoginRoundsSurface};
 use crate::maintenance::{MaintenanceSurface, MenuRow, RecordsView};
 use crate::models::{
     CatalogSurface, ModelRow as ModelViewRow, ProbeHistoryRow as ProbeHistoryViewRow,
@@ -500,5 +498,11 @@ impl RecentIssuesSurface for MainWindow {
 
     fn set_issue_tone(&self, tone: Tone) {
         self.set_recent_issues_tone(tone_index(tone));
+    }
+
+    fn set_failure_count(&self, count: Option<i64>) {
+        self.set_overview_failure_count(
+            count.map_or(-1, |count| i32::try_from(count).unwrap_or(i32::MAX)),
+        );
     }
 }

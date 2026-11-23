@@ -177,7 +177,7 @@ fn a_failed_read_shows_the_reason_and_no_address() {
     let window = settings_window();
     window.set_active_address("127.0.0.1:8001".into());
     let view = access_failure(
-        "http://127.0.0.1:8001: 本实例网关返回 HTTP 503（connection_info_unavailable）".to_string(),
+        "http://127.0.0.1:8001: 本机网关返回 HTTP 503（connection_info_unavailable）".to_string(),
         true,
         8001,
     );
@@ -221,7 +221,7 @@ fn a_failed_read_shows_the_reason_and_no_address() {
 #[test]
 fn a_gateway_that_is_not_running_shows_the_configured_address_with_a_note() {
     let window = settings_window();
-    let view = access_failure("本实例网关未运行".to_string(), false, 8123);
+    let view = access_failure("本机网关未运行".to_string(), false, 8123);
     apply_access_info(&window, &view);
 
     assert_eq!(

@@ -5,8 +5,9 @@ use std::path::Path;
 use chrono::DateTime;
 use serde_json::{json, Value};
 use um_desktop::usage::{
-    keep_previous_on_failure, keep_previous_page_on_failure, read_request_logs, read_requests,
-    read_usage, request_detail, Coverage, Range, RequestNav, RequestSummary,
+    export_requests_csv, export_usage_csv, keep_previous_on_failure, keep_previous_page_on_failure,
+    read_request_logs, read_requests, read_usage, request_detail, Coverage, Range, RequestNav,
+    RequestSummary,
 };
 
 const REQUEST: &str = "f314e7d8c7526367baec95ac155b6406";
@@ -801,4 +802,66 @@ fn request_detail_shows_ledger_fields_and_only_sanitized_events_for_this_request
     assert!(unreadable.message.contains("暂不可读"));
     let unreadable_detail = request_detail(request, Some(&unreadable));
     assert!(unreadable_detail.contains("暂不可读"));
+}
+
+#[test]
+fn exporting_usage_writes_csv_and_refuses_empty_or_unreadable_ledgers() {
+    let tmp = common::TempDir::new("usage-export");
+    let ledger = tmp.path().join("usage.jsonl");
+    let now = time("2026-11-23T19:00:00+08:00");
+    write_rows(
+        &ledger,
+        &[row("2026-11-23T09:00:00+08:00", "ok", 1000, 200)],
+    );
+    let out = tmp.path().join("exports").join("usage.csv");
+    let message = export_usage_csv(&ledger, Range::Today, now, &out).expect("export usage");
+    assert!(message.contains("已导出今天的"), "{message}");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(csv.starts_with("时间,Token,请求数\n"), "{csv}");
+    assert!(csv.contains("09:00,1200,1"), "{csv}");
+
+    let missing = tmp.path().join("missing.jsonl");
+    let missing_out = tmp.path().join("missing.csv");
+    let refused = export_usage_csv(&missing, Range::Today, now, &missing_out);
+    assert!(
+        refused.is_err(),
+        "an empty range must not export an empty CSV"
+    );
+    assert!(
+        !missing_out.exists(),
+        "a refused export must not create the file"
+    );
+
+    let broken = tmp.path().join("broken.jsonl");
+    std::fs::write(&broken, "{bad JSON\n").unwrap();
+    let broken_out = tmp.path().join("broken.csv");
+    let refused = export_usage_csv(&broken, Range::Today, now, &broken_out);
+    assert!(refused.is_err(), "an unreadable ledger must not export");
+    assert!(
+        refused.unwrap_err().contains("没有可导出的用量"),
+        "a ledger with no readable usage keeps its own reason"
+    );
+}
+
+#[test]
+fn exporting_requests_writes_the_displayed_rows_and_refuses_an_empty_list() {
+    let tmp = common::TempDir::new("requests-export");
+    let ledger = tmp.path().join("usage.jsonl");
+    let now = time("2026-11-23T19:00:00+08:00");
+    write_rows(
+        &ledger,
+        &[row("2026-11-23T09:00:00+08:00", "ok", 1000, 200)],
+    );
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
+    assert_eq!(page.rows.len(), 1);
+    let out = tmp.path().join("requests.csv");
+    let message = export_requests_csv(&page.rows, &out).expect("export requests");
+    assert!(message.contains("已导出 1 条请求"), "{message}");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        csv.starts_with("时间,模型,结果,首字耗时,请求 ID\n"),
+        "{csv}"
+    );
+    assert!(csv.contains(REQUEST), "{csv}");
+    assert!(export_requests_csv(&[], &out).is_err());
 }

@@ -217,15 +217,15 @@ fn catalog_error(url: &str, error: ureq::Error) -> String {
                 })
                 .filter(|detail| !detail.is_empty() && detail.len() <= 120);
             match detail {
-                Some(detail) => format!("{url}: 本实例网关返回 HTTP {code}（{detail}）"),
-                None => format!("{url}: 本实例网关返回 HTTP {code}"),
+                Some(detail) => format!("{url}: 本机网关返回 HTTP {code}（{detail}）"),
+                None => format!("{url}: 本机网关返回 HTTP {code}"),
             }
         }
         ureq::Error::Transport(error) => match error.kind() {
             ureq::ErrorKind::ConnectionFailed => {
-                format!("{url}: 无法连接本实例网关（连接被拒绝）")
+                format!("{url}: 无法连接本机网关（连接被拒绝）")
             }
-            _ => format!("{url}: 无法连接本实例网关"),
+            _ => format!("{url}: 无法连接本机网关"),
         },
     }
 }
@@ -287,7 +287,10 @@ pub fn open_model<S: CatalogSurface>(surface: &S, view: Option<&CatalogView>, id
 /// appear in the selected window, so a catalog model with no request yet would be
 /// impossible to select; the union keeps every catalog model selectable without a
 /// second HTTP read.
-pub fn request_model_options(ledger_models: &[String], catalog: Option<&CatalogView>) -> Vec<String> {
+pub fn request_model_options(
+    ledger_models: &[String],
+    catalog: Option<&CatalogView>,
+) -> Vec<String> {
     let mut models = ledger_models.to_vec();
     if let Some(catalog) = catalog {
         for model in &catalog.models {

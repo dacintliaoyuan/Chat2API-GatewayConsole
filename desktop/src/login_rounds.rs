@@ -660,15 +660,15 @@ fn api_error(url: &str, error: ureq::Error) -> String {
                 })
                 .filter(|detail| safe_reason(detail));
             match detail {
-                Some(detail) => format!("{url}: 本实例网关返回 HTTP {code}（{detail}）"),
-                None => format!("{url}: 本实例网关返回 HTTP {code}"),
+                Some(detail) => format!("{url}: 本机网关返回 HTTP {code}（{detail}）"),
+                None => format!("{url}: 本机网关返回 HTTP {code}"),
             }
         }
         ureq::Error::Transport(error) => match error.kind() {
             ureq::ErrorKind::ConnectionFailed => {
-                format!("{url}: 无法连接本实例网关（连接被拒绝）")
+                format!("{url}: 无法连接本机网关（连接被拒绝）")
             }
-            _ => format!("{url}: 无法连接本实例网关"),
+            _ => format!("{url}: 无法连接本机网关"),
         },
     }
 }
