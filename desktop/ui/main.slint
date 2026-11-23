@@ -2128,6 +2128,8 @@ export component MainWindow inherits Window {
         + (root.help-card-visible(4) ? 1 : 0)
         + (root.help-card-visible(5) ? 1 : 0)
         + (root.help-card-visible(6) ? 1 : 0)
+        + (root.help-card-visible(7) ? 1 : 0)
+        + (root.help-card-visible(8) ? 1 : 0);
     // The raw log events stay one disclosure inside the request detail.
     out property <bool> request-log-available: request-details.log-available;
     out property <bool> request-log-shown: request-details.log-shown;
@@ -2136,8 +2138,6 @@ export component MainWindow inherits Window {
     out property <length> request-log-toggle-y: request-details.log-toggle-y;
     out property <length> request-log-toggle-width: request-details.log-toggle-width;
     out property <length> request-log-toggle-height: request-details.log-toggle-height;
-        + (root.help-card-visible(7) ? 1 : 0)
-        + (root.help-card-visible(8) ? 1 : 0);
     // Test seams: the danger action's drawn colours and the light card
     // surface, so a test can check the 4.5:1 label contrast instead of
     // trusting the token name.
