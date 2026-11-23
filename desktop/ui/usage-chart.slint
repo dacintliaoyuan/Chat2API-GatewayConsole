@@ -121,8 +121,11 @@ export component RequestAnalytics inherits Panel {
     min-height: 0px;
     in property <bool> compact: false;
     in property <[RequestMetric]> metrics;
-    // The compact request page folds the cards into one summary line.
-    in property <string> summary-line: "";
+    // A time window with no requests at all is not the same as a filter that
+    // matched nothing: only the former replaces the KPI row with one reason.
+    in property <bool> empty: false;
+    // The five metric cards stay visible at every width and in both disclosure
+    // states; only the chart and the speed table fold.
     // At compact width the chart and the speed table start collapsed so the
     // request list stays in the first screen.
     in-out property <bool> details-open: false;
@@ -164,11 +167,27 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
+    // Test seam: the KPI row stays visible while the chart folds, except in the
+    // unfiltered empty window where one reason replaces the five dashes.
+    out property <bool> kpi-visible: cards.visible;
+    out property <int> kpi-count: root.metrics.length;
+    out property <bool> empty-visible: empty-hint.visible;
+    out property <string> empty-text: empty-hint.text;
+    // The height this card would take with the chart open. The page compares
+    // the list's remaining height against this value, not the window height.
+    out property <length> expanded-height: content.preferred-height
+        + (root.expanded || root.empty ? 0px
+            : header.preferred-height + 8px
+                + (root.compact ? 302px : 148px)
+                + (root.has-data ? 36px + 8px : 0px));
     // The chart selection reads the visible plot only; a hidden plot reports -1.
     private property <int> pinned: -1;
-    private property <int> key-index: -1;
+    // The keyboard cursor starts on the first bucket, so gaining focus shows a
+    // concrete selection instead of an invisible one. It only drives `active`
+    // while the chart owns focus, so hovering still works without focus.
+    private property <int> key-index: 0;
     private property <int> active: root.pinned >= 0 ? root.pinned
-        : root.key-index >= 0 ? root.key-index
+        : chart-focus.has-focus ? root.key-index
         : root.compact ? compact-plot.hovered-index : wide-plot.hovered-index;
     private property <bool> has-data: root.labels.length > 0;
     private property <bool> has-selection: root.active >= 0 && root.active < root.labels.length;
@@ -236,8 +255,8 @@ export component RequestAnalytics inherits Panel {
     out property <bool> empty-hint-fits: root.compact
         ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
     // The request chart is a keyboard stop like the overview chart; focus uses
-    // the same neutral edge step instead of an invisible target.
-    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    // the control-strength neutral edge so the 1 px step is visible on the card.
+    border-color: chart-focus.has-focus ? Theme.edge-control-strong : Theme.edge;
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
     private property <string> keyboard-help:
         "左右方向键切换时段 · Enter 固定 · Esc 取消固定";
@@ -245,8 +264,11 @@ export component RequestAnalytics inherits Panel {
         root.has-selection
         ? root.selection-label + "，" + root.selection-value + "。" + root.keyboard-help
         : root.keyboard-help;
-    // Test seam: the chart focus is visible through the neutral edge step.
-    out property <bool> chart-focus-visible: root.border-color == Theme.edge-strong;
+    // Test seam: the chart focus is visible through the control-strength edge
+    // step and starts the keyboard cursor on the first bucket.
+    out property <bool> chart-focus-visible:
+        root.border-color == Theme.edge-control-strong;
+    out property <int> chart-key-index: root.key-index;
     public function focus-chart() { chart-focus.focus(); }
     // Test seam: the compact chart toggle.
     out property <length> details-toggle-x: details-toggle.absolute-position.x;
@@ -258,12 +280,21 @@ export component RequestAnalytics inherits Panel {
         padding: 12px;
         spacing: 8px;
 
+        // An unfiltered empty window says why in one line instead of drawing
+        // five 76 px cards of dashes and an empty chart.
+        empty-hint := Hint {
+            visible: root.empty;
+            height: root.empty ? self.preferred-height : 0px;
+            text: "暂无请求，指标与趋势会在有请求后显示";
+            horizontal-alignment: center;
+        }
+
         // Equal flex-basis keeps the cards the same size; at compact width two
-        // per row and a full-width last card avoid clipped labels and a gap.
+        // per row and a full-width last card avoid clipped labels and a gap. The
+        // row never folds: the chart is the only part the disclosure hides.
         cards := FlexboxLayout {
-            visible: root.expanded;
-            // A hidden layout still feeds the parent's preferred height.
-            height: root.expanded ? self.preferred-height : 0px;
+            visible: !root.empty;
+            height: root.empty ? 0px : self.preferred-height;
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
@@ -300,16 +331,18 @@ export component RequestAnalytics inherits Panel {
         }
 
         compact-summary := HorizontalLayout {
-            visible: root.compact || root.wide-collapsed;
+            visible: (root.compact || root.wide-collapsed) && !root.empty;
             // Clicking the summary row toggles the chart as well.
             summary-pointer := TouchArea {
                 clicked => { root.toggle-chart(); }
             }
             // A hidden row still feeds the parent's preferred height.
-            height: (root.compact || root.wide-collapsed) ? self.preferred-height : 0px;
+            height: (root.compact || root.wide-collapsed) && !root.empty
+                ? self.preferred-height : 0px;
             spacing: 8px;
-            // The compact summary wraps instead of losing the last metrics.
-            Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
+            // The chart toggle is the only content of the fold row; the KPI
+            // cards above already carry the numbers, so no summary is repeated.
+            Rectangle { horizontal-stretch: 1; }
             // A visible label says what the control does instead of a bare
             // chevron; the whole summary row reads as one action.
             details-toggle := ActionButton {
@@ -323,15 +356,15 @@ export component RequestAnalytics inherits Panel {
             }
         }
         header := HorizontalLayout {
-            visible: root.expanded;
-            height: root.expanded ? self.preferred-height : 0px;
+            visible: root.expanded && !root.empty;
+            height: root.expanded && !root.empty ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
             Hint { text: root.metric-unit-text; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
-                visible: root.expanded;
-                height: root.expanded ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
@@ -339,8 +372,8 @@ export component RequestAnalytics inherits Panel {
                 selected(index) => { root.metric = index; }
             }
             Segmented {
-                visible: root.expanded;
-                height: root.expanded ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
@@ -352,11 +385,12 @@ export component RequestAnalytics inherits Panel {
         // Wide: the chart and the speed table share one row. Compact: the table
         // moves below the chart so neither is squeezed below its readable width.
         compact-stack := VerticalLayout {
-            visible: root.compact && root.expanded;
+            visible: root.compact && root.expanded && !root.empty;
             width: 100%;
             // Hidden layouts still feed the parent's preferred height, so the
             // inactive stack collapses to zero explicitly.
-            height: (root.compact && root.expanded) ? self.preferred-height : 0px;
+            height: (root.compact && root.expanded && !root.empty)
+                ? self.preferred-height : 0px;
             spacing: 8px;
             compact-plot := RequestTrendChart {
                 width: 100%;
@@ -386,9 +420,9 @@ export component RequestAnalytics inherits Panel {
             }
         }
         wide-row := HorizontalLayout {
-            visible: root.expanded;
+            visible: root.expanded && !root.empty;
             spacing: 12px;
-            height: root.expanded ? 148px : 0px;
+            height: root.expanded && !root.empty ? 148px : 0px;
             wide-plot := RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
@@ -465,20 +499,12 @@ export component UsageChart inherits Panel {
     // The overview owns the auto-refresh cadence; the chart only renders its
     // four steps and the shared manual-refresh state.
     in-out property <int> auto-refresh: 5;
-    in property <bool> refreshing: false;
-    in property <angle> refresh-rotation: 0deg;
     in property <string> updated-at: "—";
-    // The page footer is the one visible 更新于 source; the chart keeps the read
-    // time as a data seam without drawing a second label.
+    // The page footer is the one visible read-time source; the chart keeps the
+    // read time as a data seam without drawing a second label.
     out property <bool> updated-at-visible: false;
-    callback refresh();
     callback period-changed(int);
     private property <int> auto-refresh-index: 0;
-    out property <length> refresh-x: refresh-button.absolute-position.x;
-    out property <length> refresh-y: refresh-button.absolute-position.y;
-    out property <length> refresh-width: refresh-button.width;
-    out property <length> refresh-height: refresh-button.height;
-    out property <bool> refresh-enabled: refresh-button.enabled;
     out property <length> content-height: content.preferred-height;
     out property <length> metric-x: metric-control.absolute-position.x;
     out property <length> metric-y: metric-control.absolute-position.y;
@@ -491,7 +517,9 @@ export component UsageChart inherits Panel {
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
-    private property <int> key-index: -1;
+    // The keyboard cursor starts on the first bucket; it only drives `active`
+    // while the chart owns focus, so hover keeps working without focus.
+    private property <int> key-index: 0;
     // The header fits one row at the default width; below 650 px it splits
     // into two rows instead of overflowing the card.
     private property <bool> narrow: root.width < 650px;
@@ -510,7 +538,7 @@ export component UsageChart inherits Panel {
         }
     }
     private property <int> active: root.pinned >= 0 ? root.pinned
-        : root.key-index >= 0 ? root.key-index : plot.hovered-index;
+        : chart-focus.has-focus ? root.key-index : plot.hovered-index;
     private property <bool> has-data: root.points.length > 0;
     private property <bool> has-selection: root.active >= 0 && root.active < root.points.length;
     private property <string> metric: root.show-requests ? "请求数" : "Token";
@@ -532,21 +560,27 @@ export component UsageChart inherits Panel {
     out property <int> pinned-index: root.pinned;
     out property <int> active-index: root.active;
     out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    // Test seam: the chart focus is visible through the control-strength edge
+    // step and starts the keyboard cursor on the first bucket.
+    out property <bool> chart-focus-visible:
+        root.border-color == Theme.edge-control-strong;
+    out property <int> chart-key-index: root.key-index;
+    public function focus-chart() { chart-focus.focus(); }
     out property <string> selection-label: root.has-selection ? root.points[root.active].detail-label : "";
     out property <string> selection-value: !root.has-selection ? ""
         : root.show-requests ? root.points[root.active].request-value : root.points[root.active].token-value;
 
     preferred-height: root.width < 670px ? 408px : 368px;
     vertical-stretch: 0;
-    // The chart card is a keyboard stop: Tab reaches it, the ring is the same
-    // neutral edge step as the other focusable surfaces.
-    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    // The chart card is a keyboard stop: Tab reaches it, the ring is the
+    // control-strength neutral edge step so the 1 px border is visible.
+    border-color: chart-focus.has-focus ? Theme.edge-control-strong : Theme.edge;
     animate preferred-height { duration: Theme.settle; easing: ease-out; }
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
 
-    changed period => { root.pinned = -1; root.key-index = -1; }
+    changed period => { root.pinned = -1; root.key-index = 0; }
     changed points => {
-        root.key-index = -1;
+        root.key-index = 0;
         if (root.pinned >= root.points.length
             || (root.pinned >= 0 && root.points[root.pinned].detail-label != root.pinned-label)) {
             root.pinned = -1;
@@ -639,18 +673,6 @@ export component UsageChart inherits Panel {
                     right-header := HorizontalLayout {
                         spacing: 8px;
                         alignment: center;
-                        refresh-button := ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "刷新总览";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh(); }
-                        }
                         metric-control := Segmented {
                             width: 188px;
                             options: [{ text: "Token" }, { text: "请求数" }];
@@ -696,18 +718,6 @@ export component UsageChart inherits Panel {
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: center;
-                        ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "刷新总览";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh(); }
-                        }
                         Segmented {
                             width: 188px;
                             options: [{ text: "Token" }, { text: "请求数" }];
