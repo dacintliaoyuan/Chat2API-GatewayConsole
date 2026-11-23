@@ -587,7 +587,7 @@ fn error_lines(row: &RequestRow) -> String {
         (None, Some(message)) => {
             format!("错误代码  不可用（账本没有记录错误代码）\n错误信息  {message}")
         }
-        (None, None) if row.result == "成功" => "错误  无".to_string(),
+        (None, None) if row.result == "成功" => "无".to_string(),
         (None, None) => {
             "错误代码  不可用（账本没有记录错误代码）\n错误信息  不可用（账本没有记录错误信息）"
                 .to_string()
@@ -1062,39 +1062,61 @@ pub fn read_request_logs(
     }
 }
 
-/// Detail text for one ledger row. `logs` is `None` while the matching service
-/// log events are still being read; the finished text only ever includes the
-/// sanitized lines already filtered by [`read_request_logs`].
-pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
-    let mut detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n{}\n{}\n{}\n{}\n耗时  {}\n{}\n{}\n{}\n{}\n{}\n\n结果说明\n{}\n\n{}",
+/// One request's detail panel: the sectioned body plus the raw log disclosure.
+/// `logs` is `None` while the matching service events are still being read; the
+/// log text only ever includes the sanitized lines already filtered by
+/// [`read_request_logs`]. The request ID stays out of the body: the panel header
+/// already shows and copies it, so the body never repeats it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestDetail {
+    pub body: String,
+    pub log_label: String,
+    pub log_note: String,
+    pub log_text: String,
+}
+
+pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> RequestDetail {
+    let body = format!(
+        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n  结果说明  {}\n{}\n\n耗时\n  {}\n  {}\n  {}\n  {}\n\nToken\n  {}\n  {}\n  {}\n  {}\n\n错误\n{}",
         row.at,
         row.result,
         row.model,
-        row.request_id.as_deref().unwrap_or("—"),
         http_status_line(row),
-        error_lines(row),
-        reading_line("缓存读取", &row.cache_read, " Token", "（已含在输入中）"),
-        reading_line("思考 Token", &row.reasoning, "", "（已计入输出）"),
+        row.detail,
+        indent(&retry_lines(row)),
         row.duration,
         first_token_line(row),
         reading_line("速度", &row.speed, " Token/秒", ""),
         format!("速度口径  {}", row.speed_basis),
         reading_line("输入", &row.input, " Token", ""),
         reading_line("输出", &row.output, " Token", ""),
-        row.detail,
-        retry_lines(row)
+        reading_line("缓存读取", &row.cache_read, " Token", "（已含在输入中）"),
+        reading_line("思考 Token", &row.reasoning, "", "（已计入输出）"),
+        indent(&error_lines(row)),
     );
-    match logs {
-        Some(logs) => {
-            detail.push_str("\n\n运行日志\n");
-            detail.push_str(&logs.message);
-            if !logs.lines.is_empty() {
-                detail.push('\n');
-                detail.push_str(&logs.lines.join("\n"));
-            }
-        }
-        None => detail.push_str("\n\n正在读取关联运行日志…"),
+    let (log_label, log_note, log_text) = match logs {
+        Some(logs) => (
+            format!("原始日志（{} 条）", logs.lines.len()),
+            logs.message.clone(),
+            logs.lines.join("\n"),
+        ),
+        None => (
+            "原始日志".to_string(),
+            "正在读取关联运行日志…".to_string(),
+            String::new(),
+        ),
+    };
+    RequestDetail {
+        body,
+        log_label,
+        log_note,
+        log_text,
     }
-    detail
+}
+
+fn indent(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

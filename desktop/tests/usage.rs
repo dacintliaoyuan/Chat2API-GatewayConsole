@@ -300,7 +300,7 @@ fn request_detail_shows_first_token_or_a_dash_for_legacy_rows() {
     let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let request = &page.rows[0];
     assert_eq!(request.first_token, "—");
-    let detail = request_detail(request, None);
+    let detail = request_detail(request, None).body;
     assert!(
         detail.contains("首字耗时  不可用（账本没有记录首字耗时，不推算）"),
         "{detail}"
@@ -771,22 +771,27 @@ fn request_detail_shows_ledger_fields_and_only_sanitized_events_for_this_request
     assert_eq!(request.request_id.as_deref(), Some(REQUEST));
 
     let pending = request_detail(request, None);
-    assert!(pending.contains("正在读取关联运行日志"));
+    assert!(pending.log_note.contains("正在读取关联运行日志"));
+    assert!(pending.log_text.is_empty());
 
     let logs = read_request_logs(&log, request.request_id.as_deref(), now);
     assert_eq!(logs.lines.len(), 2);
     let detail = request_detail(request, Some(&logs));
-    assert!(detail.contains("fixture-model"));
-    assert!(detail.contains(REQUEST));
-    assert!(detail.contains("1200 ms"));
-    assert!(detail.contains("输入  8 Token"));
-    assert!(detail.contains("输出  2 Token"));
-    assert!(detail.contains("运行日志"));
-    assert!(detail.contains("request_summary"));
-    assert!(!detail.contains("secret-must-not-escape"));
-    assert!(!detail.contains("hunter2"));
-    assert!(!detail.contains("sk-secret"));
-    assert!(!detail.contains("top-secret"));
+    assert!(detail.body.contains("fixture-model"));
+    assert!(
+        !detail.body.contains(REQUEST),
+        "the body must not repeat the panel header's request ID: {}",
+        detail.body
+    );
+    assert!(detail.body.contains("1200 ms"));
+    assert!(detail.body.contains("输入  8 Token"));
+    assert!(detail.body.contains("输出  2 Token"));
+    assert!(detail.log_label.contains("原始日志"));
+    assert!(detail.log_text.contains("request_summary"));
+    assert!(!detail.log_text.contains("secret-must-not-escape"));
+    assert!(!detail.log_text.contains("hunter2"));
+    assert!(!detail.log_text.contains("sk-secret"));
+    assert!(!detail.log_text.contains("top-secret"));
 
     let no_id = um_desktop::usage::RequestRow {
         request_id: None,
@@ -795,13 +800,17 @@ fn request_detail_shows_ledger_fields_and_only_sanitized_events_for_this_request
     let without_id = read_request_logs(&log, None, now);
     assert!(without_id.message.contains("没有可关联的请求 ID"));
     let without_id_detail = request_detail(&no_id, Some(&without_id));
-    assert!(without_id_detail.contains("请求 ID  —"));
-    assert!(without_id_detail.contains("没有可关联的请求 ID"));
+    assert!(
+        !without_id_detail.body.contains("请求 ID"),
+        "{}",
+        without_id_detail.body
+    );
+    assert!(without_id_detail.log_note.contains("没有可关联的请求 ID"));
 
     let unreadable = read_request_logs(&tmp.path().join("missing.log"), Some(REQUEST), now);
     assert!(unreadable.message.contains("暂不可读"));
     let unreadable_detail = request_detail(request, Some(&unreadable));
-    assert!(unreadable_detail.contains("暂不可读"));
+    assert!(unreadable_detail.log_note.contains("暂不可读"));
 }
 
 #[test]

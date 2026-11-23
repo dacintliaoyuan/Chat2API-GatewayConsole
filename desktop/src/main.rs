@@ -1017,7 +1017,11 @@ fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<usage::RequestNav>,
     let log = log.to_path_buf();
     window.set_selected_request(key.clone().into());
     window.set_request_detail_title("请求详情".into());
-    window.set_request_detail(usage::request_detail(&row, None).into());
+    let pending = usage::request_detail(&row, None);
+    window.set_request_detail(pending.body.into());
+    window.set_request_log_label(pending.log_label.into());
+    window.set_request_log_note(pending.log_note.into());
+    window.set_request_log_text(pending.log_text.into());
     std::thread::spawn(move || {
         let logs = usage::read_request_logs(
             &log,
@@ -1027,7 +1031,11 @@ fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<usage::RequestNav>,
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = weak.upgrade() {
                 if window.get_selected_request().as_str() == key {
-                    window.set_request_detail(usage::request_detail(&row, Some(&logs)).into());
+                    let detail = usage::request_detail(&row, Some(&logs));
+                    window.set_request_detail(detail.body.into());
+                    window.set_request_log_label(detail.log_label.into());
+                    window.set_request_log_note(detail.log_note.into());
+                    window.set_request_log_text(detail.log_text.into());
                 }
             }
         });

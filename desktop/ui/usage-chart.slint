@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { BarChart, ChartDataset, ChartSeriesType } from "@slintplot";
+import { BarChart, ChartAxis, ChartDataset, ChartEngine, ChartKind, ChartSeriesType, ChartTheme } from "@slintplot";
 import { Theme, Panel, Heading, Hint, DataText, Segmented, ActionButton, SectionLabel } from "theme.slint";
 
 export struct UsagePoint {
@@ -38,7 +38,57 @@ component RequestTrendChart inherits Rectangle {
     in property <bool> integer-ticks: true;
     in property <int> value-decimals: 0;
     in property <bool> allow-motion: true;
+    // The pinned bucket gets a 2 px marker rule under its band. The engine
+    // doesn't expose the plot geometry, so the wrapper asks the same pure
+    // axis callback the chart uses and derives the band from its widest tick
+    // label; the marker then sits exactly on the category instead of using a
+    // guessed left gutter.
+    in property <int> pinned-index: -1;
+    in property <[float]> values;
     out property <int> hovered-index: chart.hovered-index;
+
+    private property <ChartAxis> marker-axis: ChartEngine.value-axis({
+        locale: ChartTheme.locale,
+        kind: ChartKind.bar,
+        datasets: root.datasets,
+        stacked: false,
+        percent: false,
+        height: root.height / 1px,
+        begin-at-zero: true,
+        font-size: ChartTheme.font-size / 1px,
+        labels: root.labels,
+        view-start: 0,
+        view-end: 1,
+        fixed: false,
+        fixed-min: 0,
+        fixed-max: 0,
+        logarithmic: false,
+        integer-ticks: root.integer-ticks,
+        format: { prefix: "", suffix: "", decimals: root.value-decimals },
+        side: 1,
+        ordered: false,
+    });
+    private property <length> marker-plot-x:
+        root.marker-axis.widest-label.character-count * ChartTheme.font-size * 0.62 + 8px;
+    private property <length> marker-plot-width:
+        max(0px, root.width - root.marker-plot-x - 12px);
+    private property <length> marker-step: root.labels.length > 0
+        ? root.marker-plot-width / root.labels.length : 0px;
+    pure function marker-value() -> float {
+        if (root.pinned-index < 0 || root.pinned-index >= root.values.length) {
+            return 0;
+        }
+        return root.values[root.pinned-index];
+    }
+    out property <bool> marker-visible: root.pinned-index >= 0
+        && root.pinned-index < root.labels.length
+        && root.marker-step > 0px
+        && root.marker-value() == root.marker-value();
+    out property <length> marker-x: root.marker-plot-x + root.pinned-index * root.marker-step;
+    out property <length> marker-width: root.marker-step;
+    // The plot's bottom edge: the chart reserves 2 em for its x labels below it.
+    out property <length> marker-y: root.height - ChartTheme.font-size * 2 - 2px;
+    out property <length> marker-height: 2px;
 
     chart := BarChart {
         width: parent.width;
@@ -57,6 +107,15 @@ component RequestTrendChart inherits Rectangle {
         accessible-label: "请求趋势图";
         accessible-description: root.description;
         category-clicked(index) => { root.category-clicked(index); }
+    }
+    // A 2 px accent rule under the pinned bucket's band: the pinned bar keeps
+    // its readout in the selection row, and this marks which bar that is.
+    if root.marker-visible : Rectangle {
+        x: root.marker-x;
+        y: root.marker-y;
+        width: root.marker-width;
+        height: root.marker-height;
+        background: Theme.accent-strong;
     }
 }
 
@@ -155,6 +214,18 @@ export component RequestAnalytics inherits Panel {
     out property <bool> split: root.split-by-model;
     out property <string> metric-label: root.metric == 1 ? "请求数"
         : root.metric == 2 ? "输出速度" : "Token";
+    // One dataset expression feeds both charts and the marker's value axis, so
+    // the marker can never disagree with the bars it marks.
+    private property <[ChartDataset]> plot-datasets: root.split-by-model
+        ? (root.metric == 1 ? root.request-series
+            : root.metric == 2 ? root.speed-series : root.token-series)
+        : [{
+            label: root.metric-label,
+            values: root.metric == 1 ? root.request-counts
+                : root.metric == 2 ? root.speed-counts : root.token-counts,
+            series-type: ChartSeriesType.bar,
+            color: root.metric == 1 ? Theme.series-b : Theme.accent,
+        }];
     // The subtitle names the unit the selected metric plots, so switching the
     // metric never leaves 亿 on a request-count or speed chart.
     out property <string> metric-unit-text: root.metric == 1 ? "所选范围 · 单位：次"
@@ -173,6 +244,25 @@ export component RequestAnalytics inherits Panel {
     out property <int> kpi-count: root.metrics.length;
     out property <bool> empty-visible: empty-hint.visible;
     out property <string> empty-text: empty-hint.text;
+    // The KPI row and the chart title both say 所选范围; the status row keeps
+    // the 本页 count, so the two scopes never share one sentence.
+    out property <bool> kpi-scope-visible: !root.empty;
+    out property <string> kpi-scope-text: scope-caption-text.text;
+    out property <length> kpi-scope-y: scope-caption.absolute-position.y;
+    out property <length> kpi-scope-height: scope-caption.height;
+    out property <length> kpi-first-card-y: root.compact
+        ? compact-cards.absolute-position.y : cards.absolute-position.y;
+    // Test seams: the pinned bar's 2 px marker rule and the band it spans.
+    out property <bool> pinned-marker-visible: root.expanded && (root.compact
+        ? compact-plot.marker-visible : wide-plot.marker-visible);
+    out property <length> pinned-marker-x: root.compact
+        ? compact-plot.marker-x : wide-plot.marker-x;
+    out property <length> pinned-marker-width: root.compact
+        ? compact-plot.marker-width : wide-plot.marker-width;
+    out property <length> pinned-marker-y: root.compact
+        ? compact-plot.marker-y : wide-plot.marker-y;
+    out property <length> pinned-marker-height: root.compact
+        ? compact-plot.marker-height : wide-plot.marker-height;
     // The height this card would take with the chart open. The page compares
     // the list's remaining height against this value, not the window height.
     out property <length> expanded-height: content.preferred-height
@@ -241,6 +331,11 @@ export component RequestAnalytics inherits Panel {
             root.pinned = index;
         }
     }
+    // A range change replaces the buckets; an index past the new labels would
+    // mark a bucket that no longer exists, so drop the pin with the old data.
+    changed labels => {
+        if (root.pinned >= root.labels.length) { root.pinned = -1; }
+    }
     // The compact summary and the wide 收起图表 control share one action; the
     // wide page status row also toggles this from outside the card.
     public function toggle-chart() {
@@ -282,6 +377,22 @@ export component RequestAnalytics inherits Panel {
             height: root.empty ? self.preferred-height : 0px;
             text: "暂无请求，指标与趋势会在有请求后显示";
             horizontal-alignment: center;
+        }
+
+        // 所选范围 names the KPI row's scope; the status row keeps 本页 for
+        // the page count. The caption is its own row at wide width and a
+        // leading cell in the one-row compact summary, so the compact first
+        // screen keeps its request row.
+        scope-caption := HorizontalLayout {
+            visible: !root.empty && !root.compact;
+            height: self.visible ? self.preferred-height : 0px;
+            spacing: 8px;
+            scope-caption-text := Hint {
+                text: "所选范围";
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
         }
 
         // Equal flex-basis keeps the cards the same size. At compact width the
@@ -329,6 +440,13 @@ export component RequestAnalytics inherits Panel {
             min-height: root.empty || !root.compact ? 0px : 48px;
             max-height: root.empty || !root.compact ? 0px : 48px;
             spacing: 4px;
+            compact-scope := Hint {
+                text: "所选范围";
+                font-size: 10px;
+                width: 38px;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
             for metric[index] in root.metrics : Rectangle {
                 horizontal-stretch: 1;
                 border-radius: 7px;
@@ -340,7 +458,10 @@ export component RequestAnalytics inherits Panel {
                     padding-bottom: 4px;
                     spacing: 1px;
                     Hint {
-                        text: metric.label;
+                        // The 请求 card keeps the failure detail that its
+                        // second line would show at wide width.
+                        text: index == 1 && metric.detail != "失败 0"
+                            ? metric.label + " · " + metric.detail : metric.label;
                         font-size: 10px;
                         overflow: elide;
                         wrap: no-wrap;
@@ -404,16 +525,9 @@ export component RequestAnalytics inherits Panel {
                 description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
-                datasets: root.split-by-model
-                    ? (root.metric == 1 ? root.request-series
-                        : root.metric == 2 ? root.speed-series : root.token-series)
-                    : [{
-                        label: root.metric-label,
-                        values: root.metric == 1 ? root.request-counts
-                            : root.metric == 2 ? root.speed-counts : root.token-counts,
-                        series-type: ChartSeriesType.bar,
-                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
-                    }];
+                datasets: root.plot-datasets;
+                pinned-index: root.pinned;
+                values: root.plotted-values;
                 show-legend: root.split-by-model;
                 integer-ticks: root.metric != 2;
                 value-decimals: root.metric == 2 ? 1 : 0;
@@ -435,16 +549,9 @@ export component RequestAnalytics inherits Panel {
                 description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
-                datasets: root.split-by-model
-                    ? (root.metric == 1 ? root.request-series
-                        : root.metric == 2 ? root.speed-series : root.token-series)
-                    : [{
-                        label: root.metric-label,
-                        values: root.metric == 1 ? root.request-counts
-                            : root.metric == 2 ? root.speed-counts : root.token-counts,
-                        series-type: ChartSeriesType.bar,
-                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
-                    }];
+                datasets: root.plot-datasets;
+                pinned-index: root.pinned;
+                values: root.plotted-values;
                 show-legend: root.split-by-model;
                 integer-ticks: root.metric != 2;
                 value-decimals: root.metric == 2 ? 1 : 0;
@@ -583,6 +690,53 @@ export component UsageChart inherits Panel {
     out property <int> pinned-index: root.pinned;
     out property <int> active-index: root.active;
     out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    // The pinned bucket gets a 2 px marker rule at the plot's bottom edge. The
+    // chart engine doesn't expose the plot geometry, so the wrapper asks the
+    // same pure axis callback the chart uses and derives the band from its
+    // widest tick label; the rule then sits exactly on the category instead of
+    // on a guessed left gutter.
+    private property <[ChartDataset]> plot-datasets: [{
+        label: root.metric,
+        values: root.show-requests ? root.request-counts : root.token-counts,
+        series-type: root.show-line ? ChartSeriesType.line : ChartSeriesType.bar,
+        color: root.show-requests ? Theme.series-b : Theme.accent,
+        fill: root.show-line,
+    }];
+    private property <ChartAxis> marker-axis: ChartEngine.value-axis({
+        locale: ChartTheme.locale,
+        kind: ChartKind.bar,
+        datasets: root.plot-datasets,
+        stacked: false,
+        percent: false,
+        height: plot.height / 1px,
+        begin-at-zero: true,
+        font-size: ChartTheme.font-size / 1px,
+        labels: root.labels,
+        view-start: 0,
+        view-end: 1,
+        fixed: false,
+        fixed-min: 0,
+        fixed-max: 0,
+        logarithmic: false,
+        integer-ticks: true,
+        format: { prefix: "", suffix: "", decimals: 0 },
+        side: 1,
+        ordered: false,
+    });
+    private property <length> marker-plot-x:
+        root.marker-axis.widest-label.character-count * ChartTheme.font-size * 0.62 + 8px;
+    private property <length> marker-plot-width:
+        max(0px, plot.width - root.marker-plot-x - 12px);
+    private property <length> marker-step: root.labels.length > 0
+        ? root.marker-plot-width / root.labels.length : 0px;
+    out property <bool> marker-visible: root.pinned >= 0
+        && root.pinned < root.labels.length
+        && root.marker-step > 0px;
+    out property <length> marker-x: root.marker-plot-x + root.pinned * root.marker-step;
+    out property <length> marker-width: root.marker-step;
+    out property <bool> pinned-marker-visible: root.marker-visible;
+    out property <length> pinned-marker-x: root.marker-x;
+    out property <length> pinned-marker-width: root.marker-width;
     // Test seam: the chart focus is visible through the control-strength edge
     // step and starts the keyboard cursor on the first bucket.
     out property <bool> chart-focus-visible:
@@ -827,13 +981,7 @@ export component UsageChart inherits Panel {
                     width: parent.width;
                     height: parent.height;
                     labels: root.labels;
-                    datasets: [{
-                        label: root.metric,
-                        values: root.show-requests ? root.request-counts : root.token-counts,
-                        series-type: root.show-line ? ChartSeriesType.line : ChartSeriesType.bar,
-                        color: root.show-requests ? Theme.series-b : Theme.accent,
-                        fill: root.show-line,
-                    }];
+                    datasets: root.plot-datasets;
                     begin-at-zero: true;
                     integer-ticks: true;
                     value-decimals: 0;
@@ -855,6 +1003,15 @@ export component UsageChart inherits Panel {
                             root.pinned-label = root.points[index].detail-label;
                         }
                     }
+                }
+                // The pinned bucket keeps its readout and 取消固定; this 2 px
+                // accent rule marks which bucket that readout belongs to.
+                if root.marker-visible : Rectangle {
+                    x: root.marker-x;
+                    y: parent.height - 2px;
+                    width: root.marker-width;
+                    height: 2px;
+                    background: Theme.accent-strong;
                 }
             }
 

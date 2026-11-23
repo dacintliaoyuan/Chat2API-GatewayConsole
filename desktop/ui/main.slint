@@ -220,12 +220,26 @@ component TextDetails inherits Panel {
     // The request detail carries its request ID as a selectable value and a
     // copy action; the other detail panels leave it empty.
     in property <string> id-label;
+    // The request's raw log events stay a separate disclosure instead of
+    // widening the sectioned body; the other panels leave these empty.
+    in property <string> log-label: "";
+    in property <string> log-note: "";
+    in property <string> log-text: "";
+    in-out property <bool> log-open: false;
     callback copy-id();
     callback closed();
     // A copy is confirmed in place for 1.2 s so the action never looks like a
     // no-op; a new body clears the old acknowledgement immediately.
     in-out property <bool> copied: false;
     changed body => { root.copied = false; }
+    // Test seams: the raw-log disclosure, its label and the visible text.
+    out property <bool> log-available: !root.log-label.is-empty;
+    out property <bool> log-shown: log-body.visible;
+    out property <string> log-shown-text: log-body.visible ? log-text-edit.text : "";
+    out property <length> log-toggle-x: log-toggle.absolute-position.x;
+    out property <length> log-toggle-y: log-toggle.absolute-position.y;
+    out property <length> log-toggle-width: log-toggle.width;
+    out property <length> log-toggle-height: log-toggle.height;
     // Test seam: the acknowledgement and the copy control geometry.
     out property <length> copy-x: copy-button.absolute-position.x;
     out property <length> copy-y: copy-button.absolute-position.y;
@@ -303,6 +317,42 @@ component TextDetails inherits Panel {
                 font-family: Theme.font-data;
                 font-size: 11px;
                 accessible-label: root.title;
+            }
+        }
+        // The raw log events are one disclosure below the sectioned body: the
+        // panel keeps the sections readable and the log stays one click away.
+        // Both stay instantiated so their geometry is measurable when closed.
+        log-toggle-row := HorizontalLayout {
+            visible: !root.log-label.is-empty;
+            height: self.visible ? self.preferred-height : 0px;
+            spacing: 8px;
+            log-toggle := ActionButton {
+                label: root.log-open ? "收起原始日志" : root.log-label;
+                icon: root.log-open ? "chevron-down" : "chevron-right";
+                quiet: true;
+                clicked => { root.log-open = !root.log-open; }
+            }
+            Hint {
+                text: root.log-note;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+        }
+        log-body := Rectangle {
+            visible: root.log-available && root.log-open;
+            height: self.visible ? 96px : 0px;
+            clip: true;
+            log-text-edit := TextEdit {
+                width: parent.width;
+                height: parent.height + 2px;
+                text: root.log-text;
+                read-only: true;
+                wrap: word-wrap;
+                font-family: Theme.font-data;
+                font-size: 11px;
+                accessible-label: root.log-label;
             }
         }
     }
@@ -575,11 +625,11 @@ export component MainWindow inherits Window {
         { label: "帮助", page: 4, icon: "help", group: 1 },
     ];
     private property <[string]> page-titles: ["总览", "请求诊断", "设置", "运行日志", "帮助"];
-    // The account cell always carries a detail line so the three state columns
-    // keep the same rhythm, even when the gateway only reports "已登录".
+    // The account cell carries one state: 已登录 already says the credentials
+    // work, so a credential-validity detail would only repeat it in other words.
     public pure function account-state-detail() -> string {
+        if (root.account-label == "已登录") { return ""; }
         if (!root.account-detail.is-empty) { return root.account-detail; }
-        if (root.account-label == "已登录") { return "登录状态正常"; }
         if (root.account-saved == "未配置账号") { return "未配置账号"; }
         return "登录后可用";
     }
@@ -1218,6 +1268,11 @@ export component MainWindow inherits Window {
     in property <string> request-detail-title;
     in property <string> request-detail;
     in-out property <length> request-scroll-y: 0px;
+    // The request's raw log events are a separate disclosure in the detail
+    // panel; the log page keeps its own detail without these.
+    in property <string> request-log-label;
+    in property <string> request-log-note;
+    in property <string> request-log-text;
     in property <[RequestMetric]> request-metrics;
     in property <[string]> request-chart-labels;
     in property <[float]> request-chart-token-counts;
@@ -1257,8 +1312,20 @@ export component MainWindow inherits Window {
     out property <bool> request-kpi-visible: request-analytics.kpi-visible;
     out property <int> request-kpi-count: request-analytics.kpi-count;
     out property <bool> request-analytics-empty-visible: request-analytics.empty-visible;
+    out property <bool> request-kpi-scope-visible: request-analytics.kpi-scope-visible;
+    out property <string> request-kpi-scope-text: request-analytics.kpi-scope-text;
+    out property <length> request-kpi-scope-y: request-analytics.kpi-scope-y;
+    out property <length> request-kpi-scope-height: request-analytics.kpi-scope-height;
+    out property <length> request-kpi-first-card-y: request-analytics.kpi-first-card-y;
+    out property <bool> request-pinned-marker-visible: request-analytics.pinned-marker-visible;
+    out property <length> request-pinned-marker-x: request-analytics.pinned-marker-x;
+    out property <length> request-pinned-marker-width: request-analytics.pinned-marker-width;
+    out property <length> request-pinned-marker-y: request-analytics.pinned-marker-y;
+    out property <length> request-pinned-marker-height: request-analytics.pinned-marker-height;
     out property <string> request-analytics-empty-text: request-analytics.empty-text;
     // An unfiltered empty window is the legal no-requests state; a filter that
+    out property <bool> request-analytics-card-visible: request-analytics.visible;
+    out property <bool> request-list-empty-visible: request-empty.visible;
     // matched nothing keeps the KPI cards and explains the filter instead.
     out property <bool> request-empty:
         root.requests.length == 0 && !root.request-filters-active;
@@ -1266,6 +1333,9 @@ export component MainWindow inherits Window {
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
     out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
+    // The chart owns the pin state; the page forwards the same bucket toggle so
+    // the headless test drives the product path instead of a pointer guess.
+    public function pin-request-bucket(index: int) { request-analytics.toggle-pin(index); }
     out property <int> usage-chart-key-index: usage-chart.chart-key-index;
     public function focus-usage-chart() { usage-chart.focus-chart(); }
     out property <string> request-fail-toggle-text:
@@ -1504,6 +1574,9 @@ export component MainWindow inherits Window {
     out property <length> usage-plot-height: usage-chart.plot-height;
     out property <int> usage-pinned-index: usage-chart.pinned-index;
     out property <int> usage-active-index: usage-chart.active-index;
+    out property <bool> usage-pinned-marker-visible: usage-chart.pinned-marker-visible;
+    out property <length> usage-pinned-marker-x: usage-chart.pinned-marker-x;
+    out property <length> usage-pinned-marker-width: usage-chart.pinned-marker-width;
     out property <bool> usage-can-unpin: usage-chart.can-unpin;
     out property <string> usage-selection-label: usage-chart.selection-label;
     out property <string> usage-selection-value: usage-chart.selection-value;
@@ -1599,6 +1672,7 @@ export component MainWindow inherits Window {
     out property <length> request-analytics-y: request-analytics.absolute-position.y;
     out property <length> request-analytics-height: request-analytics.height;
     // Test seam: the compact first screen ends at the footer, so the first
+    out property <length> request-analytics-width: request-analytics.width;
     // request row must stay above it.
     out property <length> footer-height: status-row.height;
     out property <bool> footer-time-visible: footer-updated.visible;
@@ -1856,7 +1930,6 @@ export component MainWindow inherits Window {
     out property <bool> log-history-note-visible: !root.log-history-note.is-empty;
     out property <string> log-history-note-text: root.log-history-note;
     out property <bool> log-follow-visible: log-follow.visible;
-    out property <string> log-layer-label: root.log-mode == 0 ? "实时" : "历史";
     out property <length> log-search-x: log-search.absolute-position.x;
     out property <length> log-search-y: log-search.absolute-position.y;
     out property <length> log-search-width: log-search.width;
@@ -1912,7 +1985,7 @@ export component MainWindow inherits Window {
     out property <int> status-dot-tone: status-dot.tone;
     out property <float> page-title-opacity: page-title.opacity;
     out property <float> page-host-opacity: page-host.opacity;
-    // Test seam: proves the F1 key reached the window shortcut handler.
+    // The footer points at the help page once; opening help retires it.
     out property <bool> f1-seen: false;
     // Test seams: the refresh controls, their disabled state, the rotation
     // angle and the per-page update labels.
@@ -2039,8 +2112,25 @@ export component MainWindow inherits Window {
         + (root.help-card-visible(4) ? 1 : 0)
         + (root.help-card-visible(5) ? 1 : 0)
         + (root.help-card-visible(6) ? 1 : 0)
+    // The raw log events stay one disclosure inside the request detail.
+    out property <bool> request-log-available: request-details.log-available;
+    out property <bool> request-log-shown: request-details.log-shown;
+    out property <string> request-log-shown-text: request-details.log-shown-text;
+    out property <length> request-log-toggle-x: request-details.log-toggle-x;
+    out property <length> request-log-toggle-y: request-details.log-toggle-y;
+    out property <length> request-log-toggle-width: request-details.log-toggle-width;
+    out property <length> request-log-toggle-height: request-details.log-toggle-height;
         + (root.help-card-visible(7) ? 1 : 0)
         + (root.help-card-visible(8) ? 1 : 0);
+    // Test seams: the danger action's drawn colours and the light card
+    // surface, so a test can check the 4.5:1 label contrast instead of
+    // trusting the token name.
+    out property <color> danger-action-label-tint: clear-account.label-tint;
+    out property <color> danger-action-icon-tint: clear-account.icon-tint;
+    // A quiet danger action keeps its red identity on the label and icon and
+    // draws no frame, so the frame token comes from a framed danger action.
+    out property <color> danger-action-frame-tint: probe-stop.frame-tint;
+    out property <color> console-surface-color: Theme.surface;
     out property <bool> help-no-result-visible: help-no-result.visible;
     out property <string> help-search-placeholder: help-search.placeholder;
     out property <string> help-terminology-text: help-terminology.text;
@@ -3298,6 +3388,9 @@ export component MainWindow inherits Window {
                     min-height: 240px;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
+                    // With no request at all the list card is the one empty
+                    // state; a second analytics card would repeat the reason.
+                    visible: !root.request-empty;
                     width: root.compact
                         ? (root.selected-request.is-empty ? root.request-content-width() : 0px)
                         : root.request-content-width()
@@ -3466,6 +3559,9 @@ export component MainWindow inherits Window {
                         }
                     }
                     // The four levels are independent toggles; no selection means
+                    log-label: root.request-log-label;
+                    log-note: root.request-log-note;
+                    log-text: root.request-log-text;
                     // every level, including the ungraded rows.
                     log-level-error := Toggle {
                         visible: root.log-mode == 1;
@@ -3578,11 +3674,8 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     spacing: 8px;
                     alignment: start;
-                    Tag {
-                        label: root.log-layer-label;
-                        tone: root.log-mode == 0 ? 0 : 3;
-                        y: (parent.height - self.height) / 2;
-                    }
+                    // The segmented control above already names the layer; the
+                    // status row keeps only the connection state and count.
                     StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
                     Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
                     Hint {
