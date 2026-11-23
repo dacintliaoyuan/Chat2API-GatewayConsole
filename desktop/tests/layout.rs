@@ -1635,6 +1635,16 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
         !window.get_page_refresh_visible(),
         "the static help page has no data read to refresh"
     );
+    assert!(
+        !window.get_footer_time_visible(),
+        "the static help page must not carry an 更新于 stamp"
+    );
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_footer_time_visible(),
+        "the data pages keep the one footer read time"
+    );
 }
 
 #[test]
@@ -1710,6 +1720,23 @@ fn the_footer_time_survives_midnight_with_a_monotonic_read_stamp() {
         window.get_last_update_label(),
         "更新于 00:00:01",
         "a read after midnight must replace the previous day's time"
+    );
+}
+
+#[test]
+fn the_query_and_export_actions_use_search_and_download_glyphs() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_request_query_icon(),
+        "search",
+        "查询 is a search action, not a forward arrow"
+    );
+    assert_eq!(
+        window.get_request_export_icon(),
+        "download",
+        "导出 CSV is a download, not a forward arrow"
     );
 }
 

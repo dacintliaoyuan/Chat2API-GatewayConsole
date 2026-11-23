@@ -819,6 +819,10 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_chart_visible());
     assert!(
+        window.get_request_fail_toggle_visible(),
+        "with a request row the failure filter stays available"
+    );
+    assert!(
         window.get_request_kpi_visible(),
         "the failure filter folds only the chart"
     );
@@ -848,6 +852,10 @@ fn an_unfiltered_empty_request_list_leaves_the_copy_to_the_status_row() {
         "the list header must not repeat the status row's copy"
     );
     assert!(!window.get_request_empty_title_visible());
+    assert!(
+        !window.get_request_fail_toggle_visible(),
+        "the empty state must not offer 只看失败"
+    );
 }
 
 #[test]

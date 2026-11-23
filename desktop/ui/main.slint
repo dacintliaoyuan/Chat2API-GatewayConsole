@@ -1567,6 +1567,7 @@ export component MainWindow inherits Window {
     out property <length> request-query-y: request-query.absolute-position.y;
     out property <length> request-query-width: request-query.width;
     out property <length> request-query-height: request-query.height;
+    out property <string> request-query-icon: request-query.icon;
     out property <length> request-status-y: request-status-row.absolute-position.y;
     out property <length> request-status-height: request-status-row.height;
     // Test seams: 加载更早 appends history instead of paging; the hint takes
@@ -1583,6 +1584,7 @@ export component MainWindow inherits Window {
     out property <length> request-export-y: request-export.absolute-position.y;
     out property <length> request-export-width: request-export.width;
     out property <length> request-export-height: request-export.height;
+    out property <string> request-export-icon: request-export.icon;
     out property <length> request-newer-page-x: request-newer-page.absolute-position.x;
     out property <length> request-newer-page-y: request-newer-page.absolute-position.y;
     out property <length> request-newer-page-width: request-newer-page.width;
@@ -1597,6 +1599,7 @@ export component MainWindow inherits Window {
     // Test seam: the compact first screen ends at the footer, so the first
     // request row must stay above it.
     out property <length> footer-height: status-row.height;
+    out property <bool> footer-time-visible: footer-updated.visible;
     out property <length> technical-card-x: technical-card.absolute-position.x;
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
@@ -3192,7 +3195,7 @@ export component MainWindow inherits Window {
                             width: Theme.icon-button;
                             height: Theme.icon-button;
                             label: "查询";
-                            icon: "arrow-right";
+                            icon: "search";
                             icon-only: true;
                             primary: true;
                             tooltip: "查询请求";
@@ -3231,6 +3234,9 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                     request-fail-toggle := ActionButton {
+                        // With no request at all the failure filter has nothing
+                        // to narrow, so the empty state keeps only 清除筛选.
+                        visible: !root.request-empty;
                         label: root.request-result == 2 ? "查看全部" : "只看失败";
                         icon: "filter";
                         quiet: true;
@@ -3394,7 +3400,7 @@ export component MainWindow inherits Window {
                                 }
                                 request-export := ActionButton {
                                     label: "导出 CSV";
-                                    icon: "arrow-right";
+                                    icon: "download";
                                     quiet: true;
                                     enabled: root.request-export-enabled;
                                     tooltip: "导出当前请求列表";
@@ -4838,7 +4844,13 @@ export component MainWindow inherits Window {
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                DataText { text: root.last-update-label; vertical-alignment: center; }
+                // The static help page has no refresh action, so it must not
+                // carry an 更新于 stamp either.
+                footer-updated := DataText {
+                    text: root.last-update-label;
+                    vertical-alignment: center;
+                    visible: root.page != 4;
+                }
             }
         }
     }
