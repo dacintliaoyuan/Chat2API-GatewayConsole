@@ -1276,6 +1276,8 @@ export component MainWindow inherits Window {
     out property <length> request-chart-toggle-y: request-chart-toggle.absolute-position.y;
     out property <length> request-chart-toggle-width: request-chart-toggle.width;
     out property <length> request-chart-toggle-height: request-chart-toggle.height;
+    out property <string> request-chart-toggle-label: request-chart-toggle.label;
+    out property <bool> request-analytics-expanded: request-analytics.expanded;
     // Test seams: the quiet 只看失败 action keeps a 1 px transparent frame and
     // steps it to the 3:1 control edge on keyboard focus.
     out property <color> request-fail-toggle-focus-ring-color:
@@ -3248,10 +3250,13 @@ export component MainWindow inherits Window {
                         // One chart disclosure for both widths; the compact
                         // first screen has no second in-card fold row.
                         visible: !root.request-empty;
-                        label: root.request-chart-collapsed ? "查看图表" : "收起图表";
-                        icon: root.request-chart-collapsed ? "chevron-right" : "chevron-down";
+                        // The compact width folds the in-card disclosure, the
+                        // wide width folds the chart row; the one control must
+                        // follow whichever disclosure is actually open.
+                        label: root.request-analytics-expanded ? "收起图表" : "查看图表";
+                        icon: root.request-analytics-expanded ? "chevron-down" : "chevron-right";
                         quiet: true;
-                        tooltip: root.request-chart-collapsed ? "查看图表" : "收起图表";
+                        tooltip: root.request-analytics-expanded ? "收起图表" : "查看图表";
                         clicked => { request-analytics.toggle-chart(); }
                     }
                 }

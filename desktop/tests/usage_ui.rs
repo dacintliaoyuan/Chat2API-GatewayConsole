@@ -625,11 +625,21 @@ fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
         first_row_bottom <= footer_top + 1.0,
         "the 540×420 first screen must show a request row: row bottom={first_row_bottom} footer top={footer_top}"
     );
+    assert_eq!(
+        window.get_request_chart_toggle_label().as_str(),
+        "查看图表",
+        "the folded compact card offers the chart"
+    );
     let folded_height = window.get_request_analytics_height();
 
     window.invoke_toggle_request_chart();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert!(window.get_request_details_open());
+    assert_eq!(
+        window.get_request_chart_toggle_label().as_str(),
+        "收起图表",
+        "the compact toggle follows the disclosure it controls"
+    );
     assert!(
         window.get_request_analytics_height() > folded_height,
         "the expanded analytics card brings the chart back"
