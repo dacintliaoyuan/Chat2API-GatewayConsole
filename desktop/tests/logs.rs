@@ -113,5 +113,5 @@ fn loaded_rows_are_reported_as_instance_logs() {
     let (status, tone) = logs_status(&view);
     assert_eq!(tone, Tone::Good);
     assert!(status.contains("最近 1 条"), "{status}");
-    assert!(status.contains("本实例"), "{status}");
+    assert!(!status.contains("实时"), "the Tag already names the layer: {status}");
 }

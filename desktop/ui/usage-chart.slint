@@ -169,7 +169,7 @@ export component RequestAnalytics inherits Panel {
     out property <int> model-row-count: root.model-speeds.length;
     // Test seam: the KPI row stays visible while the chart folds, except in the
     // unfiltered empty window where one reason replaces the five dashes.
-    out property <bool> kpi-visible: cards.visible;
+    out property <bool> kpi-visible: !root.empty;
     out property <int> kpi-count: root.metrics.length;
     out property <bool> empty-visible: empty-hint.visible;
     out property <string> empty-text: empty-hint.text;
@@ -270,11 +270,6 @@ export component RequestAnalytics inherits Panel {
         root.border-color == Theme.edge-control-strong;
     out property <int> chart-key-index: root.key-index;
     public function focus-chart() { chart-focus.focus(); }
-    // Test seam: the compact chart toggle.
-    out property <length> details-toggle-x: details-toggle.absolute-position.x;
-    out property <length> details-toggle-y: details-toggle.absolute-position.y;
-    out property <length> details-toggle-width: details-toggle.width;
-    out property <length> details-toggle-height: details-toggle.height;
 
     content := VerticalLayout {
         padding: 12px;
@@ -289,18 +284,16 @@ export component RequestAnalytics inherits Panel {
             horizontal-alignment: center;
         }
 
-        // Equal flex-basis keeps the cards the same size; at compact width two
-        // per row and a full-width last card avoid clipped labels and a gap. The
-        // row never folds: the chart is the only part the disclosure hides.
+        // Equal flex-basis keeps the cards the same size. At compact width the
+        // five cards collapse into one 56 px summary row: the KPI numbers stay
+        // visible, and the request list keeps the first screen.
         cards := FlexboxLayout {
-            visible: !root.empty;
-            height: root.empty ? 0px : self.preferred-height;
+            visible: !root.empty && !root.compact;
+            height: root.empty || root.compact ? 0px : self.preferred-height;
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
-                width: root.compact
-                    ? (index == 4 ? root.width - 24px : (root.width - 24px - 8px) / 2)
-                    : (root.width - 24px - 32px) / 5;
+                width: (root.width - 24px - 32px) / 5;
                 // Tall enough for the label, value and detail line without
                 // clipping the detail at the card edge.
                 height: 76px;
@@ -329,32 +322,45 @@ export component RequestAnalytics inherits Panel {
                 Tooltip { text: @markdown("\{metric.detail}"); }
             }
         }
-
-        compact-summary := HorizontalLayout {
-            visible: (root.compact || root.wide-collapsed) && !root.empty;
-            // Clicking the summary row toggles the chart as well.
-            summary-pointer := TouchArea {
-                clicked => { root.toggle-chart(); }
-            }
-            // A hidden row still feeds the parent's preferred height.
-            height: (root.compact || root.wide-collapsed) && !root.empty
-                ? self.preferred-height : 0px;
-            spacing: 8px;
-            // The chart toggle is the only content of the fold row; the KPI
-            // cards above already carry the numbers, so no summary is repeated.
-            Rectangle { horizontal-stretch: 1; }
-            // A visible label says what the control does instead of a bare
-            // chevron; the whole summary row reads as one action.
-            details-toggle := ActionButton {
-                visible: root.compact;
-                height: root.compact ? self.preferred-height : 0px;
-                label: root.expanded ? "收起图表" : "查看图表";
-                icon: root.expanded ? "chevron-down" : "chevron-right";
-                quiet: true;
-                tooltip: root.expanded ? "收起图表" : "查看图表";
-                clicked => { root.toggle-chart(); }
+        compact-cards := HorizontalLayout {
+            visible: !root.empty && root.compact;
+            // Layouts default min-height to preferred-height; pin both so the
+            // 48 px summary actually shrinks instead of keeping its content box.
+            min-height: root.empty || !root.compact ? 0px : 48px;
+            max-height: root.empty || !root.compact ? 0px : 48px;
+            spacing: 4px;
+            for metric[index] in root.metrics : Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 7px;
+                background: Theme.surface-2;
+                VerticalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 1px;
+                    Hint {
+                        text: metric.label;
+                        font-size: 10px;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                    DataText {
+                        text: metric.value;
+                        font-size: 14px;
+                        font-weight: 650;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                }
+                // The compact value may elide; the tooltip keeps the label,
+                // the full value and the detail readable.
+                Tooltip {
+                    text: @markdown("\{metric.label}：\{metric.value}\n\{metric.detail}");
+                }
             }
         }
+
         header := HorizontalLayout {
             visible: root.expanded && !root.empty;
             height: root.expanded && !root.empty ? self.preferred-height : 0px;
@@ -496,9 +502,11 @@ export component UsageChart inherits Panel {
     in property <bool> allow-motion;
     in-out property <bool> show-requests;
     in-out property <bool> show-line;
-    // The overview owns the auto-refresh cadence; the chart only renders its
-    // four steps and the shared manual-refresh state.
+    // The overview owns the auto-refresh cadence; the chart renders its five
+    // steps inside one chart-settings popover so the default row stays at range,
+    // metric and chart type.
     in-out property <int> auto-refresh: 5;
+    in-out property <bool> settings-open: false;
     in property <string> updated-at: "—";
     // The page footer is the one visible read-time source; the chart keeps the
     // read time as a data seam without drawing a second label.
@@ -514,6 +522,21 @@ export component UsageChart inherits Panel {
     out property <length> controls-height: controls.height;
     out property <length> selection-y: selection.absolute-position.y;
     out property <length> selection-height: selection.height;
+    // Test seams: the chart-settings popover and the cadence control it owns.
+    out property <length> settings-toggle-x: settings-toggle.absolute-position.x;
+    out property <length> settings-toggle-y: settings-toggle.absolute-position.y;
+    out property <length> settings-toggle-width: settings-toggle.width;
+    out property <length> settings-toggle-height: settings-toggle.height;
+    out property <length> settings-panel-x: settings-panel.absolute-position.x;
+    out property <length> settings-panel-y: settings-panel.absolute-position.y;
+    out property <length> settings-panel-width: settings-panel.width;
+    out property <length> settings-panel-height: settings-panel.height;
+    out property <length> settings-auto-refresh-x:
+        settings-auto-refresh.absolute-position.x;
+    out property <length> settings-auto-refresh-y:
+        settings-auto-refresh.absolute-position.y;
+    out property <length> settings-auto-refresh-width: settings-auto-refresh.width;
+    out property <int> settings-auto-refresh-index: root.auto-refresh-index;
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
@@ -763,14 +786,18 @@ export component UsageChart inherits Panel {
                             current-index: root.show-line ? 1 : 0;
                             selected(index) => { root.show-line = index == 1; }
                         }
-                        // The cadence carries a visible label at the wide
-                        // layout; the compact row keeps only the a11y label.
-                        if !root.narrow : Hint { text: "自动刷新"; vertical-alignment: center; }
-                        auto-refresh-control := Segmented {
-                            width: root.narrow ? 180px : 220px;
-                            options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
-                            label: "总览自动刷新";
-                            current-index <=> root.auto-refresh-index;
+                        // The five cadence options leave the default row; they
+                        // live in one chart-settings popover so the card shows
+                        // only range, metric and chart type at rest.
+                        settings-toggle := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "图表设置";
+                            icon: "settings";
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "图表设置：自动刷新间隔";
+                            clicked => { root.settings-open = !root.settings-open; }
                         }
                     }
                 }
@@ -879,6 +906,67 @@ export component UsageChart inherits Panel {
             if root.has-data && !root.status-text.is-empty : Hint {
                 text: root.status-text;
                 color: root.status-tone;
+            }
+        }
+    }
+
+    // The chart-settings popover floats over the plot; the backdrop closes it
+    // on any click outside the panel without changing the card height.
+    settings-backdrop := Rectangle {
+        visible: root.settings-open;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        z: 40;
+        background: transparent;
+        TouchArea { clicked => { root.settings-open = false; } }
+    }
+    settings-panel := Rectangle {
+        visible: root.settings-open;
+        x: max(8px, root.width - 16px - 280px);
+        y: settings-toggle.absolute-position.y - root.absolute-position.y
+            + settings-toggle.height + 4px;
+        width: 280px;
+        height: 124px;
+        z: 50;
+        background: Theme.surface;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000022;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "图表设置";
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                ActionButton {
+                    width: 24px;
+                    height: 24px;
+                    label: "关闭图表设置";
+                    icon: "close";
+                    icon-only: true;
+                    quiet: true;
+                    tooltip: "关闭图表设置";
+                    clicked => { root.settings-open = false; }
+                }
+            }
+            Hint { text: "自动刷新"; }
+            settings-auto-refresh := Segmented {
+                width: 100%;
+                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                label: "总览自动刷新";
+                current-index <=> root.auto-refresh-index;
             }
         }
     }

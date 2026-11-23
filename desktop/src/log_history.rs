@@ -396,7 +396,7 @@ pub fn parse_history_payload(payload: &Value) -> Result<HistoryView, String> {
     let status = if empty {
         "读取范围内没有符合条件的日志".to_string()
     } else {
-        format!("历史 · 本页 {} 条", rows.len())
+        format!("本页 {} 条", rows.len())
     };
     Ok(HistoryView {
         status,

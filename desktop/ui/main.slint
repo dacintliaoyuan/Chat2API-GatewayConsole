@@ -1082,6 +1082,7 @@ export component MainWindow inherits Window {
     // its own timestamp, but the footer mirrors it so the screen never shows two
     // different 更新于 labels at once.
     in-out property <string> last-update: "—";
+    in-out property <int> last-update-seq: -1;
     // Manual refresh is one shared action: the icon spins for 600 ms and every
     // refresh button stays disabled until the spin ends. Auto refresh only drives
     // the overview and never touches the log page's live follow.
@@ -1094,6 +1095,13 @@ export component MainWindow inherits Window {
     in property <string> request-updated-at: "—";
     in property <string> log-updated-at: "—";
     in property <string> settings-updated-at: "—";
+    // Each read carries a monotonic stamp; the footer compares stamps instead
+    // of HH:MM:SS strings, which restart at midnight and would freeze the
+    // footer on the previous day's last read.
+    in property <int> overview-updated-seq: 0;
+    in property <int> request-updated-seq: 0;
+    in property <int> log-updated-seq: 0;
+    in property <int> settings-updated-seq: 0;
     in-out property <int> usage-period: 0;
     in property <[UsagePoint]> usage-points: [];
     in property <[string]> usage-labels;
@@ -1268,6 +1276,18 @@ export component MainWindow inherits Window {
     out property <length> request-chart-toggle-y: request-chart-toggle.absolute-position.y;
     out property <length> request-chart-toggle-width: request-chart-toggle.width;
     out property <length> request-chart-toggle-height: request-chart-toggle.height;
+    // Test seams: the quiet 只看失败 action keeps a 1 px transparent frame and
+    // steps it to the 3:1 control edge on keyboard focus.
+    out property <color> request-fail-toggle-focus-ring-color:
+        request-fail-toggle.focus-ring-color;
+    out property <length> request-fail-toggle-focus-ring-width:
+        request-fail-toggle.focus-ring-width;
+    out property <bool> request-fail-toggle-focus-visible:
+        request-fail-toggle.focus-visible;
+    out property <bool> request-fail-toggle-has-focus:
+        request-fail-toggle.has-focus;
+    out property <bool> request-fail-toggle-visible: request-fail-toggle.visible;
+    public function focus-request-fail-toggle() { request-fail-toggle.take-focus(); }
 
     in-out property <string> port-input: "7999";
     in-out property <bool> port-input-invalid;
@@ -1492,6 +1512,26 @@ export component MainWindow inherits Window {
     out property <length> usage-period-x: usage-chart.period-x;
     out property <length> usage-period-y: usage-chart.period-y;
     out property <length> usage-period-width: usage-chart.period-width;
+    // Test seams: the five auto-refresh choices live in one chart-settings
+    // popover, not in the default control row.
+    in-out property <bool> usage-settings-open: false;
+    out property <bool> usage-settings-open-value: usage-chart.settings-open;
+    out property <length> usage-settings-toggle-x: usage-chart.settings-toggle-x;
+    out property <length> usage-settings-toggle-y: usage-chart.settings-toggle-y;
+    out property <length> usage-settings-toggle-width: usage-chart.settings-toggle-width;
+    out property <length> usage-settings-toggle-height: usage-chart.settings-toggle-height;
+    out property <length> usage-settings-panel-x: usage-chart.settings-panel-x;
+    out property <length> usage-settings-panel-y: usage-chart.settings-panel-y;
+    out property <length> usage-settings-panel-width: usage-chart.settings-panel-width;
+    out property <length> usage-settings-panel-height: usage-chart.settings-panel-height;
+    out property <length> usage-settings-auto-refresh-x:
+        usage-chart.settings-auto-refresh-x;
+    out property <length> usage-settings-auto-refresh-y:
+        usage-chart.settings-auto-refresh-y;
+    out property <length> usage-settings-auto-refresh-width:
+        usage-chart.settings-auto-refresh-width;
+    out property <int> usage-settings-auto-refresh-index:
+        usage-chart.settings-auto-refresh-index;
     out property <length> request-period-x: request-period-control.absolute-position.x;
     out property <length> request-period-y: request-period-control.absolute-position.y;
     out property <length> request-period-width: request-period-control.width;
@@ -1554,6 +1594,9 @@ export component MainWindow inherits Window {
     out property <bool> request-older-page-enabled: request-older-page.enabled;
     out property <length> request-analytics-y: request-analytics.absolute-position.y;
     out property <length> request-analytics-height: request-analytics.height;
+    // Test seam: the compact first screen ends at the footer, so the first
+    // request row must stay above it.
+    out property <length> footer-height: status-row.height;
     out property <length> technical-card-x: technical-card.absolute-position.x;
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
@@ -1751,10 +1794,6 @@ export component MainWindow inherits Window {
     out property <length> restart-confirm-y: restart-confirm.absolute-position.y;
     out property <length> restart-confirm-width: restart-confirm.width;
     out property <length> restart-confirm-height: restart-confirm.height;
-    out property <length> request-details-toggle-x: request-analytics.details-toggle-x;
-    out property <length> request-details-toggle-y: request-analytics.details-toggle-y;
-    out property <length> request-details-toggle-width: request-analytics.details-toggle-width;
-    out property <length> request-details-toggle-height: request-analytics.details-toggle-height;
     out property <bool> request-analytics-empty-fits: request-analytics.empty-hint-fits;
     out property <length> request-scroll-viewport-y: request-scroll.content-y;
     out property <string> request-model-first: root.request-model-speeds.length > 0
@@ -2290,18 +2329,28 @@ export component MainWindow inherits Window {
         request-search-timer.start();
     }
     // Every page's read time flows into the one footer label; the per-page
-    // seams stay as data but are no longer drawn. A later read replaces an
-    // earlier one, and an explicit last-update (the shell's overview stamp) is
-    // never rolled back by a page read.
-    public function note-page-read(at: string) {
-        if (!at.is-empty && (root.last-update == "—" || at > root.last-update)) {
+    // seams stay as data but are no longer drawn. The monotonic stamp decides
+    // which read is later, and an explicit last-update (the shell's overview
+    // stamp) is never rolled back by a page read.
+    public function note-page-read(at: string, seq: int) {
+        if (at.is-empty) { return; }
+        if (root.last-update == "—" || seq > root.last-update-seq) {
             root.last-update = at;
+            root.last-update-seq = seq;
         }
     }
-    changed request-updated-at => { root.note-page-read(root.request-updated-at); }
-    changed log-updated-at => { root.note-page-read(root.log-updated-at); }
-    changed settings-updated-at => { root.note-page-read(root.settings-updated-at); }
-    changed overview-updated-at => { root.note-page-read(root.overview-updated-at); }
+    changed request-updated-at => {
+        root.note-page-read(root.request-updated-at, root.request-updated-seq);
+    }
+    changed log-updated-at => {
+        root.note-page-read(root.log-updated-at, root.log-updated-seq);
+    }
+    changed settings-updated-at => {
+        root.note-page-read(root.settings-updated-at, root.settings-updated-seq);
+    }
+    changed overview-updated-at => {
+        root.note-page-read(root.overview-updated-at, root.overview-updated-seq);
+    }
     changed log-period => { root.settings-changed(); }
     // Typing only starts the pause; the save and the query land once the user
     // stops, so a five-letter word writes desktop.json once instead of five
@@ -2853,6 +2902,7 @@ export component MainWindow inherits Window {
                         show-line <=> root.usage-show-line;
                         show-requests <=> root.usage-show-requests;
                         auto-refresh <=> root.auto-refresh;
+                        settings-open <=> root.usage-settings-open;
                         updated-at: root.overview-updated-at;
                         period-changed(index) => { root.usage-range-changed(index); }
                     }
@@ -3189,7 +3239,9 @@ export component MainWindow inherits Window {
                         clicked => { root.toggle-request-failures(); }
                     }
                     request-chart-toggle := ActionButton {
-                        visible: !root.compact && !root.request-empty;
+                        // One chart disclosure for both widths; the compact
+                        // first screen has no second in-card fold row.
+                        visible: !root.request-empty;
                         label: root.request-chart-collapsed ? "查看图表" : "收起图表";
                         icon: root.request-chart-collapsed ? "chevron-right" : "chevron-down";
                         quiet: true;
@@ -3230,9 +3282,9 @@ export component MainWindow inherits Window {
                     spacing: root.compact && !root.selected-request.is-empty ? 0px : 12px;
                     request-list-pane := VerticalLayout {
                     horizontal-stretch: 0;
-                    // The page scrolls; the list keeps a readable height at
-                    // every width instead of collapsing to one row.
-                    min-height: root.compact ? 320px : 240px;
+                    // The page scrolls; the list keeps the ADR 0015 240 px
+                    // floor at every width instead of collapsing to one row.
+                    min-height: 240px;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
                     width: root.compact

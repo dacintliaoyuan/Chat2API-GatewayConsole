@@ -442,7 +442,7 @@ fn row(key: &str) -> HistoryRow {
 
 fn view(rows: Vec<HistoryRow>, earlier: Option<&str>) -> um_desktop::log_history::HistoryView {
     um_desktop::log_history::HistoryView {
-        status: format!("历史 · 本页 {} 条", rows.len()),
+        status: format!("本页 {} 条", rows.len()),
         tone: Tone::Good,
         rows,
         sources: vec!["chat2api".to_string()],
