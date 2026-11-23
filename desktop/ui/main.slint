@@ -3388,6 +3388,9 @@ export component MainWindow inherits Window {
                     }
                 }
                 request-analytics := RequestAnalytics {
+                    // With no request at all the list card is the one empty
+                    // state; a second analytics card would repeat the reason.
+                    visible: !root.request-empty;
                     width: 100%;
                     horizontal-stretch: 1;
                     compact: root.compact;
@@ -3425,9 +3428,6 @@ export component MainWindow inherits Window {
                     min-height: 240px;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
-                    // With no request at all the list card is the one empty
-                    // state; a second analytics card would repeat the reason.
-                    visible: !root.request-empty;
                     width: root.compact
                         ? (root.selected-request.is-empty ? root.request-content-width() : 0px)
                         : root.request-content-width()
@@ -3559,6 +3559,9 @@ export component MainWindow inherits Window {
                     title: root.request-detail-title;
                     body: root.request-detail;
                     id-label: root.selected-request;
+                    log-label: root.request-log-label;
+                    log-note: root.request-log-note;
+                    log-text: root.request-log-text;
                     copy-id => { root.copy-text(root.selected-request); }
                     closed => { root.selected-request = ""; }
                 }
@@ -3596,9 +3599,6 @@ export component MainWindow inherits Window {
                         }
                     }
                     // The four levels are independent toggles; no selection means
-                    log-label: root.request-log-label;
-                    log-note: root.request-log-note;
-                    log-text: root.request-log-text;
                     // every level, including the ungraded rows.
                     log-level-error := Toggle {
                         visible: root.log-mode == 1;
