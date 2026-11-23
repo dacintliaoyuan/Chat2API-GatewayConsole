@@ -45,7 +45,7 @@ impl ServiceView {
     pub fn gateway_unavailable(detail: &str) -> Self {
         Self {
             state: "不可用".to_string(),
-            detail: "网关未运行，先启动网关".to_string(),
+            detail: "本机网关未运行，先启动本机网关".to_string(),
             tone: Tone::Bad,
             checked_at: "核对时间未知".to_string(),
             gateway_missing: true,
@@ -126,15 +126,15 @@ fn api_error(url: &str, error: ureq::Error) -> String {
                 })
                 .filter(|detail| safe_reason(detail));
             match detail {
-                Some(detail) => format!("{url}: 本实例网关返回 HTTP {code}（{detail}）"),
-                None => format!("{url}: 本实例网关返回 HTTP {code}"),
+                Some(detail) => format!("{url}: 本机网关返回 HTTP {code}（{detail}）"),
+                None => format!("{url}: 本机网关返回 HTTP {code}"),
             }
         }
         ureq::Error::Transport(error) => match error.kind() {
             ureq::ErrorKind::ConnectionFailed => {
-                format!("{url}: 无法连接本实例网关（连接被拒绝）")
+                format!("{url}: 无法连接本机网关（连接被拒绝）")
             }
-            _ => format!("{url}: 无法连接本实例网关"),
+            _ => format!("{url}: 无法连接本机网关"),
         },
     }
 }
@@ -176,7 +176,7 @@ pub fn parse_services(payload: &Value) -> Result<ServiceView, String> {
     let raw_state = entry
         .get("state")
         .and_then(Value::as_str)
-        .ok_or_else(|| "UM 服务状态字段缺失".to_string())?;
+        .ok_or_else(|| "本机网关状态字段缺失".to_string())?;
     let (state, tone) = state_word(raw_state);
     let port = entry
         .get("port")

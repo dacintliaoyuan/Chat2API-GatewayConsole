@@ -635,6 +635,18 @@ export component MainWindow inherits Window {
     in property <[IssueRow]> recent-issues: [];
     in property <string> recent-issues-status: "读取中";
     in property <int> recent-issues-tone: 3;
+    // The overview failure signal: today's failed request count from the ledger.
+    // -1 means the ledger could not be read, so no signal is shown instead of
+    // claiming zero; 0 is a legal clean day and also hides the signal.
+    in property <int> overview-failure-count: -1;
+    out property <bool> overview-failure-visible: root.overview-failure-count > 0;
+    out property <string> overview-failure-label:
+        "请求失败 " + root.overview-failure-count + " · 查看证据";
+    // Test seam: the 查看证据 action is the click target, not the row.
+    out property <length> overview-failure-x: failure-evidence.absolute-position.x;
+    out property <length> overview-failure-y: failure-evidence.absolute-position.y;
+    out property <length> overview-failure-width: failure-evidence.width;
+    out property <length> overview-failure-height: failure-evidence.height;
     in property <string> account-label: "读取中";
     in property <string> account-detail;
     in property <int> account-tone: 3;
@@ -650,6 +662,17 @@ export component MainWindow inherits Window {
     in property <bool> account-form-visible;
     in property <bool> account-busy;
     in property <bool> show-intro;
+    // Cancelling a form with typed input asks once before discarding it.
+    in-out property <bool> confirm-discard-account: false;
+    out property <bool> account-discard-confirm-visible: root.confirm-discard-account;
+    out property <length> account-discard-x: discard-account.absolute-position.x;
+    out property <length> account-discard-y: discard-account.absolute-position.y;
+    out property <length> account-discard-width: discard-account.width;
+    out property <length> account-discard-height: discard-account.height;
+    out property <length> account-keep-editing-x: keep-editing.absolute-position.x;
+    out property <length> account-keep-editing-y: keep-editing.absolute-position.y;
+    out property <length> account-keep-editing-width: keep-editing.width;
+    out property <length> account-keep-editing-height: keep-editing.height;
     in-out property <string> credential-account-input;
     in-out property <string> credential-password-input;
     in-out property <bool> account-input-invalid;
@@ -722,6 +745,11 @@ export component MainWindow inherits Window {
     out property <bool> maintenance-stop-enabled: root.maintenance-items[3].enabled;
     out property <bool> maintenance-restart-enabled: root.maintenance-items[4].enabled;
     out property <bool> maintenance-menu-visible: maintenance-menu.visible;
+    out property <length> maintenance-menu-height: maintenance-menu.height;
+    out property <bool> maintenance-menu-scrollable:
+        maintenance-menu.height < maintenance-menu-content.preferred-height;
+    out property <bool> maintenance-records-area-visible:
+        !root.maintenance-records-not-applicable;
     out property <length> maintenance-toggle-x: maintenance-toggle.absolute-position.x;
     out property <length> maintenance-toggle-y: maintenance-toggle.absolute-position.y;
     out property <length> maintenance-toggle-width: maintenance-toggle.width;
@@ -966,6 +994,11 @@ export component MainWindow inherits Window {
     in-out property <string> request-keyword;
     in-out property <int> request-period;
     in-out property <int> request-result;
+    // The empty list explains the filter that removed the rows; the time
+    // window with no rows keeps the 所选时间没有请求记录 copy instead.
+    out property <bool> request-filters-active:
+        !root.request-keyword.is-empty || root.request-result != 0
+        || !root.request-model-filter.is-empty;
     // The model dropdown lists the window's models; the first entry is the
     // "all models" choice and keeps the filter empty.
     in property <[string]> request-model-options: ["全部模型"];
@@ -989,6 +1022,19 @@ export component MainWindow inherits Window {
     in property <[ModelSpeedRow]> request-model-speeds;
     in-out property <int> request-metric: 0;
     in-out property <bool> request-split-by-model: false;
+    // The wide request page folds the analytics card from the status row so the
+    // request list can take the height; the compact page keeps its own toggle.
+    in-out property <bool> request-chart-collapsed: false;
+    out property <bool> request-chart-visible: request-analytics.expanded;
+    out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
+    public function focus-request-chart() { request-analytics.focus-chart(); }
+    out property <string> request-fail-toggle-text:
+        root.request-result == 2 ? "查看全部" : "只看失败";
+    out property <bool> request-search-pending: request-search-timer.running;
+    out property <length> request-chart-toggle-x: request-chart-toggle.absolute-position.x;
+    out property <length> request-chart-toggle-y: request-chart-toggle.absolute-position.y;
+    out property <length> request-chart-toggle-width: request-chart-toggle.width;
+    out property <length> request-chart-toggle-height: request-chart-toggle.height;
 
     in-out property <string> port-input: "7999";
     in-out property <bool> port-input-invalid;
@@ -1086,6 +1132,30 @@ export component MainWindow inherits Window {
     out property <length> login-rounds-row-height: root.compact ? 72px : 44px;
     in property <string> config-path;
     in property <string> instance-path;
+    // Export usage (PRODUCT success: 导出用量). The overview reader supplies
+    // whether the selected range has rows; a legal empty range and an unreadable
+    // ledger both disable the action with their own reason.
+    in property <bool> export-available: false;
+    in property <bool> export-busy: false;
+    in-out property <string> export-path;
+    in property <string> export-note: "正在读取用量…";
+    in property <int> export-tone: 3;
+    in property <string> export-status;
+    in property <int> export-status-tone: 3;
+    callback export-usage(string);
+    out property <bool> export-button-enabled:
+        root.export-available && !root.export-busy;
+    out property <bool> export-status-visible: export-note-hint.visible;
+    out property <string> export-status-text:
+        root.export-status.is-empty ? root.export-note : root.export-status;
+    out property <int> export-note-tone:
+        root.export-status.is-empty ? root.export-tone : root.export-status-tone;
+    out property <string> export-button-label:
+        root.export-busy ? "正在导出…" : "导出 CSV";
+    out property <length> export-button-x: export-button.absolute-position.x;
+    out property <length> export-button-y: export-button.absolute-position.y;
+    out property <length> export-button-width: export-button.width;
+    out property <length> export-button-height: export-button.height;
     // Test seam: the layout tests expand the instance card without a pointer.
     in-out property <bool> show-technical;
     in property <bool> tray-available: true;
@@ -1235,6 +1305,11 @@ export component MainWindow inherits Window {
     out property <bool> request-load-earlier-enabled: request-load-earlier.enabled;
     out property <bool> request-earlier-hint-visible: request-earlier-hint.visible;
     out property <string> request-earlier-hint-text: request-earlier-hint.text;
+    out property <bool> request-export-enabled: root.requests.length > 0;
+    out property <length> request-export-x: request-export.absolute-position.x;
+    out property <length> request-export-y: request-export.absolute-position.y;
+    out property <length> request-export-width: request-export.width;
+    out property <length> request-export-height: request-export.height;
     out property <length> request-newer-page-x: request-newer-page.absolute-position.x;
     out property <length> request-newer-page-y: request-newer-page.absolute-position.y;
     out property <length> request-newer-page-width: request-newer-page.width;
@@ -1268,6 +1343,27 @@ export component MainWindow inherits Window {
     out property <length> appearance-row-height: appearance-row.height;
     out property <length> appearance-row-label-x: appearance-row.label-x;
     out property <length> appearance-row-label-width: appearance-row.label-px;
+    // The secondary choices keep their label directly above their own control.
+    out property <length> appearance-options-y: appearance-options.absolute-position.y;
+    out property <length> appearance-sidebar-label-y:
+        appearance-sidebar-label.absolute-position.y;
+    out property <length> appearance-sidebar-label-height: appearance-sidebar-label.height;
+    out property <length> appearance-sidebar-control-y:
+        sidebar-mode-control.absolute-position.y;
+    out property <length> appearance-motion-label-y:
+        appearance-motion-label.absolute-position.y;
+    out property <length> appearance-motion-label-height: appearance-motion-label.height;
+    out property <length> appearance-motion-control-y:
+        motion-mode-control.absolute-position.y;
+    out property <string> appearance-transparency-label-text:
+        appearance-transparency-label.text;
+    out property <length> appearance-transparency-label-y:
+        appearance-transparency-label.absolute-position.y;
+    out property <length> appearance-transparency-label-height:
+        appearance-transparency-label.height;
+    out property <length> appearance-transparency-control-y:
+        transparency-toggle.absolute-position.y;
+    out property <string> transparency-toggle-label: transparency-toggle.label;
     out property <length> account-card-x: account-card.absolute-position.x;
     out property <length> account-card-y: account-card.absolute-position.y;
     out property <length> account-card-width: account-card.width;
@@ -1352,6 +1448,12 @@ export component MainWindow inherits Window {
     out property <length> copy-v1-height: copy-v1.height;
     out property <string> copy-base-icon: copy-base.icon;
     out property <string> copy-v1-icon: copy-v1.icon;
+    out property <string> copy-base-label: copy-base.label;
+    out property <string> copy-v1-label: copy-v1.label;
+    out property <bool> copy-base-icon-only: copy-base.icon-only;
+    out property <bool> copy-v1-icon-only: copy-v1.icon-only;
+    out property <string> port-range-hint-text: port-range-hint.text;
+    out property <bool> port-range-hint-visible: port-range-hint.visible;
     out property <length> request-list-width: request-list-pane.width;
     out property <length> request-list-x: request-list-panel.absolute-position.x;
     out property <length> request-list-y: request-list-panel.absolute-position.y;
@@ -1362,6 +1464,16 @@ export component MainWindow inherits Window {
     out property <length> request-filter-row-width: request-filter-row.width;
     out property <length> request-filter-result-row-width: request-filter-result-row.width;
     out property <bool> request-list-visible: request-list-pane.visible;
+    out property <string> request-empty-title:
+        root.request-filters-active ? "没有符合筛选的请求" : "所选时间没有请求记录";
+    out property <bool> request-empty-clear-visible:
+        root.requests.length == 0 && root.request-filters-active;
+    out property <length> request-empty-clear-x:
+        request-empty-clear.absolute-position.x;
+    out property <length> request-empty-clear-y:
+        request-empty-clear.absolute-position.y;
+    out property <length> request-empty-clear-width: request-empty-clear.width;
+    out property <length> request-empty-clear-height: request-empty-clear.height;
     out property <length> request-list-header-y: request-list-header.absolute-position.y;
     out property <length> request-list-header-height: request-list-header.height;
     out property <length> request-list-header-at-x: request-list-header-at.absolute-position.x;
@@ -1472,6 +1584,11 @@ export component MainWindow inherits Window {
     out property <length> log-settings-width: log-settings-button.width;
     out property <length> log-settings-height: log-settings-button.height;
     out property <string> log-settings-icon: log-settings-button.icon;
+    out property <length> log-toolbar-x: log-toolbar.absolute-position.x;
+    out property <length> log-toolbar-y: log-toolbar.absolute-position.y;
+    out property <length> log-toolbar-width: log-toolbar.width;
+    out property <length> log-toolbar-height: log-toolbar.height;
+    out property <bool> log-refreshed-text-visible: log-refreshed-label.visible;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -1481,6 +1598,10 @@ export component MainWindow inherits Window {
     out property <bool> password-toggle-focused: password-toggle.has-focus;
     out property <bool> save-button-focused: save-account.has-focus;
     out property <bool> cancel-button-focused: cancel-account.has-focus;
+    out property <length> cancel-button-x: cancel-account.absolute-position.x;
+    out property <length> cancel-button-y: cancel-account.absolute-position.y;
+    out property <length> cancel-button-width: cancel-account.width;
+    out property <length> cancel-button-height: cancel-account.height;
     out property <bool> login-card-visible: login-card.visible;
     out property <string> continue-login-label: configure-account-button.label;
     out property <bool> verify-card-visible: verify-card.visible;
@@ -1506,12 +1627,17 @@ export component MainWindow inherits Window {
     out property <int> status-dot-tone: status-dot.tone;
     out property <float> page-title-opacity: page-title.opacity;
     out property <float> page-host-opacity: page-host.opacity;
+    // Test seam: proves the F1 key reached the window shortcut handler.
+    out property <bool> f1-seen: false;
     // Test seams: the refresh controls, their disabled state, the rotation
     // angle and the per-page update labels.
-    out property <string> overview-updated-at-label: "更新于 " + root.overview-updated-at;
-    out property <string> request-updated-at-label: "更新于 " + root.request-updated-at;
-    out property <string> log-updated-at-label: "更新于 " + root.log-updated-at;
-    out property <string> settings-updated-at-label: "更新于 " + root.settings-updated-at;
+    out property <string> overview-updated-at-label: root.overview-updated-at;
+    out property <string> request-updated-at-label: root.request-updated-at;
+    out property <string> log-updated-at-label: root.log-updated-at;
+    out property <string> settings-updated-at-label: root.settings-updated-at;
+    // The footer carries the single 更新于 label; each page shows only its
+    // own time so the word is not repeated three times.
+    out property <string> last-update-label: "更新于 " + root.last-update;
     out property <length> overview-refresh-x: usage-chart.refresh-x;
     out property <length> overview-refresh-y: usage-chart.refresh-y;
     out property <length> overview-refresh-width: usage-chart.refresh-width;
@@ -1604,6 +1730,9 @@ export component MainWindow inherits Window {
     out property <length> request-search-clear-width: request-search.clear-width;
     out property <length> request-search-clear-height: request-search.clear-height;
     out property <bool> help-visible: help-scroll.visible;
+    out property <string> help-terminology-text: help-terminology.text;
+    out property <string> help-export-text: help-export.text;
+    out property <string> help-troubleshoot-text: help-troubleshoot.text;
     out property <bool> quit-confirm-visible: root.confirm-quit;
     out property <length> quit-button-x: quit-button.absolute-position.x;
     out property <length> quit-button-y: quit-button.absolute-position.y;
@@ -1628,6 +1757,7 @@ export component MainWindow inherits Window {
     callback refresh-overview();
     callback refresh-requests();
     callback load-earlier-requests();
+    callback export-requests();
     callback refresh-settings();
     callback refresh-page();
     callback refresh-logs();
@@ -1646,6 +1776,7 @@ export component MainWindow inherits Window {
 
     changed account-form-visible => {
         if (root.account-form-visible) {
+            root.confirm-discard-account = false;
             root.confirm-clear = false;
             if (root.credential-account-input.is-empty) { account-input.take-focus(); }
             else { password-input.take-focus(); }
@@ -1676,6 +1807,9 @@ export component MainWindow inherits Window {
         root.apply-chart-theme();
         root.theme-dark-changed(root.theme-dark);
     }
+    // Test seam: the headless backend does not focus the window's forward
+    // focus automatically, so the shortcut tests focus the root handler first.
+    public function focus-root() { root-focus.focus(); }
     public function navigate-to(page: int) {
         if (root.page == page) { return; }
         if (!root.allow-motion) { root.navigate(page); return; }
@@ -1696,6 +1830,36 @@ export component MainWindow inherits Window {
         root.request-period = root.recent-issues[index].evidence-window;
         root.request-result = root.recent-issues[index].evidence-result;
         root.request-keyword = "";
+        root.request-model-filter = "";
+        root.request-model-index = 0;
+        root.request-scroll-y = 0px;
+        request-search-timer.stop();
+        root.query-requests(0);
+    }
+    // The overview failure signal opens the request page on today's failed rows.
+    public function show-request-failures() {
+        root.page = 1;
+        root.request-period = 0;
+        root.request-result = 2;
+        root.request-keyword = "";
+        root.request-model-filter = "";
+        root.request-model-index = 0;
+        root.request-scroll-y = 0px;
+        request-search-timer.stop();
+        root.query-requests(0);
+    }
+    // Alt+F and the status-row action both flip between 全部结果 and 失败.
+    public function toggle-request-failures() {
+        request-search-timer.stop();
+        root.request-result = root.request-result == 2 ? 0 : 2;
+        root.request-scroll-y = 0px;
+        root.query-requests(0);
+    }
+    // 清除筛选 returns the request page to the time window it was showing.
+    public function clear-request-filters() {
+        request-search-timer.stop();
+        root.request-keyword = "";
+        root.request-result = 0;
         root.request-model-filter = "";
         root.request-model-index = 0;
         root.request-scroll-y = 0px;
@@ -1758,6 +1922,15 @@ export component MainWindow inherits Window {
         running: false;
         triggered => { root.confirm-clear = false; clear-confirm-timer.running = false; }
     }
+    // The discard prompt also expires after three seconds without a choice.
+    discard-account-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            root.confirm-discard-account = false;
+            discard-account-timer.running = false;
+        }
+    }
     public pure function auto-refresh-index-for(seconds: int) -> int {
         return seconds == 15 ? 1 : seconds == 30 ? 2 : seconds == 60 ? 3 : seconds == 0 ? 4 : 0;
     }
@@ -1797,8 +1970,16 @@ export component MainWindow inherits Window {
     }
     changed usage-period => { root.settings-changed(); }
     changed request-period => { root.settings-changed(); }
-    changed request-result => { root.settings-changed(); }
-    changed request-keyword => { root.settings-changed(); }
+    changed request-result => {
+        root.settings-changed();
+        // Selecting 失败 is an evidence-first view: fold the chart so the
+        // request rows take the first screen, as the critique asks.
+        if (root.request-result == 2) { root.request-chart-collapsed = true; }
+    }
+    changed request-keyword => {
+        root.settings-changed();
+        request-search-timer.start();
+    }
     changed log-period => { root.settings-changed(); }
     changed log-filter-keyword => { root.settings-changed(); }
     changed log-level-error => { root.settings-changed(); }
@@ -1861,6 +2042,16 @@ export component MainWindow inherits Window {
             copy-status-timer.running = false;
         }
     }
+    // Typing in the request search filters as it goes after a short pause, like
+    // the log search; Enter and 查询 still run immediately.
+    request-search-timer := Timer {
+        interval: 250ms;
+        running: false;
+        triggered => {
+            request-search-timer.running = false;
+            if (root.page == 1) { root.query-requests(0); }
+        }
+    }
     // The refresh acknowledgement stays visible for 1.2 s, then the button
     // returns to its normal refresh affordance.
     log-refreshed-timer := Timer {
@@ -1887,6 +2078,11 @@ export component MainWindow inherits Window {
             if (event.text == Key.Escape) {
                 // Escape closes only the detail that belongs to the current page;
                 // a hidden detail on another page must survive a page switch.
+                if (root.maintenance-menu-open) {
+                    root.maintenance-menu-open = false;
+                    root.maintenance-confirm = -1;
+                    return accept;
+                }
                 if (root.page == 2 && root.account-form-visible) { root.close-account-form(); return accept; }
                 if (root.page == 1 && !root.selected-request.is-empty) { root.selected-request = ""; return accept; }
                 if (root.page == 3 && !root.open-log-id.is-empty) { root.open-log-id = ""; return accept; }
@@ -1897,6 +2093,7 @@ export component MainWindow inherits Window {
                 if (event.text == "2") { root.navigate-to(1); return accept; }
                 if (event.text == "3") { root.navigate-to(3); return accept; }
                 if (event.text == "4") { root.navigate-to(2); return accept; }
+                if (event.text == "5") { root.navigate-to(4); return accept; }
                 if (event.text == "r" || event.text == "R") { root.refresh-page(); return accept; }
                 // Ctrl+F focuses the search field of the current page; inside a
                 // text field the platform keeps its own find behavior.
@@ -1908,6 +2105,14 @@ export component MainWindow inherits Window {
                     if (root.page == 3) { log-search.take-focus(); return accept; }
                 }
             }
+            // Alt+F is the request page's one-key 失败 filter; F1 and Ctrl+5
+            // reach the help page from anywhere.
+            if (event.modifiers.alt && (event.text == "f" || event.text == "F")
+                && root.page == 1) {
+                root.toggle-request-failures();
+                return accept;
+            }
+            if (event.text == Key.F1) { root.f1-seen = true; root.navigate-to(4); return accept; }
             return reject;
         }
 
@@ -1997,7 +2202,7 @@ export component MainWindow inherits Window {
                         visible: root.confirm-quit;
                         height: root.confirm-quit ? self.preferred-height : 0px;
                         spacing: 4px;
-                        Hint { text: "退出？将停止本实例网关"; color: Theme.bad-text; }
+                        Hint { text: "退出？将停止本机网关"; color: Theme.bad-text; }
                         HorizontalLayout {
                             spacing: 6px;
                             quit-confirm-button := ActionButton {
@@ -2136,7 +2341,7 @@ export component MainWindow inherits Window {
                                     horizontal-stretch: 1;
                                     min-width: 0px;
                                     preferred-width: 0px;
-                                    label: "UM 服务"; value: root.um-service-state;
+                                    label: "本机网关"; value: root.um-service-state;
                                     detail: root.um-service-detail; tone: root.um-service-tone;
                                     if !root.um-service-checked-at.is-empty : Hint {
                                         text: root.um-service-checked-at;
@@ -2149,7 +2354,7 @@ export component MainWindow inherits Window {
                                         visible: root.um-service-gateway-missing
                                             && root.um-service-can-start-gateway;
                                         height: self.visible ? self.preferred-height : 0px;
-                                        label: "启动网关";
+                                        label: "启动本机网关";
                                         icon: "play";
                                         quiet: true;
                                         clicked => { root.restart-gateway(); }
@@ -2175,7 +2380,7 @@ export component MainWindow inherits Window {
                             if root.compact : VerticalLayout {
                                 spacing: 12px;
                                 StateCell {
-                                    horizontal-stretch: 1; label: "UM 服务";
+                                    horizontal-stretch: 1; label: "本机网关";
                                     value: root.um-service-state;
                                     detail: root.um-service-detail; tone: root.um-service-tone;
                                     if !root.um-service-checked-at.is-empty : Hint {
@@ -2187,7 +2392,7 @@ export component MainWindow inherits Window {
                                     }
                                     if root.um-service-gateway-missing
                                         && root.um-service-can-start-gateway : ActionButton {
-                                        label: "启动网关";
+                                        label: "启动本机网关";
                                         icon: "play";
                                         quiet: true;
                                         clicked => { root.restart-gateway(); }
@@ -2203,6 +2408,34 @@ export component MainWindow inherits Window {
                                     detail: root.upstream-detail; tone: root.upstream-tone;
                                     pulse: root.upstream-pulse;
                                 }
+                            }
+                            // The fourth state: today's request failures. It only
+                            // takes height when the ledger reports at least one
+                            // failure, so a clean day keeps the status card to
+                            // its three columns.
+                            overview-failure := HorizontalLayout {
+                                visible: root.overview-failure-visible;
+                                height: root.overview-failure-visible ? 42px : 0px;
+                                padding-top: 10px;
+                                spacing: 8px;
+                                alignment: start;
+                                StatusDot {
+                                    tone: 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                failure-evidence := ActionButton {
+                                    label: "请求失败 " + root.overview-failure-count
+                                        + " · 查看证据";
+                                    icon: "arrow-right";
+                                    quiet: true;
+                                    tooltip: "跳到请求诊断并只看失败";
+                                    clicked => { root.show-request-failures(); }
+                                }
+                                Hint {
+                                    text: "今天账本记录";
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
                             }
                         }
                     }
@@ -2265,92 +2498,9 @@ export component MainWindow inherits Window {
                         refresh => { root.refresh-current-page(); }
                         period-changed(index) => { root.usage-range-changed(index); }
                     }
-                    upstream-fault-card := Card {
-                        gap: 10px;
-                        VerticalLayout {
-                            alignment: start;
-                            spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                SectionLabel {
-                                    text: "上游故障历史";
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                }
-                                DataText {
-                                    text: root.upstream-fault-check;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    wrap: no-wrap;
-                                }
-                            }
-                            Hint {
-                                text: root.upstream-fault-status;
-                                color: Theme.status_ink(root.upstream-fault-tone);
-                            }
-                            if root.upstream-fault-active : VerticalLayout {
-                                spacing: 4px;
-                                alignment: start;
-                                HorizontalLayout {
-                                    spacing: 7px;
-                                    cross-axis-alignment: center;
-                                    StatusDot { tone: 2; }
-                                    Text {
-                                        text: root.upstream-fault-active-title;
-                                        color: Theme.ink;
-                                        font-weight: 600;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                Hint { text: root.upstream-fault-active-detail; }
-                            }
-                            if root.upstream-fault-history.length > 0 : VerticalLayout {
-                                spacing: 8px;
-                                alignment: start;
-                                for row in root.upstream-fault-history : VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 3px;
-                                    alignment: start;
-                                    HorizontalLayout {
-                                        spacing: 7px;
-                                        cross-axis-alignment: center;
-                                        StatusDot { tone: 0; }
-                                        Text {
-                                            text: row.title;
-                                            color: Theme.ink;
-                                            font-weight: 600;
-                                            font-size: 13px;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                    Hint { text: row.detail; }
-                                    if root.upstream-fault-evidence-shown : Hint {
-                                        text: row.evidence;
-                                    }
-                                }
-                            }
-                            HorizontalLayout {
-                                visible: root.upstream-fault-evidence-toggle-visible;
-                                spacing: 8px;
-                                fault-evidence-toggle := ActionButton {
-                                    label: root.show-fault-evidence
-                                        ? "收起恢复证据" : "展开恢复证据";
-                                    icon: root.show-fault-evidence
-                                        ? "chevron-down" : "chevron-right";
-                                    quiet: true;
-                                    clicked => {
-                                        root.show-fault-evidence = !root.show-fault-evidence;
-                                    }
-                                }
-                                Rectangle { horizontal-stretch: 1; }
-                            }
-                        }
-                    }
                     // The recent verify card always exists: a never-verified
                     // instance is a legal state with its own copy and the first
-                    // probe action, not a blank card. It sits below the fault
-                    // history so the cards above keep their default-window place.
+                    // probe action, not a blank card.
                     verify-card := Card {
                         gap: 10px;
                         VerticalLayout {
@@ -2461,6 +2611,88 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    upstream-fault-card := Card {
+                        gap: 10px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                SectionLabel {
+                                    text: "上游故障历史";
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                DataText {
+                                    text: root.upstream-fault-check;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            Hint {
+                                text: root.upstream-fault-status;
+                                color: Theme.status_ink(root.upstream-fault-tone);
+                            }
+                            if root.upstream-fault-active : VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    cross-axis-alignment: center;
+                                    StatusDot { tone: 2; }
+                                    Text {
+                                        text: root.upstream-fault-active-title;
+                                        color: Theme.ink;
+                                        font-weight: 600;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Hint { text: root.upstream-fault-active-detail; }
+                            }
+                            if root.upstream-fault-history.length > 0 : VerticalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                for row in root.upstream-fault-history : VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 7px;
+                                        cross-axis-alignment: center;
+                                        StatusDot { tone: 0; }
+                                        Text {
+                                            text: row.title;
+                                            color: Theme.ink;
+                                            font-weight: 600;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Hint { text: row.detail; }
+                                    if root.upstream-fault-evidence-shown : Hint {
+                                        text: row.evidence;
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                visible: root.upstream-fault-evidence-toggle-visible;
+                                spacing: 8px;
+                                fault-evidence-toggle := ActionButton {
+                                    label: root.show-fault-evidence
+                                        ? "收起恢复证据" : "展开恢复证据";
+                                    icon: root.show-fault-evidence
+                                        ? "chevron-down" : "chevron-right";
+                                    quiet: true;
+                                    clicked => {
+                                        root.show-fault-evidence = !root.show-fault-evidence;
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2548,8 +2780,15 @@ export component MainWindow inherits Window {
                             placeholder: "请求 ID、模型或错误";
                             clearable: true;
                             text <=> root.request-keyword;
-                            accepted => { root.query-requests(0); }
-                            cleared => { root.query-requests(0); }
+                            edited(_) => { request-search-timer.start(); }
+                            accepted => {
+                                request-search-timer.stop();
+                                root.query-requests(0);
+                            }
+                            cleared => {
+                                request-search-timer.stop();
+                                root.query-requests(0);
+                            }
                         }
                         request-query := ActionButton {
                             width: Theme.icon-button;
@@ -2559,7 +2798,10 @@ export component MainWindow inherits Window {
                             icon-only: true;
                             primary: true;
                             tooltip: "查询请求";
-                            clicked => { root.query-requests(0); }
+                            clicked => {
+                                request-search-timer.stop();
+                                root.query-requests(0);
+                            }
                         }
                     }
                 }
@@ -2567,13 +2809,42 @@ export component MainWindow inherits Window {
                     width: 100%;
                     horizontal-stretch: 1;
                     spacing: 8px;
-                    Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); horizontal-stretch: 1; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                    // The wide page has no scrollbar gutter; keep the time
+                    // label clear of the ScrollView thumb and the window edge.
+                    padding-right: root.compact ? 0px : 8px;
+                    Hint {
+                        text: root.request-status;
+                        color: Theme.status_ink(root.request-tone);
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
+                        accessible-role: text;
+                        accessible-live-region: polite;
+                    }
+                    request-fail-toggle := ActionButton {
+                        label: root.request-result == 2 ? "查看全部" : "只看失败";
+                        icon: "filter";
+                        quiet: true;
+                        tooltip: root.request-result == 2
+                            ? "回到全部结果（Alt+F）" : "只看失败（Alt+F）";
+                        clicked => { root.toggle-request-failures(); }
+                    }
+                    request-chart-toggle := ActionButton {
+                        visible: !root.compact;
+                        label: root.request-chart-collapsed ? "查看图表" : "收起图表";
+                        icon: root.request-chart-collapsed ? "chevron-right" : "chevron-down";
+                        quiet: true;
+                        tooltip: root.request-chart-collapsed ? "查看图表" : "收起图表";
+                        clicked => { root.request-chart-collapsed = !root.request-chart-collapsed; }
+                    }
                     DataText { text: root.request-updated-at-label; vertical-alignment: center; }
                 }
                 request-analytics := RequestAnalytics {
                     width: 100%;
                     horizontal-stretch: 1;
                     compact: root.compact;
+                    wide-collapsed <=> root.request-chart-collapsed;
                     metrics: root.request-metrics;
                     summary-line: root.request-summary;
                     labels: root.request-chart-labels;
@@ -2629,12 +2900,37 @@ export component MainWindow inherits Window {
                                 request-list-header-first-token := Hint { text: "首字"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                                 request-list-header-outcome := Hint { text: "结果"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                             }
-                            if root.requests.length == 0 : VerticalLayout {
-                                vertical-stretch: 1;
+                            request-empty := VerticalLayout {
+                                visible: root.requests.length == 0;
+                                height: root.requests.length == 0 ? self.preferred-height : 0px;
+                                vertical-stretch: root.requests.length == 0 ? 1 : 0;
                                 alignment: center;
                                 spacing: 4px;
-                                Hint { text: "暂无请求记录"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
-                                Hint { text: "本实例收到请求后会列在这里"; horizontal-alignment: center; }
+                                Hint {
+                                    text: root.request-filters-active
+                                        ? "没有符合筛选的请求" : "所选时间没有请求记录";
+                                    color: Theme.ink;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+                                Hint {
+                                    text: root.request-filters-active
+                                        ? "调整筛选条件，或清除筛选后重试"
+                                        : "本实例收到请求后会列在这里";
+                                    horizontal-alignment: center;
+                                }
+                                request-empty-clear-row := HorizontalLayout {
+                                    visible: root.request-filters-active;
+                                    height: root.request-filters-active ? self.preferred-height : 0px;
+                                    alignment: center;
+                                    request-empty-clear := ActionButton {
+                                        label: "清除筛选";
+                                        icon: "close";
+                                        quiet: true;
+                                        clicked => { root.clear-request-filters(); }
+                                    }
+                                }
                             }
                             request-rows := ListView {
                                 visible: root.requests.length > 0;
@@ -2678,6 +2974,14 @@ export component MainWindow inherits Window {
                                     text: "没有更早记录";
                                     visible: root.requests.length > 0 && !root.has-earlier-records;
                                     vertical-alignment: center;
+                                }
+                                request-export := ActionButton {
+                                    label: "导出 CSV";
+                                    icon: "arrow-right";
+                                    quiet: true;
+                                    enabled: root.request-export-enabled;
+                                    tooltip: "导出当前请求列表";
+                                    clicked => { root.export-requests(); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 request-newer-page := ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(-1); } }
@@ -2754,8 +3058,11 @@ export component MainWindow inherits Window {
                 }
                 // The source and the page actions share the second filter row,
                 // so the first row keeps its controls without wrapping at the
-                // common window width.
-                FlexboxLayout {
+                // common window width. The row fills the page and aligns its
+                // controls to the right edge instead of floating mid-page.
+                log-toolbar := FlexboxLayout {
+                    width: 100%;
+                    alignment: end;
                     flex-wrap: wrap;
                     spacing: 8px;
                     // The source list is the gateway's closed set; the first entry
@@ -2801,6 +3108,14 @@ export component MainWindow inherits Window {
                         tooltip: root.log-refreshed ? "已刷新" : "刷新日志";
                         enabled: !root.refreshing;
                         clicked => { root.refresh-current-page(); }
+                    }
+                    // The success acknowledgement is text, not only the glyph
+                    // swap; it stays for the same 1.2 s as the check.
+                    log-refreshed-label := Hint {
+                        visible: root.log-refreshed;
+                        text: "已刷新";
+                        color: Theme.good-text;
+                        vertical-alignment: center;
                     }
                     // Live follow stays next to the live layer it belongs to;
                     // pausing only stops the list from jumping, never the read.
@@ -2982,21 +3297,30 @@ export component MainWindow inherits Window {
                                     selected(index) => { root.theme-mode-changed(index); }
                                 }
                             }
+                            // The secondary choices put their label above their own
+                            // control, so proximity never makes a label read as
+                            // the previous control's caption. A divider separates
+                            // the theme row from this group.
+                            Divider { }
                             // The three secondary appearance choices sit in one row
                             // when the card has room and stack at narrow widths.
                             appearance-options := GridLayout {
                                 spacing: 8px;
-                                appearance-sidebar-row := SettingRow {
+                                appearance-sidebar-row := VerticalLayout {
                                     row: 0;
                                     col: 0;
-                                    height: 34px;
+                                    spacing: 6px;
                                     width: root.appearance-narrow
                                         ? (root.compact ? root.width - 148px : root.width - 276px)
                                         : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
-                                    label: "侧栏";
-                                    Rectangle { horizontal-stretch: 1; }
+                                    appearance-sidebar-label := Text {
+                                        text: "侧栏";
+                                        color: Theme.ink;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
                                     sidebar-mode-control := Segmented {
-                                        width: root.appearance-narrow ? 260px : 120px;
+                                        width: 100%;
                                         label: "侧栏";
                                         options: [
                                             { text: "展开" },
@@ -3006,17 +3330,21 @@ export component MainWindow inherits Window {
                                         selected(index) => { root.sidebar-mode-changed(index); }
                                     }
                                 }
-                                appearance-motion-row := SettingRow {
+                                appearance-motion-row := VerticalLayout {
                                     row: root.appearance-narrow ? 1 : 0;
                                     col: root.appearance-narrow ? 0 : 1;
-                                    height: 34px;
+                                    spacing: 6px;
                                     width: root.appearance-narrow
                                         ? (root.compact ? root.width - 148px : root.width - 276px)
                                         : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
-                                    label: "界面动效";
-                                    Rectangle { horizontal-stretch: 1; }
+                                    appearance-motion-label := Text {
+                                        text: "界面动效";
+                                        color: Theme.ink;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
                                     motion-mode-control := Segmented {
-                                        width: root.appearance-narrow ? 260px : 120px;
+                                        width: 100%;
                                         label: "界面动效";
                                         options: [
                                             { text: "跟随系统" },
@@ -3026,17 +3354,24 @@ export component MainWindow inherits Window {
                                         selected(index) => { root.motion-mode-changed(index); }
                                     }
                                 }
-                                appearance-transparency-row := SettingRow {
+                                appearance-transparency-row := VerticalLayout {
                                     row: root.appearance-narrow ? 2 : 0;
                                     col: root.appearance-narrow ? 0 : 2;
-                                    height: 34px;
+                                    spacing: 6px;
                                     width: root.appearance-narrow
                                         ? (root.compact ? root.width - 148px : root.width - 276px)
                                         : ((root.compact ? root.width - 148px : root.width - 276px) - 16px) / 3;
-                                    label: "透明度";
-                                    Rectangle { horizontal-stretch: 1; }
+                                    // The group label names the setting; the
+                                    // checkbox only says whether it is on, so
+                                    // 透明度 and 降低透明度 no longer repeat.
+                                    appearance-transparency-label := Text {
+                                        text: "降低透明度";
+                                        color: Theme.ink;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                    }
                                     transparency-toggle := Toggle {
-                                        label: "降低透明度";
+                                        label: "开启";
                                         cross-axis-self-alignment: center;
                                         checked <=> root.reduce-transparency;
                                         toggled => { root.transparency-changed(root.reduce-transparency); }
@@ -3138,6 +3473,7 @@ export component MainWindow inherits Window {
                                     edited(_) => {
                                         root.account-input-invalid = false;
                                         root.account-input-error = "";
+                                        root.confirm-discard-account = false;
                                     }
                                     accepted => { password-input.take-focus(); }
                                 }
@@ -3154,6 +3490,7 @@ export component MainWindow inherits Window {
                                     edited(_) => {
                                         root.password-input-invalid = false;
                                         root.password-input-error = "";
+                                        root.confirm-discard-account = false;
                                     }
                                     accepted => {
                                         if (!root.account-busy) { root.save-credentials(root.credential-account-input, root.credential-password-input); }
@@ -3163,14 +3500,55 @@ export component MainWindow inherits Window {
                                     text: root.password-input-error;
                                     color: Theme.bad-text;
                                 }
+                                // A typed value would be lost by 取消; ask once
+                                // before discarding it. Esc stays a direct close.
+                                account-discard-row := HorizontalLayout {
+                                    visible: root.confirm-discard-account;
+                                    height: root.confirm-discard-account ? self.preferred-height : 0px;
+                                    spacing: 8px;
+                                    alignment: end;
+                                    Hint {
+                                        text: "放弃已输入的内容？";
+                                        color: Theme.bad-text;
+                                        vertical-alignment: center;
+                                    }
+                                    keep-editing := FocusAction {
+                                        label: "继续编辑";
+                                        quiet: true;
+                                        clicked => { root.confirm-discard-account = false; }
+                                    }
+                                    discard-account := FocusAction {
+                                        label: "放弃修改";
+                                        danger: true;
+                                        clicked => {
+                                            root.confirm-discard-account = false;
+                                            root.close-account-form();
+                                        }
+                                    }
+                                }
                                 password-toggle := Toggle {
                                     label: "显示密码";
                                     checked: root.password-visible;
                                     toggled => { root.toggle-password-visible(); }
                                 }
+                                // The discard prompt takes the action row's place, so
+                                // asking never pushes the form buttons off-screen.
                                 HorizontalLayout {
+                                    visible: !root.confirm-discard-account;
+                                    height: !root.confirm-discard-account ? self.preferred-height : 0px;
                                     alignment: end; spacing: 8px;
-                                    cancel-account := FocusAction { label: "取消"; icon: "close"; quiet: true; clicked => { root.close-account-form(); } }
+                                    cancel-account := FocusAction {
+                                        label: "取消"; icon: "close"; quiet: true;
+                                        clicked => {
+                                            if (!root.credential-account-input.is-empty
+                                                || !root.credential-password-input.is-empty) {
+                                                root.confirm-discard-account = true;
+                                                discard-account-timer.start();
+                                            } else {
+                                                root.close-account-form();
+                                            }
+                                        }
+                                    }
                                     save-account := FocusAction {
                                         label: "保存账号"; icon: "check"; primary: true; enabled: !root.account-busy;
                                         clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
@@ -3184,11 +3562,11 @@ export component MainWindow inherits Window {
                         gap: 12px;
                         VerticalLayout {
                             spacing: 12px;
-                            gateway-title := SectionLabel { text: "网关"; }
+                            gateway-title := SectionLabel { text: "本机网关"; }
                             gateway-hint := Hint { text: "仅在本机可用。更改端口会先检查新端口，再等待当前请求完成。"; }
                             Divider { }
                             port-row := SettingRow {
-                                label: "网关端口";
+                                label: "本机网关端口";
                                 Rectangle { horizontal-stretch: 1; }
                                 port-input := MaterialField {
                                     width: 148px;
@@ -3208,6 +3586,15 @@ export component MainWindow inherits Window {
                                 text: root.port-input-error;
                                 color: Theme.bad-text;
                             }
+                            // The range the shell actually accepts, and the two
+                            // ports the desktop App reserves for its own loopback
+                            // instances. The hint appears while the port field is
+                            // focused so it never pushes the other cards down.
+                            port-range-hint := Hint {
+                                visible: port-input.has-focus;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: "端口范围 1–65535；1024 以下可能需要管理员权限。7998/7999 保留给桌面 App 的测试与本机实例回环端口。";
+                            }
                             settings-status-hint := Hint {
                                 visible: !root.settings-status.is-empty;
                                 height: self.visible ? self.preferred-height : 0px;
@@ -3222,7 +3609,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 restart-gateway := ActionButton {
                                     visible: !root.confirm-restart && !root.gateway-restarting;
-                                    label: "重启网关";
+                                    label: "重启本机网关";
                                     icon: "refresh";
                                     quiet: true;
                                     enabled: !root.port-busy;
@@ -3232,7 +3619,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 if root.gateway-restarting : Hint {
-                                    text: "正在重启本实例网关…";
+                                    text: "正在重启本机网关…";
                                     color: Theme.status_ink(1);
                                     vertical-alignment: center;
                                 }
@@ -3272,8 +3659,6 @@ export component MainWindow inherits Window {
                                     wrap: no-wrap;
                                 }
                                 copy-base := ActionButton {
-                                    width: Theme.icon-button;
-                                    height: Theme.icon-button;
                                     label: root.base-copied ? "已复制" : "复制";
                                     icon: root.base-copied ? "check" : "copy";
                                     quiet: true;
@@ -3282,9 +3667,7 @@ export component MainWindow inherits Window {
                                     clicked => { root.request-copy(root.access-display-address, 1); }
                                 }
                                 copy-v1 := ActionButton {
-                                    width: Theme.icon-button;
-                                    height: Theme.icon-button;
-                                    label: root.v1-copied ? "已复制" : "复制";
+                                    label: root.v1-copied ? "已复制" : "复制 /v1";
                                     icon: root.v1-copied ? "check" : "copy";
                                     quiet: true;
                                     enabled: root.access-address-available;
@@ -3370,7 +3753,7 @@ export component MainWindow inherits Window {
                                 details-content := VerticalLayout {
                                     spacing: 12px;
                                     instance-supervision := SettingRow {
-                                        label: "网关状态";
+                                        label: "本机网关状态";
                                         instance-supervision-value := Hint {
                                             text: root.supervision-value + (root.supervision-detail.is-empty ? "" : "  " + root.supervision-detail);
                                             color: Theme.status_ink(root.supervision-tone);
@@ -3416,6 +3799,40 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    // Export usage: the PRODUCT success definition includes
+                    // 导出用量. The path is user-chosen text; the action writes
+                    // the overview's current range as CSV.
+                    export-card := Card {
+                        inset: 16px;
+                        gap: 12px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 12px;
+                            SectionLabel { text: "导出用量"; }
+                            Hint { text: "把总览当前时间范围的用量写成 CSV；路径可以修改。"; }
+                            Divider { }
+                            export-path-row := SettingRow {
+                                label: "导出路径";
+                                Rectangle { horizontal-stretch: 1; }
+                                export-path := MaterialField {
+                                    width: root.compact ? 180px : 340px;
+                                    placeholder: "CSV 保存路径";
+                                    text <=> root.export-path;
+                                }
+                                export-button := ActionButton {
+                                    label: root.export-button-label;
+                                    icon: "arrow-right";
+                                    primary: true;
+                                    enabled: root.export-button-enabled;
+                                    clicked => { root.export-usage(root.export-path); }
+                                }
+                            }
+                            export-note-hint := Hint {
+                                text: root.export-status-text;
+                                color: Theme.status_ink(root.export-note-tone);
                             }
                         }
                     }
@@ -3693,11 +4110,11 @@ export component MainWindow inherits Window {
                                     icon-only: true;
                                     quiet: true;
                                     enabled: !root.login-rounds-loading;
-                                    tooltip: "重新读取本实例网关的登录历史";
+                                    tooltip: "重新读取本机网关的登录历史";
                                     clicked => { root.refresh-login-rounds(); }
                                 }
                             }
-                            Hint { text: "来源：本实例网关的登录历史（只读，不触发探测或登录）。"; }
+                            Hint { text: "来源：本机网关的登录历史（只读，不触发探测或登录）。"; }
                             HorizontalLayout {
                                 spacing: 8px;
                                 login-rounds-round-filter := MaterialField {
@@ -3845,10 +4262,44 @@ export component MainWindow inherits Window {
                             alignment: start;
                             spacing: 9px;
                             SectionLabel { text: "快捷键"; }
-                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+1…4"; width: 96px; } Hint { text: "切换总览、请求诊断、运行日志、设置"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+1…5"; width: 96px; } Hint { text: "切换总览、请求诊断、运行日志、设置、帮助"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+R"; width: 96px; } Hint { text: "刷新当前页数据"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+F"; width: 96px; } Hint { text: "聚焦请求或日志搜索框"; horizontal-stretch: 1; } }
-                            HorizontalLayout { spacing: 12px; DataText { text: "Esc"; width: 96px; } Hint { text: "关闭当前页的详情或账号表单"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Alt+F"; width: 96px; } Hint { text: "请求诊断：只看失败 / 查看全部"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "F1"; width: 96px; } Hint { text: "打开帮助"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Esc"; width: 96px; } Hint { text: "关闭当前页的详情、账号表单或维护菜单"; horizontal-stretch: 1; } }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "术语"; }
+                            help-terminology := Hint { text: "「本机网关」指控制台管理的本机网关服务（chat2api）；旧文案里的「UM 服务」「本实例网关」都指它。UM 是上游模型来源。"; }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "维护"; }
+                            Hint { text: "总览标题行的「维护」菜单提供核验、按需登录、启动、停止和重启；每项先显示影响，二次确认后才执行。维护记录来源不可用时，记录区不显示。"; }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "导出用量"; }
+                            help-export := Hint { text: "在「设置 → 导出用量」把总览当前时间范围的用量写成 CSV；路径可以修改，无数据时按钮禁用并说明原因。"; }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "故障排查"; }
+                            help-troubleshoot := Hint { text: "先看总览状态卡：请求失败会显示「请求失败 N · 查看证据」，点击跳到请求诊断并套用失败筛选。请求诊断可搜索、只看失败（Alt+F）或导出当前列表；运行日志分实时与历史。"; }
                         }
                     }
                     Card {
@@ -3856,7 +4307,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             spacing: 9px;
                             SectionLabel { text: "UM 登录"; }
-                            Hint { text: "在「总览」或「设置」中录入 UMPASS 账号密码。账号密码只保存在本机，本实例网关会用它们自动重新登录。"; }
+                            Hint { text: "在「总览」或「设置」中录入 UMPASS 账号密码。账号密码只保存在本机，本机网关会用它们自动重新登录。"; }
                             Hint { text: "点「按需登录」会先核验当前凭据，有效时不打开窗口；需要人工完成 Duo 验证时，点「继续登录」会打开可见的 Edge 窗口，完成后回到控制台即可看到登录状态。"; }
                         }
                     }
@@ -3865,7 +4316,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             spacing: 9px;
                             SectionLabel { text: "端口切换"; }
-                            Hint { text: "在「设置 → 网关端口」修改端口。切换前会检查新端口是否可用，并等待在途请求结束；失败时恢复原端口。"; }
+                            Hint { text: "在「设置 → 本机网关端口」修改端口。切换前会检查新端口是否可用，并等待在途请求结束；失败时恢复原端口。"; }
                             Hint { text: "模型 API 只监听本机回环地址，分享链不会经过这个端口。"; }
                         }
                     }
@@ -3911,18 +4362,58 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            }
+
+            status-row := HorizontalLayout {
+                spacing: 8px;
+                status-dot := StatusDot { tone: root.status-tone; y: (parent.height - self.height) / 2; }
+                Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
+                copy-status-hint := Hint {
+                    visible: !root.copy-status.is-empty;
+                    text: root.copy-status;
+                    color: Theme.status_ink(root.copy-tone);
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                DataText { text: "更新于 " + root.last-update; vertical-alignment: center; }
+            }
+        }
+    }
+    }
+            // The full-window catcher sits under the maintenance panel so a
+            // click anywhere outside the panel closes it, including the rail.
+            maintenance-outside := Rectangle {
+                visible: root.maintenance-menu-open && root.page == 0;
+                x: 0px;
+                y: 0px;
+                width: root.width;
+                height: root.height;
+                z: 19;
+                background: transparent;
+                TouchArea {
+                    clicked => {
+                        root.maintenance-menu-open = false;
+                        root.maintenance-confirm = -1;
+                    }
+                }
+            }
             // The maintenance menu overlay: the app instance gateway is the UM
             // service itself. A closed action shows its reason; the first click
-            // only arms the inline confirmation. The records area says 不适用
-            // because the app instance has no console-state.sqlite3 source.
+            // only arms the inline confirmation. A click outside the panel or
+            // Escape closes it, and the content scrolls when the window is small.
             maintenance-menu := Panel {
                 visible: root.maintenance-menu-open && root.page == 0;
-                x: page-host.width - self.width - 8px;
-                y: 36px;
+                x: page-host.absolute-position.x + page-host.width - self.width - 8px;
+                y: maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px;
                 width: min(520px, page-host.width - 16px);
-                height: maintenance-menu-content.preferred-height;
+                height: min(maintenance-menu-content.preferred-height, root.height - 56px);
                 z: 20;
-                maintenance-menu-content := VerticalLayout {
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: self.visible-width;
+                    maintenance-menu-content := VerticalLayout {
                     width: parent.width;
                     padding: 12px;
                     spacing: 6px;
@@ -4008,93 +4499,89 @@ export component MainWindow inherits Window {
                         text: root.maintenance-status;
                         color: Theme.status_ink(root.maintenance-status-tone);
                     }
-                    Divider { }
-                    SectionLabel { text: "维护记录"; }
-                    Hint {
-                        text: root.maintenance-records-status;
-                        color: Theme.status_ink(root.maintenance-records-tone);
-                    }
-                    if !root.maintenance-records-detail.is-empty : Hint {
-                        text: root.maintenance-records-detail;
-                    }
-                    maintenance-record-table := VerticalLayout {
-                        visible: root.maintenance-table-visible;
-                        spacing: 4px;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            Hint { text: "开始"; width: 92px; }
-                            Hint { text: "操作"; width: 96px; }
-                            Hint { text: "状态"; width: 56px; }
-                            Hint { text: "结果"; horizontal-stretch: 1; }
-                            Hint { text: "用时"; width: 56px; horizontal-alignment: right; }
+                    // A source with no records hides the records area instead of
+                    // keeping an empty 不适用 block under the actions. A source
+                    // that is read but has no rows in range says so without a
+                    // table.
+                    maintenance-records-area := VerticalLayout {
+                        visible: !root.maintenance-records-not-applicable;
+                        height: root.maintenance-records-not-applicable
+                            ? 0px : self.preferred-height;
+                        spacing: 6px;
+                        Divider { }
+                        SectionLabel { text: "维护记录"; }
+                        Hint {
+                            text: root.maintenance-records-status;
+                            color: Theme.status_ink(root.maintenance-records-tone);
                         }
-                        // Each row toggles its own steps; a record without steps
-                        // still shows the row but has nothing to expand.
-                        maintenance-record-list := VerticalLayout {
+                        if !root.maintenance-records-detail.is-empty : Hint {
+                            text: root.maintenance-records-detail;
+                        }
+                        maintenance-record-table := VerticalLayout {
+                            visible: root.maintenance-table-visible;
                             spacing: 4px;
-                            for record-row[index] in root.maintenance-records : Selectable {
-                                height: 36px + (root.maintenance-record-expanded == index
-                                    ? record-row.steps.length * 18px : 0px);
-                                label: record-row.at + " " + record-row.action + " " + record-row.state;
-                                selected: root.maintenance-record-expanded == index;
-                                activate => {
-                                    root.maintenance-record-expanded =
-                                        root.maintenance-record-expanded == index ? -1 : index;
-                                }
-                                VerticalLayout {
-                                    height: parent.height;
-                                    HorizontalLayout {
-                                        height: 36px;
-                                        spacing: 8px;
-                                        padding-left: 8px;
-                                        padding-right: 8px;
-                                        DataText { text: record-row.at; width: 92px; font-size: 11px; overflow: elide; }
-                                        Text {
-                                            text: record-row.action;
-                                            color: Theme.ink;
-                                            font-size: 12px;
-                                            width: 96px;
-                                            overflow: elide;
-                                        }
-                                        Tag { label: record-row.state; tone: record-row.state-tone; width: 56px; }
-                                        Hint { text: record-row.result; horizontal-stretch: 1; overflow: elide; }
-                                        DataText { text: record-row.took; width: 56px; font-size: 11px; horizontal-alignment: right; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Hint { text: "开始"; width: 92px; }
+                                Hint { text: "操作"; width: 96px; }
+                                Hint { text: "状态"; width: 56px; }
+                                Hint { text: "结果"; horizontal-stretch: 1; }
+                                Hint { text: "用时"; width: 56px; horizontal-alignment: right; }
+                            }
+                            // Each row toggles its own steps; a record without steps
+                            // still shows the row but has nothing to expand.
+                            maintenance-record-list := VerticalLayout {
+                                spacing: 4px;
+                                for record-row[index] in root.maintenance-records : Selectable {
+                                    height: 36px + (root.maintenance-record-expanded == index
+                                        ? record-row.steps.length * 18px : 0px);
+                                    label: record-row.at + " " + record-row.action + " " + record-row.state;
+                                    selected: root.maintenance-record-expanded == index;
+                                    activate => {
+                                        root.maintenance-record-expanded =
+                                            root.maintenance-record-expanded == index ? -1 : index;
                                     }
-                                    if root.maintenance-record-expanded == index : VerticalLayout {
-                                        for step in record-row.steps : HorizontalLayout {
-                                            height: 18px;
+                                    VerticalLayout {
+                                        height: parent.height;
+                                        HorizontalLayout {
+                                            height: 36px;
                                             spacing: 8px;
-                                            padding-left: 12px;
+                                            padding-left: 8px;
                                             padding-right: 8px;
-                                            DataText { text: step.at; width: 64px; font-size: 11px; overflow: elide; }
-                                            Hint { text: step.note; horizontal-stretch: 1; font-size: 11px; overflow: elide; }
+                                            DataText { text: record-row.at; width: 92px; font-size: 11px; overflow: elide; }
+                                            Text {
+                                                text: record-row.action;
+                                                color: Theme.ink;
+                                                font-size: 12px;
+                                                width: 96px;
+                                                overflow: elide;
+                                            }
+                                            Tag { label: record-row.state; tone: record-row.state-tone; width: 56px; }
+                                            Hint { text: record-row.result; horizontal-stretch: 1; overflow: elide; }
+                                            DataText { text: record-row.took; width: 56px; font-size: 11px; horizontal-alignment: right; }
+                                        }
+                                        if root.maintenance-record-expanded == index : VerticalLayout {
+                                            for step in record-row.steps : HorizontalLayout {
+                                                height: 18px;
+                                                spacing: 8px;
+                                                padding-left: 12px;
+                                                padding-right: 8px;
+                                                DataText { text: step.at; width: 64px; font-size: 11px; overflow: elide; }
+                                                Hint { text: step.note; horizontal-stretch: 1; font-size: 11px; overflow: elide; }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                    if !root.maintenance-records-not-applicable
+                        && root.maintenance-records.length == 0 : Hint {
+                        text: "没有维护记录";
+                    }
                 }
             }
             }
-
-            status-row := HorizontalLayout {
-                spacing: 8px;
-                status-dot := StatusDot { tone: root.status-tone; y: (parent.height - self.height) / 2; }
-                Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
-                copy-status-hint := Hint {
-                    visible: !root.copy-status.is-empty;
-                    text: root.copy-status;
-                    color: Theme.status_ink(root.copy-tone);
-                    vertical-alignment: center;
-                    overflow: elide;
-                    wrap: no-wrap;
-                }
-                DataText { text: "全局更新于 " + root.last-update; vertical-alignment: center; }
-            }
-        }
-    }
-    }
 }

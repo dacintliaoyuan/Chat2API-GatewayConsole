@@ -40,6 +40,17 @@ impl Range {
             Self::All => "all",
         }
     }
+
+    /// The visible range name used in the export copy.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Today => "今天",
+            Self::Day => "24 小时",
+            Self::Week => "7 天",
+            Self::Month => "30 天",
+            Self::All => "全部",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +77,9 @@ pub struct UsageView {
     pub request_total: String,
     pub coverage: Coverage,
     pub message: String,
+    /// How many ledger rows the read scanned. Zero means there is no usage to
+    /// export even when the range has calendar buckets.
+    pub scanned: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -636,6 +650,7 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
                 request_total: "—".into(),
                 coverage: Coverage::Unavailable,
                 message: format!("无法读取选定时间的用量：{error}"),
+                scanned: 0,
             };
         }
     };
@@ -664,6 +679,88 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
         request_total: amount_display(&value["total"]["requests"]),
         coverage,
         message,
+        scanned: value["coverage"]["scanned"].as_u64().unwrap_or(0),
+    }
+}
+
+/// Writes the selected range's usage as CSV to the user-chosen path. A legal
+/// empty range and an unreadable ledger are refused with their own reason, so the
+/// caller never reports a successful export with no rows.
+pub fn export_usage_csv(
+    ledger: &Path,
+    range: Range,
+    now_ms: i64,
+    path: &Path,
+) -> Result<String, String> {
+    let view = read_usage(ledger, range, now_ms);
+    if view.coverage == Coverage::Unavailable {
+        return Err(view.message);
+    }
+    if view.coverage == Coverage::Empty || view.scanned == 0 || view.buckets.is_empty() {
+        return Err(format!("{}没有可导出的用量", range.label()));
+    }
+    let mut csv = String::from("时间,Token,请求数\n");
+    for bucket in &view.buckets {
+        csv.push_str(&format!(
+            "{},{},{}\n",
+            csv_field(&bucket.label),
+            bucket
+                .token_count
+                .map_or_else(String::new, |value| value.to_string()),
+            bucket
+                .request_count
+                .map_or_else(String::new, |value| value.to_string()),
+        ));
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建导出目录 {}：{error}", parent.display()))?;
+    }
+    std::fs::write(path, csv).map_err(|error| format!("无法写入 {}：{error}", path.display()))?;
+    Ok(format!(
+        "已导出{}的 {} 个时段到 {}",
+        range.label(),
+        view.buckets.len(),
+        path.display()
+    ))
+}
+
+/// Writes the displayed request rows as CSV to the given path. An empty list is
+/// refused instead of writing a header-only file.
+pub fn export_requests_csv(rows: &[RequestRow], path: &Path) -> Result<String, String> {
+    if rows.is_empty() {
+        return Err("没有可导出的请求".to_string());
+    }
+    let mut csv = String::from("时间,模型,结果,首字耗时,请求 ID\n");
+    for row in rows {
+        csv.push_str(&format!(
+            "{},{},{},{},{}\n",
+            csv_field(&row.at),
+            csv_field(&row.model),
+            csv_field(&row.result),
+            csv_field(&row.first_token),
+            csv_field(row.request_id.as_deref().unwrap_or("")),
+        ));
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建导出目录 {}：{error}", parent.display()))?;
+    }
+    std::fs::write(path, csv).map_err(|error| format!("无法写入 {}：{error}", path.display()))?;
+    Ok(format!("已导出 {} 条请求到 {}", rows.len(), path.display()))
+}
+
+fn csv_field(text: &str) -> String {
+    if text.chars().any(|ch| matches!(ch, ',' | '"' | '\n' | '\r')) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
     }
 }
 
@@ -679,6 +776,7 @@ pub fn keep_previous_on_failure(previous: &UsageView, next: UsageView) -> UsageV
         request_total: previous.request_total.clone(),
         coverage: Coverage::Unavailable,
         message: format!("刷新失败：{}", next.message),
+        scanned: previous.scanned,
     }
 }
 

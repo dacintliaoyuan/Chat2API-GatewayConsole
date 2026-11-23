@@ -425,11 +425,17 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
 
     assert_eq!(window.get_request_metrics().row_count(), 5);
     assert_eq!(
-        window.get_request_metrics().row_data(4).map(|card| card.label),
+        window
+            .get_request_metrics()
+            .row_data(4)
+            .map(|card| card.label),
         Some("首字耗时".into())
     );
     assert_eq!(
-        window.get_request_metrics().row_data(4).map(|card| card.value),
+        window
+            .get_request_metrics()
+            .row_data(4)
+            .map(|card| card.value),
         Some("120 ms".into())
     );
     assert_eq!(window.get_request_model_row_count(), 2);
@@ -466,14 +472,18 @@ fn scrolling_the_compact_request_page_moves_the_viewport() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert_eq!(window.get_request_scroll_viewport_y(), 0.0);
 
-    window.window().dispatch_event(slint::platform::WindowEvent::PointerMoved {
-        position: LogicalPosition::new(300.0, 300.0),
-    });
-    window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-        position: LogicalPosition::new(300.0, 300.0),
-        delta_x: 0.0,
-        delta_y: -400.0,
-    });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: LogicalPosition::new(300.0, 300.0),
+        });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(300.0, 300.0),
+            delta_x: 0.0,
+            delta_y: -400.0,
+        });
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert!(
         window.get_request_scroll_viewport_y() < 0.0,
@@ -596,4 +606,160 @@ fn closing_request_detail_keeps_filters_page_and_scroll_position() {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(150));
     }
     assert!(!window.get_refreshing());
+}
+
+fn request_window() -> main_ui::MainWindow {
+    init_backend();
+    let window = main_ui::MainWindow::new().expect("create MainWindow");
+    main_ui::register_chart(&window);
+    window.window().set_size(LogicalSize::new(1060.0, 720.0));
+    window.set_page(1);
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    window
+}
+
+#[test]
+fn the_wide_request_page_folds_the_chart_from_the_status_row() {
+    let window = request_window();
+    assert!(window.get_request_chart_visible());
+    let expanded_list = window.get_request_list_height();
+
+    click(
+        &window,
+        window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
+        window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(!window.get_request_chart_visible());
+    assert!(
+        window.get_request_analytics_height() < 160.0,
+        "the folded analytics card stays one summary row"
+    );
+    assert!(
+        window.get_request_list_height() > expanded_list,
+        "the request list takes the height back"
+    );
+    assert!(window.get_request_list_height() >= 240.0);
+
+    click(
+        &window,
+        window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
+        window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(window.get_request_chart_visible());
+}
+
+#[test]
+fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
+    let window = request_window();
+    window.set_request_result(2);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(!window.get_request_chart_visible());
+    assert!(window.get_request_list_height() >= 240.0);
+    assert_eq!(
+        window.get_request_fail_toggle_text(),
+        "查看全部",
+        "the one-key filter can be turned off again"
+    );
+}
+
+#[test]
+fn typing_in_the_request_search_filters_after_a_short_pause() {
+    let window = request_window();
+    let queries = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_query_requests({
+        let queries = queries.clone();
+        move |_| queries.set(queries.get() + 1)
+    });
+    window.set_request_keyword("fixture".into());
+    // The changed handler runs on the next event-loop turn; process it before
+    // advancing the timer so the debounce has actually started.
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(
+        window.get_request_search_pending(),
+        "typing starts the debounce timer"
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert_eq!(queries.get(), 0, "the debounce waits for the pause");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+    assert_eq!(queries.get(), 1, "the paused search filters once");
+}
+
+#[test]
+fn an_empty_filtered_request_list_explains_the_filter_and_offers_to_clear_it() {
+    let window = request_window();
+    window.set_request_keyword("fixture".into());
+    window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert_eq!(window.get_request_empty_title(), "没有符合筛选的请求");
+    assert!(window.get_request_empty_clear_visible());
+
+    let queries = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_query_requests({
+        let queries = queries.clone();
+        move |_| queries.set(queries.get() + 1)
+    });
+    click(
+        &window,
+        window.get_request_empty_clear_x() + window.get_request_empty_clear_width() / 2.0,
+        window.get_request_empty_clear_y() + window.get_request_empty_clear_height() / 2.0,
+    );
+    assert_eq!(window.get_request_keyword(), "");
+    assert_eq!(window.get_request_result(), 0);
+    assert_eq!(window.get_request_model_filter(), "");
+    assert_eq!(window.get_request_model_index(), 0);
+    assert_eq!(queries.get(), 1, "clearing the filter re-reads the list");
+}
+
+#[test]
+fn the_one_key_failure_filter_folds_the_chart_and_toggles_back() {
+    let window = request_window();
+    window.invoke_toggle_request_failures();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert_eq!(window.get_request_result(), 2);
+    assert!(!window.get_request_chart_visible());
+    assert!(window.get_request_list_height() >= 240.0);
+    window.invoke_toggle_request_failures();
+    assert_eq!(window.get_request_result(), 0);
+}
+
+#[test]
+fn the_request_list_can_be_exported_as_csv() {
+    let window = request_window();
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(window.get_request_export_enabled());
+
+    let exports = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_export_requests({
+        let exports = exports.clone();
+        move || exports.set(exports.get() + 1)
+    });
+    click(
+        &window,
+        window.get_request_export_x() + window.get_request_export_width() / 2.0,
+        window.get_request_export_y() + window.get_request_export_height() / 2.0,
+    );
+    assert_eq!(exports.get(), 1, "导出 CSV exports the displayed rows");
+
+    window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(
+        !window.get_request_export_enabled(),
+        "an empty list disables the export"
+    );
+}
+
+#[test]
+fn the_request_chart_shows_a_visible_keyboard_focus() {
+    let window = request_window();
+    window.invoke_focus_request_chart();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(
+        window.get_request_chart_focused(),
+        "the request chart must show focus like the usage chart"
+    );
 }

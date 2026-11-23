@@ -91,20 +91,20 @@ fn expired_credentials_are_not_reported_as_not_logged_in() {
 
 #[test]
 fn gateway_failure_keeps_the_reason_and_never_becomes_normal() {
-    let overview = read(Err("本实例网关: connection refused".to_string()));
+    let overview = read(Err("本机网关: connection refused".to_string()));
     assert_eq!(overview.gateway.value, "不可用");
     assert_eq!(overview.gateway.tone, Tone::Bad);
     assert!(overview.gateway.detail.contains("connection refused"));
     assert_eq!(overview.account_label, "未知");
     assert_ne!(overview.account_label, "尚未登录");
     assert_eq!(overview.auth.value, "未知");
-    assert!(overview.auth.detail.contains("本实例网关"));
+    assert!(overview.auth.detail.contains("本机网关"));
     assert_eq!(overview.upstream.value, "未知");
     assert_eq!(overview.upstream.tone, Tone::Warn);
     assert!(overview
         .failures
         .iter()
-        .any(|failure| failure.contains("本实例网关")));
+        .any(|failure| failure.contains("本机网关")));
 }
 
 #[test]
@@ -198,9 +198,9 @@ fn gateway_um_login_and_upstream_are_reported_independently() {
 
 #[test]
 fn status_line_lists_failures_instead_of_claiming_normal() {
-    let overview = read(Err("本实例网关: timeout".to_string()));
+    let overview = read(Err("本机网关: timeout".to_string()));
     let line = status_line(&overview);
-    assert!(line.contains("本实例网关"));
+    assert!(line.contains("本机网关"));
     assert!(!line.contains("状态正常"));
 }
 
@@ -476,6 +476,21 @@ fn the_active_fault_card_shows_the_reason_failures_and_next_check() {
     assert!(!window.get_upstream_fault_evidence_toggle_visible());
 }
 
+fn scroll(window: &MainWindow, x: f32, y: f32, delta_y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y,
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
 fn click(window: &MainWindow, x: f32, y: f32) {
     let position = slint::LogicalPosition::new(x, y);
     window
@@ -516,6 +531,9 @@ fn recovered_history_and_its_evidence_expand_from_the_card() {
     assert!(first.evidence.contains("HTTP 200"));
     assert!(window.get_upstream_fault_evidence_toggle_visible());
     assert!(!window.get_upstream_fault_evidence_shown());
+    // The fault card sits below the recent-issues card now; scroll the
+    // overview so the evidence toggle is in view before clicking it.
+    scroll(&window, 600.0, 400.0, -500.0);
     let before = window.get_upstream_fault_card_height();
     let x = window.get_upstream_fault_evidence_toggle_x()
         + window.get_upstream_fault_evidence_toggle_width() / 2.0;

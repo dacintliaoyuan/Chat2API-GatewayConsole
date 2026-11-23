@@ -83,7 +83,7 @@ fn running_payload(port: u16, pid: u32) -> Value {
             "port": port,
             "state": "Running",
             "healthy": true,
-            "detail": "本实例网关正在运行",
+            "detail": "本机网关正在运行",
             "processIds": [pid],
         }],
         "checkedAt": 1_700_000_000_000i64,
@@ -100,7 +100,7 @@ fn stopped_payload(port: u16) -> Value {
             "port": port,
             "state": "Stopped",
             "healthy": false,
-            "detail": "本实例网关已停止",
+            "detail": "本机网关已停止",
             "processIds": [],
         }],
         "checkedAt": 1_700_000_000_000i64,
@@ -172,7 +172,7 @@ fn a_stopped_service_has_no_second_start_action() {
 fn a_failed_read_shows_the_reason_and_never_a_pid() {
     let window = service_window();
     let api = FakeApi::with(vec![Err(
-        "http://127.0.0.1:7999/admin/um/services: 无法连接本实例网关（连接被拒绝）".to_string(),
+        "http://127.0.0.1:7999/admin/um/services: 无法连接本机网关（连接被拒绝）".to_string(),
     )]);
     let view = um_desktop::um_service::read(&api, "http://127.0.0.1:7999", "control-token");
     um_desktop::um_service::apply_service(&window, &view);
@@ -197,7 +197,7 @@ fn a_failed_read_shows_the_reason_and_never_a_pid() {
 #[test]
 fn a_missing_gateway_points_to_the_existing_gateway_start() {
     let window = service_window();
-    let view = um_desktop::um_service::ServiceView::gateway_unavailable("本实例网关未运行");
+    let view = um_desktop::um_service::ServiceView::gateway_unavailable("本机网关未运行");
     um_desktop::um_service::apply_service(&window, &view);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
 
@@ -206,21 +206,21 @@ fn a_missing_gateway_points_to_the_existing_gateway_start() {
     assert!(
         window
             .get_um_service_detail()
-            .contains("网关未运行，先启动网关"),
+            .contains("本机网关未运行，先启动本机网关"),
         "{:?}",
         window.get_um_service_detail()
     );
     assert!(
         window
             .get_um_service_gateway_detail()
-            .contains("本实例网关未运行"),
+            .contains("本机网关未运行"),
         "{:?}",
         window.get_um_service_gateway_detail()
     );
     assert!(window.get_um_service_gateway_missing());
     assert!(window.get_um_service_can_start_gateway());
     assert!(window.get_um_service_start_gateway_visible());
-    assert_eq!(window.get_um_service_start_gateway_label(), "启动网关");
+    assert_eq!(window.get_um_service_start_gateway_label(), "启动本机网关");
 
     let invoked = std::rc::Rc::new(std::cell::Cell::new(false));
     let flag = invoked.clone();

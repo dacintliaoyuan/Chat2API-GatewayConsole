@@ -187,7 +187,7 @@ fn an_unconfigured_or_unreadable_history_keeps_its_reason() {
     let api = FakeApi::returning(json!({}));
     let api = FakeApi {
         payload: Err(
-            "http://127.0.0.1:7999/admin/um/login-rounds: 无法连接本实例网关（连接被拒绝）"
+            "http://127.0.0.1:7999/admin/um/login-rounds: 无法连接本机网关（连接被拒绝）"
                 .to_string(),
         ),
         ..api
@@ -503,7 +503,7 @@ fn an_empty_or_failed_read_is_an_empty_state_not_a_table() {
     assert_eq!(window.get_login_rounds_empty_text(), "暂无登录轮次");
     assert_eq!(window.get_login_rounds_tone(), 3);
 
-    let failed = LoginRoundsView::failed("无法连接本实例网关（连接被拒绝）");
+    let failed = LoginRoundsView::failed("无法连接本机网关（连接被拒绝）");
     apply_login_rounds(&window, &failed);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 

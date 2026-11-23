@@ -32,6 +32,7 @@ export struct ModelSpeedRow {
 component RequestTrendChart inherits Rectangle {
     in property <[string]> labels;
     in property <[ChartDataset]> datasets;
+    in property <string> description;
     callback category-clicked(int);
     in property <bool> show-legend: false;
     in property <bool> integer-ticks: true;
@@ -54,6 +55,7 @@ component RequestTrendChart inherits Rectangle {
         bar-radius: 3px;
         fill-opacity: 0.78;
         accessible-label: "请求趋势图";
+        accessible-description: root.description;
         category-clicked(index) => { root.category-clicked(index); }
     }
 }
@@ -124,6 +126,9 @@ export component RequestAnalytics inherits Panel {
     // At compact width the chart and the speed table start collapsed so the
     // request list stays in the first screen.
     in-out property <bool> details-open: false;
+    // At wide width the same chart can be folded from the page status row; the
+    // list then takes the height back without changing the page scroll.
+    in-out property <bool> wide-collapsed: false;
     in property <[string]> labels;
     in property <[float]> token-counts;
     in property <[float]> request-counts;
@@ -137,6 +142,10 @@ export component RequestAnalytics inherits Panel {
     in property <bool> allow-motion: true;
 
     out property <int> metric-index: root.metric;
+    // The chart, the metric cards and the speed table share one disclosure
+    // state: compact uses the in-card toggle, wide uses the page status row.
+    out property <bool> expanded: root.compact ? root.details-open : !root.wide-collapsed;
+    out property <bool> chart-collapsed: !root.expanded;
     out property <bool> split: root.split-by-model;
     out property <string> metric-label: root.metric == 1 ? "请求数"
         : root.metric == 2 ? "输出速度" : "Token";
@@ -172,6 +181,7 @@ export component RequestAnalytics inherits Panel {
         height: parent.height;
         accessible-role: groupbox;
         accessible-label: "请求趋势图";
+        accessible-description: root.chart-accessible-description;
         key-pressed(event) => {
             if (event.text == Key.Escape && root.pinned >= 0) {
                 root.pinned = -1;
@@ -204,9 +214,31 @@ export component RequestAnalytics inherits Panel {
             root.pinned = index;
         }
     }
+    // The compact summary and the wide 收起图表 control share one action; the
+    // wide page status row also toggles this from outside the card.
+    public function toggle-chart() {
+        if (root.compact) {
+            root.details-open = !root.details-open;
+        } else {
+            root.wide-collapsed = !root.wide-collapsed;
+        }
+    }
     // Reads the table that is actually laid out at the current width.
     out property <bool> empty-hint-fits: root.compact
         ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
+    // The request chart is a keyboard stop like the overview chart; focus uses
+    // the same neutral edge step instead of an invisible target.
+    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
+    private property <string> keyboard-help:
+        "左右方向键切换时段 · Enter 固定 · Esc 取消固定";
+    out property <string> chart-accessible-description:
+        root.has-selection
+        ? root.selection-label + "，" + root.selection-value + "。" + root.keyboard-help
+        : root.keyboard-help;
+    // Test seam: the chart focus is visible through the neutral edge step.
+    out property <bool> chart-focus-visible: root.border-color == Theme.edge-strong;
+    public function focus-chart() { chart-focus.focus(); }
     // Test seam: the compact chart toggle.
     out property <length> details-toggle-x: details-toggle.absolute-position.x;
     out property <length> details-toggle-y: details-toggle.absolute-position.y;
@@ -220,9 +252,9 @@ export component RequestAnalytics inherits Panel {
         // Equal flex-basis keeps the cards the same size; at compact width two
         // per row and a full-width last card avoid clipped labels and a gap.
         cards := FlexboxLayout {
-            visible: !root.compact;
+            visible: root.expanded;
             // A hidden layout still feeds the parent's preferred height.
-            height: root.compact ? 0px : self.preferred-height;
+            height: root.expanded ? self.preferred-height : 0px;
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
@@ -259,36 +291,38 @@ export component RequestAnalytics inherits Panel {
         }
 
         compact-summary := HorizontalLayout {
-            visible: root.compact;
+            visible: root.compact || root.wide-collapsed;
             // Clicking the summary row toggles the chart as well.
             summary-pointer := TouchArea {
-                clicked => { root.details-open = !root.details-open; }
+                clicked => { root.toggle-chart(); }
             }
             // A hidden row still feeds the parent's preferred height.
-            height: root.compact ? self.preferred-height : 0px;
+            height: (root.compact || root.wide-collapsed) ? self.preferred-height : 0px;
             spacing: 8px;
             // The compact summary wraps instead of losing the last metrics.
             Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
             // A visible label says what the control does instead of a bare
             // chevron; the whole summary row reads as one action.
             details-toggle := ActionButton {
-                label: root.details-open ? "收起图表" : "查看图表";
-                icon: root.details-open ? "chevron-down" : "chevron-right";
+                visible: root.compact;
+                height: root.compact ? self.preferred-height : 0px;
+                label: root.expanded ? "收起图表" : "查看图表";
+                icon: root.expanded ? "chevron-down" : "chevron-right";
                 quiet: true;
-                tooltip: root.details-open ? "收起图表" : "查看图表";
-                clicked => { root.details-open = !root.details-open; }
+                tooltip: root.expanded ? "收起图表" : "查看图表";
+                clicked => { root.toggle-chart(); }
             }
         }
         header := HorizontalLayout {
-            visible: !root.compact || root.details-open;
-            height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+            visible: root.expanded;
+            height: root.expanded ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
             Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
-                visible: !root.compact || root.details-open;
-                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                visible: root.expanded;
+                height: root.expanded ? self.preferred-height : 0px;
                 width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
@@ -296,8 +330,8 @@ export component RequestAnalytics inherits Panel {
                 selected(index) => { root.metric = index; }
             }
             Segmented {
-                visible: !root.compact || root.details-open;
-                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                visible: root.expanded;
+                height: root.expanded ? self.preferred-height : 0px;
                 width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
@@ -309,15 +343,16 @@ export component RequestAnalytics inherits Panel {
         // Wide: the chart and the speed table share one row. Compact: the table
         // moves below the chart so neither is squeezed below its readable width.
         compact-stack := VerticalLayout {
-            visible: root.compact && root.details-open;
+            visible: root.compact && root.expanded;
             width: 100%;
             // Hidden layouts still feed the parent's preferred height, so the
             // inactive stack collapses to zero explicitly.
-            height: (root.compact && root.details-open) ? self.preferred-height : 0px;
+            height: (root.compact && root.expanded) ? self.preferred-height : 0px;
             spacing: 8px;
             compact-plot := RequestTrendChart {
                 width: 100%;
                 height: 148px;
+                description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
                 datasets: root.split-by-model
@@ -342,12 +377,13 @@ export component RequestAnalytics inherits Panel {
             }
         }
         wide-row := HorizontalLayout {
-            visible: !root.compact || root.details-open;
+            visible: root.expanded;
             spacing: 12px;
-            height: (!root.compact || root.details-open) ? 148px : 0px;
+            height: root.expanded ? 148px : 0px;
             wide-plot := RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
+                description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
                 datasets: root.split-by-model
@@ -371,7 +407,7 @@ export component RequestAnalytics inherits Panel {
                 rows: root.model-speeds;
             }
         }
-        if root.has-data && (!root.compact || root.details-open) : VerticalLayout {
+        if root.has-data && root.expanded : VerticalLayout {
             spacing: 2px;
             HorizontalLayout {
                 spacing: 8px;
@@ -382,6 +418,8 @@ export component RequestAnalytics inherits Panel {
                     vertical-alignment: center;
                     overflow: elide;
                     wrap: no-wrap;
+                    accessible-role: text;
+                    accessible-live-region: polite;
                 }
                 DataText { text: root.selection-value; font-weight: 650; vertical-alignment: center; }
                 unpin := ActionButton {

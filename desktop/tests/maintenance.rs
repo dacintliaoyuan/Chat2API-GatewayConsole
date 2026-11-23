@@ -39,7 +39,7 @@ fn a_running_service_offers_four_actions_and_explains_the_closed_start() {
 
     let start = row(&menu, Action::Start);
     assert!(!start.enabled);
-    assert_eq!(start.reason, "UM 服务运行中不需要启动");
+    assert_eq!(start.reason, "本机网关运行中不需要启动");
     assert!(
         start.impact.contains("启动"),
         "the closed start still explains what it would do: {}",
@@ -156,14 +156,14 @@ fn the_records_area_says_not_applicable_without_an_empty_table() {
 #[test]
 fn a_failed_action_keeps_its_reason_and_is_never_folded_into_success() {
     for action in Action::ALL {
-        let failed = action_result(action, Err("本实例网关返回 HTTP 503".to_string()));
+        let failed = action_result(action, Err("本机网关返回 HTTP 503".to_string()));
         assert!(
             failed.status.contains("失败"),
             "{action:?}: {}",
             failed.status
         );
         assert!(
-            failed.status.contains("本实例网关返回 HTTP 503"),
+            failed.status.contains("本机网关返回 HTTP 503"),
             "{action:?}: {}",
             failed.status
         );
@@ -174,13 +174,13 @@ fn a_failed_action_keeps_its_reason_and_is_never_folded_into_success() {
         );
         assert_eq!(failed.tone, Tone::Bad, "{action:?}");
 
-        let done = action_result(action, Ok("本实例网关已停止".to_string()));
+        let done = action_result(action, Ok("本机网关已停止".to_string()));
         assert!(
             done.status.contains("已完成"),
             "{action:?}: {}",
             done.status
         );
-        assert!(done.status.contains("本实例网关已停止"), "{action:?}");
+        assert!(done.status.contains("本机网关已停止"), "{action:?}");
         assert_eq!(done.tone, Tone::Good, "{action:?}");
     }
 }
@@ -450,7 +450,7 @@ fn cancelling_the_confirmation_does_not_run_the_action() {
 fn a_failed_action_shows_its_reason_in_the_menu_status() {
     let window = window();
     open_maintenance_menu(&window);
-    let result = action_result(Action::Stop, Err("本实例网关返回 HTTP 503".to_string()));
+    let result = action_result(Action::Stop, Err("本机网关返回 HTTP 503".to_string()));
     maintenance::apply_result(&window, &result);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 
@@ -471,5 +471,71 @@ fn a_failed_action_shows_its_reason_in_the_menu_status() {
         !window.get_maintenance_status().contains("已完成"),
         "a failure must not be folded into success: {}",
         window.get_maintenance_status()
+    );
+}
+
+fn window_at(width: f32, height: f32) -> MainWindow {
+    INIT.with(|init| {
+        init.call_once(|| i_slint_backend_testing::init_no_event_loop());
+    });
+    let window = MainWindow::new().expect("create MainWindow");
+    slintplot::register!(window);
+    window.set_page(0);
+    window.window().set_size(LogicalSize::new(width, height));
+    window.show().expect("show MainWindow");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    window
+}
+
+fn press_escape(window: &MainWindow) {
+    let text: slint::SharedString = slint::platform::Key::Escape.into();
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+}
+
+#[test]
+fn escape_and_an_outside_click_close_the_maintenance_menu() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    press_escape(&window);
+    assert!(
+        !window.get_maintenance_menu_visible(),
+        "Escape closes the only way out of the menu"
+    );
+
+    open_maintenance_menu(&window);
+    click(&window, 5.0, 400.0);
+    assert!(
+        !window.get_maintenance_menu_visible(),
+        "a click outside the panel closes the menu"
+    );
+}
+
+#[test]
+fn the_small_maintenance_menu_scrolls_and_hides_the_records_area() {
+    let window = window_at(540.0, 420.0);
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+
+    assert!(
+        window.get_maintenance_menu_height() <= 420.0 - 56.0 + 1.0,
+        "the menu never runs past the window bottom, actual {}",
+        window.get_maintenance_menu_height()
+    );
+    assert!(
+        !window.get_maintenance_menu_scrollable(),
+        "the actions fit once the empty records area is hidden"
+    );
+    assert!(
+        !window.get_maintenance_records_area_visible(),
+        "a source with no records hides the records area"
     );
 }

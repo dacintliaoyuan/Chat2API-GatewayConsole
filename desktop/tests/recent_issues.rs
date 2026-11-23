@@ -12,6 +12,8 @@ use std::path::Path;
 
 use chrono::DateTime;
 use serde_json::{json, Value};
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::LogicalPosition;
 
 use um_desktop::models::{CatalogView, ModelRow, ProbeHistoryRow, ProbeRow, ProbeView};
 use um_desktop::overview::Tone;
@@ -175,6 +177,11 @@ fn request_failures_truncations_and_client_disconnects_come_from_the_ledger() {
     let now = time("2026-11-23T19:00:00+08:00");
 
     let issues = read_clean(&ledger, now);
+    assert_eq!(
+        issues.failure_count,
+        Some(2),
+        "the overview failure signal counts today's failed requests"
+    );
     let titles: Vec<&str> = issues.rows.iter().map(|row| row.title.as_str()).collect();
     assert_eq!(titles, ["请求失败", "截断", "客户端断开"]);
 
@@ -238,6 +245,11 @@ fn a_clean_ledger_and_clean_read_faces_show_recently_no_issues() {
 
     let issues = read_clean(&ledger, now);
     assert!(issues.rows.is_empty(), "{:?}", issues.rows);
+    assert_eq!(
+        issues.failure_count,
+        Some(0),
+        "a legal clean day is a real zero, not an unavailable count"
+    );
     assert_eq!(issues.status, "近期无问题");
     assert_eq!(issues.tone, Tone::Good);
 }
@@ -252,6 +264,10 @@ fn an_unreadable_ledger_keeps_its_reason_instead_of_zero() {
     let now = time("2026-11-23T19:00:00+08:00");
 
     let issues = read_clean(&ledger, now);
+    assert_eq!(
+        issues.failure_count, None,
+        "an unreadable ledger must not claim a zero failure count"
+    );
     let failed = issues
         .rows
         .iter()
@@ -431,7 +447,7 @@ fn a_login_round_payload_without_rounds_is_a_read_failure_not_zero() {
 fn stopped_service() -> ServiceView {
     ServiceView {
         state: "未运行".to_string(),
-        detail: "端口 7999 · 本实例网关已停止".to_string(),
+        detail: "端口 7999 · 本机网关已停止".to_string(),
         tone: Tone::Bad,
         checked_at: "核对于 10:00:00".to_string(),
         gateway_missing: false,
@@ -443,11 +459,11 @@ fn stopped_service() -> ServiceView {
 fn missing_gateway_service() -> ServiceView {
     ServiceView {
         state: "不可用".to_string(),
-        detail: "网关未运行，先启动网关".to_string(),
+        detail: "本机网关未运行，先启动本机网关".to_string(),
         tone: Tone::Bad,
         checked_at: "核对时间未知".to_string(),
         gateway_missing: true,
-        gateway_detail: "本实例网关尚未启动".to_string(),
+        gateway_detail: "本机网关尚未启动".to_string(),
         can_start_gateway: true,
     }
 }
@@ -555,9 +571,9 @@ fn a_stopped_or_missing_service_is_a_clear_fact_not_zero() {
     let row = issues
         .rows
         .iter()
-        .find(|row| row.title.contains("服务"))
+        .find(|row| row.title.contains("网关"))
         .expect("a stopped service is an issue");
-    assert_eq!(row.title, "UM 服务未运行");
+    assert_eq!(row.title, "本机网关未运行");
     assert_eq!(row.count, "1 项");
     assert!(row.detail.contains("端口 7999"), "{:?}", row.detail);
     assert_eq!(row.evidence, None);
@@ -574,7 +590,7 @@ fn a_stopped_or_missing_service_is_a_clear_fact_not_zero() {
         .iter()
         .find(|row| row.title.contains("网关"))
         .expect("a missing gateway is an issue");
-    assert_eq!(row.title, "本实例网关未运行");
+    assert_eq!(row.title, "本机网关未运行");
     assert_eq!(row.count, "1 项");
     assert!(row.detail.contains("尚未启动"), "{:?}", row.detail);
 }
@@ -647,7 +663,7 @@ fn a_service_read_failure_keeps_its_reason_instead_of_zero() {
     let row = issues
         .rows
         .iter()
-        .find(|row| row.title.contains("服务状态读取失败"))
+        .find(|row| row.title.contains("网关状态读取失败"))
         .expect("a service read failure is its own row");
     assert_eq!(row.count, "不可用");
     assert!(
@@ -717,6 +733,24 @@ fn issues_window() -> MainWindow {
     window
 }
 
+fn click(window: &MainWindow, x: f32, y: f32) {
+    let position = LogicalPosition::new(x, y);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+}
+
 fn request_issue() -> DomainIssueRow {
     DomainIssueRow {
         title: "请求失败".to_string(),
@@ -735,10 +769,10 @@ fn unavailable_issue() -> DomainIssueRow {
     DomainIssueRow {
         title: "服务".to_string(),
         count: "不可用".to_string(),
-        detail: "不可用（本机实例无操作记录来源）：尚未读取 UM 服务状态".to_string(),
+        detail: "不可用（本机实例无操作记录来源）：尚未读取本机网关状态".to_string(),
         tone: Tone::Bad,
         evidence: None,
-        evidence_note: "证据不可用：尚未读取 UM 服务状态".to_string(),
+        evidence_note: "证据不可用：尚未读取本机网关状态".to_string(),
     }
 }
 
@@ -757,6 +791,7 @@ fn issues(rows: Vec<DomainIssueRow>) -> RecentIssues {
         rows,
         total: 2,
         failures: Vec::new(),
+        failure_count: Some(0),
     }
 }
 
@@ -829,6 +864,7 @@ fn a_read_failure_keeps_its_reason_and_disables_the_jump() {
         rows: vec![row],
         total: 0,
         failures: vec!["请求结果读取失败".to_string()],
+        failure_count: None,
     };
     apply_recent_issues(&window, &issues);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
@@ -851,5 +887,53 @@ fn a_read_failure_keeps_its_reason_and_disables_the_jump() {
             .contains("证据不可用"),
         "{:?}",
         window.get_recent_issue_evidence_note_0()
+    );
+}
+
+#[test]
+fn the_overview_failure_signal_shows_the_count_and_jumps_to_failed_requests() {
+    let window = issues_window();
+    let mut failed = issues(vec![request_issue()]);
+    failed.failure_count = Some(3);
+    apply_recent_issues(&window, &failed);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(window.get_overview_failure_visible());
+    assert_eq!(window.get_overview_failure_label(), "请求失败 3 · 查看证据");
+
+    let queries = Rc::new(Cell::new(0));
+    window.on_query_requests({
+        let queries = queries.clone();
+        move |_| queries.set(queries.get() + 1)
+    });
+    window.set_request_result(0);
+    window.set_request_period(3);
+    click(
+        &window,
+        window.get_overview_failure_x() + window.get_overview_failure_width() / 2.0,
+        window.get_overview_failure_y() + window.get_overview_failure_height() / 2.0,
+    );
+    assert_eq!(window.get_page(), 1, "the signal opens the request page");
+    assert_eq!(
+        window.get_request_result(),
+        2,
+        "the signal applies the 失败 result filter"
+    );
+    assert_eq!(
+        window.get_request_period(),
+        0,
+        "the signal keeps the 今天 window the count came from"
+    );
+    assert_eq!(window.get_request_keyword(), "");
+    assert_eq!(window.get_request_model_filter(), "");
+    assert_eq!(window.get_request_model_index(), 0);
+    assert_eq!(queries.get(), 1, "the signal re-reads the request page");
+
+    let mut clean = issues(Vec::new());
+    clean.failure_count = Some(0);
+    apply_recent_issues(&window, &clean);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(
+        !window.get_overview_failure_visible(),
+        "no failures means no signal"
     );
 }

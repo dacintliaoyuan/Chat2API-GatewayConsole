@@ -548,7 +548,7 @@ fn the_instance_card_aligns_its_detail_rows() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
     window.set_supervision_value("运行中".into());
-    window.set_supervision_detail("本实例网关 PID 4242".into());
+    window.set_supervision_detail("本机网关 PID 4242".into());
     window.set_supervision_tone(0);
     window.set_config_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\desktop.json".into());
     window.set_instance_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\instances\\144".into());
@@ -1240,6 +1240,10 @@ fn the_settings_address_row_copies_the_base_and_v1_urls() {
         move |text| copied.borrow_mut().push(text.to_string())
     });
 
+    // The appearance card and the port hint make the settings page scroll at
+    // this size; bring the gateway address row into view before clicking it.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
@@ -1328,6 +1332,10 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     window.on_copy_text(|_| {});
 
+    // The gateway address row sits below the taller appearance card and the
+    // port hint; bring it into view before clicking the copy entry.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
@@ -1431,9 +1439,9 @@ fn addresses_stay_copyable_when_the_gateway_is_not_running() {
     window.set_gateway_value("未运行".into());
     window.set_gateway_tone(2);
     window.set_active_address("127.0.0.1:7999".into());
-    // The appearance card with four settings makes the settings page scroll at
+    // The appearance card and the port hint make the settings page scroll at
     // this size; bring the gateway address row into view before clicking it.
-    scroll(&window, 600.0, 400.0, -40.0);
+    scroll(&window, 600.0, 400.0, -300.0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
     let copied = Rc::new(RefCell::new(None::<String>));
@@ -1507,11 +1515,17 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     window.set_request_updated_at("10:01:00".into());
     window.set_log_updated_at("10:02:00".into());
     window.set_settings_updated_at("10:03:00".into());
+    window.set_last_update("10:04:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_overview_updated_at_label(), "更新于 10:00:00");
-    assert_eq!(window.get_request_updated_at_label(), "更新于 10:01:00");
-    assert_eq!(window.get_log_updated_at_label(), "更新于 10:02:00");
-    assert_eq!(window.get_settings_updated_at_label(), "更新于 10:03:00");
+    assert_eq!(window.get_overview_updated_at_label(), "10:00:00");
+    assert_eq!(window.get_request_updated_at_label(), "10:01:00");
+    assert_eq!(window.get_log_updated_at_label(), "10:02:00");
+    assert_eq!(window.get_settings_updated_at_label(), "10:03:00");
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 10:04:00",
+        "the footer is the one place that spells 更新于"
+    );
 
     window.set_page(0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
@@ -2242,11 +2256,16 @@ fn log_refresh_acknowledgement_expires() {
     window.set_log_refreshed(true);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert!(window.get_log_refreshed());
+    assert!(
+        window.get_log_refreshed_text_visible(),
+        "the success is text, not only the glyph swap"
+    );
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
     assert!(
         !window.get_log_refreshed(),
         "the refresh acknowledgement must return to its normal state"
     );
+    assert!(!window.get_log_refreshed_text_visible());
 }
 
 #[test]
@@ -2374,6 +2393,10 @@ fn restarting_the_gateway_asks_once_and_reports_the_outcome() {
         let restarts = Rc::clone(&restarts);
         move || restarts.set(restarts.get() + 1)
     });
+    // The taller appearance card and the port hint push the gateway card down;
+    // bring the restart action into view before clicking it.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_restart_gateway_x() + window.get_restart_gateway_width() / 2.0,
@@ -2401,4 +2424,206 @@ fn the_request_list_keeps_a_readable_height_at_the_default_size() {
         window.get_request_list_height() >= 240.0,
         "the request list keeps a readable height"
     );
+}
+
+#[test]
+fn the_secondary_appearance_labels_sit_above_their_own_controls() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let sidebar_label_bottom =
+        window.get_appearance_sidebar_label_y() + window.get_appearance_sidebar_label_height();
+    let motion_label_bottom =
+        window.get_appearance_motion_label_y() + window.get_appearance_motion_label_height();
+    let transparency_label_bottom = window.get_appearance_transparency_label_y()
+        + window.get_appearance_transparency_label_height();
+    println!(
+        "sidebar label={}..{} control={} motion label={}..{} control={} transparency label={:?} {}..{} control={} toggle={:?}",
+        window.get_appearance_sidebar_label_y(),
+        sidebar_label_bottom,
+        window.get_appearance_sidebar_control_y(),
+        window.get_appearance_motion_label_y(),
+        motion_label_bottom,
+        window.get_appearance_motion_control_y(),
+        window.get_appearance_transparency_label_text(),
+        window.get_appearance_transparency_label_y(),
+        transparency_label_bottom,
+        window.get_appearance_transparency_control_y(),
+        window.get_transparency_toggle_label(),
+    );
+    assert!(
+        sidebar_label_bottom <= window.get_appearance_sidebar_control_y() + 0.5,
+        "侧栏 label must sit directly above its control"
+    );
+    assert!(
+        motion_label_bottom <= window.get_appearance_motion_control_y() + 0.5,
+        "界面动效 label must sit directly above its control"
+    );
+    assert!(
+        transparency_label_bottom <= window.get_appearance_transparency_control_y() + 0.5,
+        "降低透明度 label must sit directly above its control"
+    );
+    assert_eq!(
+        window.get_appearance_transparency_label_text(),
+        "降低透明度",
+        "the group label names the setting once"
+    );
+    assert_eq!(
+        window.get_transparency_toggle_label(),
+        "开启",
+        "the checkbox must not repeat the setting name"
+    );
+}
+
+#[test]
+fn cancelling_a_typed_account_form_asks_before_discarding() {
+    let window = window_at(1060.0, 720.0);
+    open_account_form(&window);
+    type_text(&window, "someone@um.edu.mo");
+    // The account form is below the taller appearance card; scroll it into
+    // view before clicking 取消.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_cancel_button_x() + window.get_cancel_button_width() / 2.0,
+        window.get_cancel_button_y() + window.get_cancel_button_height() / 2.0,
+    );
+    assert!(
+        window.get_account_discard_confirm_visible(),
+        "a typed form asks before discarding"
+    );
+    assert!(
+        window.get_account_form_visible(),
+        "the form stays until the choice"
+    );
+
+    click(
+        &window,
+        window.get_account_keep_editing_x() + window.get_account_keep_editing_width() / 2.0,
+        window.get_account_keep_editing_y() + window.get_account_keep_editing_height() / 2.0,
+    );
+    assert!(
+        !window.get_account_discard_confirm_visible(),
+        "继续编辑 returns to the form"
+    );
+    assert!(window.get_account_form_visible());
+
+    click(
+        &window,
+        window.get_cancel_button_x() + window.get_cancel_button_width() / 2.0,
+        window.get_cancel_button_y() + window.get_cancel_button_height() / 2.0,
+    );
+    click(
+        &window,
+        window.get_account_discard_x() + window.get_account_discard_width() / 2.0,
+        window.get_account_discard_y() + window.get_account_discard_height() / 2.0,
+    );
+    assert!(
+        !window.get_account_form_visible(),
+        "放弃修改 closes the form"
+    );
+}
+
+#[test]
+fn the_log_toolbar_fills_the_page_and_aligns_its_actions_right() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    let page_left = 196.0 + 20.0;
+    let page_right = window.get_window_width() - 20.0;
+    println!(
+        "toolbar x={} y={} w={} h={} settings x={} w={}",
+        window.get_log_toolbar_x(),
+        window.get_log_toolbar_y(),
+        window.get_log_toolbar_width(),
+        window.get_log_toolbar_height(),
+        window.get_log_settings_x(),
+        window.get_log_settings_width(),
+    );
+    assert!(
+        (window.get_log_toolbar_x() - page_left).abs() < 1.0,
+        "the toolbar fills the page width"
+    );
+    assert!(
+        (window.get_log_toolbar_width() - (page_right - page_left)).abs() < 1.0,
+        "the toolbar width is the page content width"
+    );
+    assert!(
+        (window.get_log_settings_x() + window.get_log_settings_width() - page_right).abs() < 1.5,
+        "the page actions end at the right edge instead of floating mid-page"
+    );
+}
+
+#[test]
+fn the_settings_copy_buttons_show_the_copy_word() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_copy_base_icon_only() && !window.get_copy_v1_icon_only(),
+        "ADR 0015 asks for a visible 复制 label, not an icon-only button"
+    );
+    assert!(window.get_copy_base_label().contains("复制"));
+    assert!(window.get_copy_v1_label().contains("复制"));
+}
+
+#[test]
+fn the_port_hint_names_the_accepted_range_and_the_reserved_ports() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    click(
+        &window,
+        window.get_port_input_x() + window.get_port_input_width() / 2.0,
+        window.get_port_input_y() + window.get_port_input_height() / 2.0,
+    );
+    assert!(window.get_port_range_hint_visible());
+    let hint = window.get_port_range_hint_text().to_string();
+    assert!(hint.contains("1–65535"), "{hint}");
+    assert!(hint.contains("7998") && hint.contains("7999"), "{hint}");
+}
+
+#[test]
+fn export_is_disabled_with_its_reason_when_there_is_no_usage() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_export_available(false);
+    window.set_export_note("今天没有可导出的用量".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_export_button_enabled());
+    assert!(window.get_export_status_visible());
+    assert!(window.get_export_status_text().contains("没有可导出的用量"));
+
+    window.set_export_available(true);
+    window.set_export_note("可导出今天的 24 个时段".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_export_button_enabled());
+}
+
+#[test]
+fn f1_opens_the_help_page_with_the_new_task_entries() {
+    let window = window_at(1060.0, 720.0);
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    window.invoke_focus_root();
+    press(&window, Key::F1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(window.get_f1_seen(), "F1 reaches the shortcut handler");
+    assert_eq!(window.get_page(), 4, "F1 opens help");
+    assert!(window.get_help_visible());
+    assert!(
+        window.get_help_terminology_text().contains("本机网关"),
+        "{:?}",
+        window.get_help_terminology_text()
+    );
+    assert!(window.get_help_export_text().contains("导出用量"));
+    assert!(window.get_help_troubleshoot_text().contains("请求失败"));
 }

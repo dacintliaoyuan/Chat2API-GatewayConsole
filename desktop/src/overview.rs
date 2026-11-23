@@ -124,15 +124,15 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             };
             if status == "ok" {
                 Card {
-                    label: "本实例网关",
+                    label: "本机网关",
                     value: "运行中".to_string(),
                     detail: format!("{gateway_base}{models}"),
                     tone: Tone::Good,
                 }
             } else {
-                failures.push(format!("本实例网关 status={status}"));
+                failures.push(format!("本机网关 status={status}"));
                 Card {
-                    label: "本实例网关",
+                    label: "本机网关",
                     value: "异常".to_string(),
                     detail: format!("{gateway_base} · status={status}{models}"),
                     tone: Tone::Bad,
@@ -140,9 +140,9 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             }
         }
         Err(error) => {
-            failures.push(format!("本实例网关 {error}"));
+            failures.push(format!("本机网关 {error}"));
             Card {
-                label: "本实例网关",
+                label: "本机网关",
                 value: "不可用".to_string(),
                 detail: error.clone(),
                 tone: Tone::Bad,
@@ -210,11 +210,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
                 Card {
                     label: "UM 认证",
                     value: "未知".to_string(),
-                    detail: "本实例网关未返回认证状态".to_string(),
+                    detail: "本机网关未返回认证状态".to_string(),
                     tone: Tone::Warn,
                 },
                 "未知".to_string(),
-                "本实例网关未返回认证状态".to_string(),
+                "本机网关未返回认证状态".to_string(),
                 Tone::Warn,
             ),
         },
@@ -222,11 +222,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             Card {
                 label: "UM 认证",
                 value: "未知".to_string(),
-                detail: "本实例网关未返回认证状态".to_string(),
+                detail: "本机网关未返回认证状态".to_string(),
                 tone: Tone::Warn,
             },
             "未知".to_string(),
-            "本实例网关未返回认证状态".to_string(),
+            "本机网关未返回认证状态".to_string(),
             Tone::Warn,
         ),
     };
@@ -269,7 +269,7 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
                 None => Card {
                     label: "上游",
                     value: "未知".to_string(),
-                    detail: "本实例网关未返回上游状态".to_string(),
+                    detail: "本机网关未返回上游状态".to_string(),
                     tone: Tone::Warn,
                 },
             }
@@ -277,7 +277,7 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
         Err(_) => Card {
             label: "上游",
             value: "未知".to_string(),
-            detail: "本实例网关未返回上游状态".to_string(),
+            detail: "本机网关未返回上游状态".to_string(),
             tone: Tone::Warn,
         },
     };
@@ -296,7 +296,7 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
 
 pub fn status_line(overview: &Overview) -> String {
     if overview.failures.is_empty() {
-        "本实例网关 · 状态正常".to_string()
+        "本机网关 · 状态正常".to_string()
     } else {
         format!("刷新失败：{}", overview.failures.join("；"))
     }
