@@ -121,6 +121,9 @@ export component RequestAnalytics inherits Panel {
     min-height: 0px;
     in property <bool> compact: false;
     in property <[RequestMetric]> metrics;
+    // A time window with no requests at all is not the same as a filter that
+    // matched nothing: only the former replaces the KPI row with one reason.
+    in property <bool> empty: false;
     // The five metric cards stay visible at every width and in both disclosure
     // states; only the chart and the speed table fold.
     // At compact width the chart and the speed table start collapsed so the
@@ -164,13 +167,16 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
-    // Test seam: the KPI row stays visible while the chart folds.
+    // Test seam: the KPI row stays visible while the chart folds, except in the
+    // unfiltered empty window where one reason replaces the five dashes.
     out property <bool> kpi-visible: cards.visible;
     out property <int> kpi-count: root.metrics.length;
+    out property <bool> empty-visible: empty-hint.visible;
+    out property <string> empty-text: empty-hint.text;
     // The height this card would take with the chart open. The page compares
     // the list's remaining height against this value, not the window height.
     out property <length> expanded-height: content.preferred-height
-        + (root.expanded ? 0px
+        + (root.expanded || root.empty ? 0px
             : header.preferred-height + 8px
                 + (root.compact ? 302px : 148px)
                 + (root.has-data ? 36px + 8px : 0px));
@@ -274,10 +280,21 @@ export component RequestAnalytics inherits Panel {
         padding: 12px;
         spacing: 8px;
 
+        // An unfiltered empty window says why in one line instead of drawing
+        // five 76 px cards of dashes and an empty chart.
+        empty-hint := Hint {
+            visible: root.empty;
+            height: root.empty ? self.preferred-height : 0px;
+            text: "暂无请求，指标与趋势会在有请求后显示";
+            horizontal-alignment: center;
+        }
+
         // Equal flex-basis keeps the cards the same size; at compact width two
         // per row and a full-width last card avoid clipped labels and a gap. The
         // row never folds: the chart is the only part the disclosure hides.
         cards := FlexboxLayout {
+            visible: !root.empty;
+            height: root.empty ? 0px : self.preferred-height;
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
@@ -314,13 +331,14 @@ export component RequestAnalytics inherits Panel {
         }
 
         compact-summary := HorizontalLayout {
-            visible: root.compact || root.wide-collapsed;
+            visible: (root.compact || root.wide-collapsed) && !root.empty;
             // Clicking the summary row toggles the chart as well.
             summary-pointer := TouchArea {
                 clicked => { root.toggle-chart(); }
             }
             // A hidden row still feeds the parent's preferred height.
-            height: (root.compact || root.wide-collapsed) ? self.preferred-height : 0px;
+            height: (root.compact || root.wide-collapsed) && !root.empty
+                ? self.preferred-height : 0px;
             spacing: 8px;
             // The chart toggle is the only content of the fold row; the KPI
             // cards above already carry the numbers, so no summary is repeated.
@@ -338,15 +356,15 @@ export component RequestAnalytics inherits Panel {
             }
         }
         header := HorizontalLayout {
-            visible: root.expanded;
-            height: root.expanded ? self.preferred-height : 0px;
+            visible: root.expanded && !root.empty;
+            height: root.expanded && !root.empty ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
             Hint { text: root.metric-unit-text; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
-                visible: root.expanded;
-                height: root.expanded ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
@@ -354,8 +372,8 @@ export component RequestAnalytics inherits Panel {
                 selected(index) => { root.metric = index; }
             }
             Segmented {
-                visible: root.expanded;
-                height: root.expanded ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
@@ -367,11 +385,12 @@ export component RequestAnalytics inherits Panel {
         // Wide: the chart and the speed table share one row. Compact: the table
         // moves below the chart so neither is squeezed below its readable width.
         compact-stack := VerticalLayout {
-            visible: root.compact && root.expanded;
+            visible: root.compact && root.expanded && !root.empty;
             width: 100%;
             // Hidden layouts still feed the parent's preferred height, so the
             // inactive stack collapses to zero explicitly.
-            height: (root.compact && root.expanded) ? self.preferred-height : 0px;
+            height: (root.compact && root.expanded && !root.empty)
+                ? self.preferred-height : 0px;
             spacing: 8px;
             compact-plot := RequestTrendChart {
                 width: 100%;
@@ -401,9 +420,9 @@ export component RequestAnalytics inherits Panel {
             }
         }
         wide-row := HorizontalLayout {
-            visible: root.expanded;
+            visible: root.expanded && !root.empty;
             spacing: 12px;
-            height: root.expanded ? 148px : 0px;
+            height: root.expanded && !root.empty ? 148px : 0px;
             wide-plot := RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;

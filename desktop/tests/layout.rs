@@ -2752,3 +2752,61 @@ fn f1_opens_the_help_page_with_the_new_task_entries() {
     assert!(window.get_help_export_text().contains("导出用量"));
     assert!(window.get_help_troubleshoot_text().contains("请求失败"));
 }
+
+#[test]
+fn the_help_search_filters_the_entries() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_help_visible_count(),
+        9,
+        "an empty query keeps every help entry"
+    );
+
+    window.set_help_keyword("端口".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_help_visible_count(),
+        1,
+        "the port-switch entry is the only match"
+    );
+    assert!(!window.get_help_no_result_visible());
+
+    window.set_help_keyword("没有这个条目".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_help_visible_count(), 0);
+    assert!(
+        window.get_help_no_result_visible(),
+        "a query with no match says so instead of showing every card"
+    );
+
+    window.set_help_keyword("".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_help_visible_count(), 9);
+}
+
+#[test]
+fn the_request_detail_copies_the_request_id() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("f314e7d8c7526367baec95ac155b6406".into());
+    window.set_request_detail("请求详情".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+    click(
+        &window,
+        window.get_request_detail_id_copy_x() + window.get_request_detail_id_copy_width() / 2.0,
+        window.get_request_detail_id_copy_y() + window.get_request_detail_id_copy_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().as_deref(),
+        Some("f314e7d8c7526367baec95ac155b6406"),
+        "复制请求 ID copies the selected request's stable ID"
+    );
+}

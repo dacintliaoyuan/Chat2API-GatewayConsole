@@ -764,7 +764,35 @@ export component NavItem inherits Rectangle {
             animate color { duration: Theme.quick; easing: ease-in-out; }
         }
     }
-    if !root.icon.is-empty && root.compact : Tooltip { text: @markdown("\{root.label}"); }
+    // The compact rail keeps only the icon; hover uses the platform tooltip,
+    // and keyboard focus draws the same label beside the icon so Tab never
+    // leaves an unnamed icon.
+    if !root.icon.is-empty && root.compact : Tooltip {
+        text: @markdown("\{root.label}");
+    }
+    if root.compact && keyboard.has-focus : Rectangle {
+        x: root.width + 6px;
+        y: (root.height - self.height) / 2;
+        width: root.label.character-count * 13px + 18px;
+        height: 26px;
+        z: 30;
+        border-radius: 5px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000018;
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+    }
     pointer := TouchArea {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }

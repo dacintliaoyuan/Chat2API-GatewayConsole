@@ -217,6 +217,10 @@ component ProbeCheck inherits Rectangle {
 component TextDetails inherits Panel {
     in property <string> title;
     in property <string> body;
+    // The request detail carries its request ID as a selectable value and a
+    // copy action; the other detail panels leave it empty.
+    in property <string> id-label;
+    callback copy-id();
     callback closed();
     // A copy is confirmed in place for 1.2 s so the action never looks like a
     // no-op; a new body clears the old acknowledgement immediately.
@@ -227,6 +231,10 @@ component TextDetails inherits Panel {
     out property <length> copy-y: copy-button.absolute-position.y;
     out property <length> copy-width: copy-button.width;
     out property <length> copy-height: copy-button.height;
+    out property <length> id-copy-x: id-copy.absolute-position.x;
+    out property <length> id-copy-y: id-copy.absolute-position.y;
+    out property <length> id-copy-width: id-copy.width;
+    out property <length> id-copy-height: id-copy.height;
     // Test seam: the text the panel actually displays, not just its input.
     out property <string> shown-text: full-text.text;
     copy-timer := Timer {
@@ -257,6 +265,28 @@ component TextDetails inherits Panel {
                 }
             }
             ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "关闭"; icon: "close"; icon-only: true; quiet: true; tooltip: "关闭详情"; clicked => { root.closed(); } }
+        }
+        // The request ID is the stable handle behind the detail; keep it
+        // visible and copyable instead of making the operator retype it.
+        HorizontalLayout {
+            visible: !root.id-label.is-empty;
+            height: self.visible ? self.preferred-height : 0px;
+            spacing: 8px;
+            Hint { text: "请求 ID"; vertical-alignment: center; }
+            DataText {
+                text: root.id-label;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            id-copy := ActionButton {
+                label: "复制请求 ID";
+                icon: "copy";
+                quiet: true;
+                tooltip: "复制请求 ID";
+                clicked => { root.copy-id(); }
+            }
         }
         // The platform text editor draws an accent underline when focused; the
         // wrapper clips those last two pixels so the detail panel keeps the
@@ -558,8 +588,46 @@ export component MainWindow inherits Window {
     public pure function request-content-width() -> length {
         return root.width - (root.compact ? 84px : 196px) - (root.compact ? 24px : 40px);
     }
+    // The help page is read-only reference text; the search matches the
+    // lowercased query anywhere in an entry's title or body.
+    public pure function help-match(text: string) -> bool {
+        if (root.help-keyword.is-empty) { return true; }
+        let query = root.help-keyword.to-lowercase();
+        return text.to-lowercase().replace-all(query, "") != text.to-lowercase();
+    }
+    public pure function help-card-visible(index: int) -> bool {
+        if (index == 0) {
+            return root.help-match("快捷键 Ctrl+1…5 Ctrl+R Ctrl+F Alt+F F1 Esc 切换总览 请求诊断 运行日志 设置 帮助 刷新当前页数据 聚焦请求或日志搜索框 只看失败 查看全部 打开帮助 关闭当前页的详情、账号表单或维护菜单");
+        }
+        if (index == 1) {
+            return root.help-match("术语 本机网关 chat2api UM 服务 本实例网关 上游模型来源 凭据 账号密码 缓存命中率 首字耗时 输入 Token 输出");
+        }
+        if (index == 2) {
+            return root.help-match("维护 核验 按需登录 启动 停止 重启 影响 二次确认 维护记录 来源不可用");
+        }
+        if (index == 3) {
+            return root.help-match("导出用量 设置 时间范围 CSV 路径 无数据 按钮禁用");
+        }
+        if (index == 4) {
+            return root.help-match("故障排查 请求失败 查看证据 请求诊断 搜索 只看失败 Alt+F 导出当前列表 运行日志 实时 历史");
+        }
+        if (index == 5) {
+            return root.help-match("UM 登录 UMPASS 账号密码 本机网关 自动重新登录 按需登录 继续登录 Duo Edge 窗口");
+        }
+        if (index == 6) {
+            return root.help-match("端口切换 设置 本机网关端口 检查新端口 在途请求 恢复原端口 模型 API 回环地址 分享链");
+        }
+        if (index == 7) {
+            return root.help-match("指标说明 Token 缓存命中率 首字耗时 输出速度 输入 输出 总耗时");
+        }
+        if (index == 8) {
+            return root.help-match("本机数据 配置文件 实例数据 复制配置文件路径 复制实例数据路径");
+        }
+        return false;
+    }
 
     in-out property <int> page: 0;
+    in-out property <string> help-keyword;
     private property <float> page-opacity: 1;
     private property <int> pending-page: 0;
     init => {
@@ -1126,8 +1194,8 @@ export component MainWindow inherits Window {
     in-out property <string> request-keyword;
     in-out property <int> request-period;
     in-out property <int> request-result;
-    // The empty list explains the filter that removed the rows; the time
-    // window with no rows keeps the 所选时间没有请求记录 copy instead.
+    // The empty list explains the filter that removed the rows; the unfiltered
+    // time window leaves the 所选时间没有请求记录 copy to the status row only.
     out property <bool> request-filters-active:
         !root.request-keyword.is-empty || root.request-result != 0
         || !root.request-model-filter.is-empty;
@@ -1176,9 +1244,17 @@ export component MainWindow inherits Window {
             root.request-list-available-height < 240px
             || root.request-result == 2;
     }
-    out property <bool> request-chart-visible: request-analytics.expanded;
+    out property <bool> request-chart-visible:
+        request-analytics.expanded && !root.request-empty;
     out property <bool> request-kpi-visible: request-analytics.kpi-visible;
     out property <int> request-kpi-count: request-analytics.kpi-count;
+    out property <bool> request-analytics-empty-visible: request-analytics.empty-visible;
+    out property <string> request-analytics-empty-text: request-analytics.empty-text;
+    // An unfiltered empty window is the legal no-requests state; a filter that
+    // matched nothing keeps the KPI cards and explains the filter instead.
+    out property <bool> request-empty:
+        root.requests.length == 0 && !root.request-filters-active;
+    out property <string> request-status-text: root.request-status;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
     out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
@@ -1187,6 +1263,7 @@ export component MainWindow inherits Window {
     out property <string> request-fail-toggle-text:
         root.request-result == 2 ? "查看全部" : "只看失败";
     out property <bool> request-search-pending: request-search-timer.running;
+    out property <bool> request-search-pending-visible: request-pending-hint.visible;
     out property <length> request-chart-toggle-x: request-chart-toggle.absolute-position.x;
     out property <length> request-chart-toggle-y: request-chart-toggle.absolute-position.y;
     out property <length> request-chart-toggle-width: request-chart-toggle.width;
@@ -1624,7 +1701,9 @@ export component MainWindow inherits Window {
     out property <length> request-filter-result-row-width: request-filter-result-row.width;
     out property <bool> request-list-visible: request-list-pane.visible;
     out property <string> request-empty-title:
-        root.request-filters-active ? "没有符合筛选的请求" : "所选时间没有请求记录";
+        root.request-filters-active ? "没有符合筛选的请求" : "";
+    out property <bool> request-empty-title-visible:
+        request-empty-title-hint.visible;
     out property <bool> request-empty-clear-visible:
         root.requests.length == 0 && root.request-filters-active;
     out property <length> request-empty-clear-x:
@@ -1896,6 +1975,10 @@ export component MainWindow inherits Window {
     out property <length> request-detail-copy-y: request-details.copy-y;
     out property <length> request-detail-copy-width: request-details.copy-width;
     out property <length> request-detail-copy-height: request-details.copy-height;
+    out property <length> request-detail-id-copy-x: request-details.id-copy-x;
+    out property <length> request-detail-id-copy-y: request-details.id-copy-y;
+    out property <length> request-detail-id-copy-width: request-details.id-copy-width;
+    out property <length> request-detail-id-copy-height: request-details.id-copy-height;
     out property <bool> log-detail-copied: log-details.copied;
     out property <string> account-state-detail-text: root.account-state-detail();
     out property <bool> request-search-clear-visible: request-search.clear-visible;
@@ -1904,6 +1987,18 @@ export component MainWindow inherits Window {
     out property <length> request-search-clear-width: request-search.clear-width;
     out property <length> request-search-clear-height: request-search.clear-height;
     out property <bool> help-visible: help-scroll.visible;
+    out property <int> help-visible-count:
+        (root.help-card-visible(0) ? 1 : 0)
+        + (root.help-card-visible(1) ? 1 : 0)
+        + (root.help-card-visible(2) ? 1 : 0)
+        + (root.help-card-visible(3) ? 1 : 0)
+        + (root.help-card-visible(4) ? 1 : 0)
+        + (root.help-card-visible(5) ? 1 : 0)
+        + (root.help-card-visible(6) ? 1 : 0)
+        + (root.help-card-visible(7) ? 1 : 0)
+        + (root.help-card-visible(8) ? 1 : 0);
+    out property <bool> help-no-result-visible: help-no-result.visible;
+    out property <string> help-search-placeholder: help-search.placeholder;
     out property <string> help-terminology-text: help-terminology.text;
     out property <string> help-credential-text: help-credential.text;
     out property <string> help-cache-hit-text: help-cache-hit.text;
@@ -2065,11 +2160,15 @@ export component MainWindow inherits Window {
     public function clear-request-filters() {
         request-search-timer.stop();
         root.request-keyword = "";
+        // Clearing the keyword restarts the pause; the explicit query below
+        // already applies the clear, so cancel the timer it just started.
+        request-search-timer.stop();
         root.request-result = 0;
         root.request-model-filter = "";
         root.request-model-index = 0;
         root.request-scroll-y = 0px;
         root.query-requests(0);
+        root.settings-changed();
     }
     // Clear the previous result before asking the shell, so copying the same URL
     // twice still starts a fresh two-second feedback window.
@@ -2188,7 +2287,6 @@ export component MainWindow inherits Window {
         }
     }
     changed request-keyword => {
-        root.settings-changed();
         request-search-timer.start();
     }
     // Every page's read time flows into the one footer label; the per-page
@@ -2281,6 +2379,9 @@ export component MainWindow inherits Window {
         triggered => {
             request-search-timer.running = false;
             if (root.page == 1) { root.query-requests(0); }
+            // The paused keyword is the one saved value: typing alone must not
+            // write desktop.json on every key.
+            root.settings-changed();
         }
     }
     // The log history keyword follows the same 250 ms pause as the request
@@ -2358,6 +2459,9 @@ export component MainWindow inherits Window {
         alignment: stretch;
         rail := Rectangle {
             width: root.compact ? 84px : 196px;
+            // The compact focus tooltip reaches past the rail, so the rail
+            // paints above the page content instead of under it.
+            z: 1;
             animate width { duration: Theme.motion ? 150ms : 0ms; easing: ease-in-out; }
             background: Theme.rail;
             VerticalLayout {
@@ -3026,10 +3130,12 @@ export component MainWindow inherits Window {
                             accepted => {
                                 request-search-timer.stop();
                                 root.query-requests(0);
+                                root.settings-changed();
                             }
                             cleared => {
                                 request-search-timer.stop();
                                 root.query-requests(0);
+                                root.settings-changed();
                             }
                         }
                         request-query := ActionButton {
@@ -3043,6 +3149,7 @@ export component MainWindow inherits Window {
                             clicked => {
                                 request-search-timer.stop();
                                 root.query-requests(0);
+                                root.settings-changed();
                             }
                         }
                     }
@@ -3064,6 +3171,15 @@ export component MainWindow inherits Window {
                         accessible-role: text;
                         accessible-live-region: polite;
                     }
+                    // The paused keyword is still pending; name it instead of
+                    // showing a stale status as if the query had landed.
+                    request-pending-hint := Hint {
+                        visible: root.request-search-pending;
+                        height: self.visible ? self.preferred-height : 0px;
+                        text: "查询中…";
+                        color: Theme.warn-text;
+                        vertical-alignment: center;
+                    }
                     request-fail-toggle := ActionButton {
                         label: root.request-result == 2 ? "查看全部" : "只看失败";
                         icon: "filter";
@@ -3073,7 +3189,7 @@ export component MainWindow inherits Window {
                         clicked => { root.toggle-request-failures(); }
                     }
                     request-chart-toggle := ActionButton {
-                        visible: !root.compact;
+                        visible: !root.compact && !root.request-empty;
                         label: root.request-chart-collapsed ? "查看图表" : "收起图表";
                         icon: root.request-chart-collapsed ? "chevron-right" : "chevron-down";
                         quiet: true;
@@ -3087,6 +3203,7 @@ export component MainWindow inherits Window {
                     compact: root.compact;
                     wide-collapsed <=> root.request-chart-collapsed;
                     metrics: root.request-metrics;
+                    empty: root.request-empty;
                     labels: root.request-chart-labels;
                     token-counts: root.request-chart-token-counts;
                     request-counts: root.request-chart-request-counts;
@@ -3153,13 +3270,14 @@ export component MainWindow inherits Window {
                                 vertical-stretch: root.requests.length == 0 ? 1 : 0;
                                 alignment: center;
                                 spacing: 4px;
-                                Hint {
-                                    text: root.request-filters-active
-                                        ? "没有符合筛选的请求" : "所选时间没有请求记录";
+                                request-empty-title-hint := Hint {
+                                    text: "没有符合筛选的请求";
                                     color: Theme.ink;
                                     font-size: 13px;
                                     font-weight: 600;
                                     horizontal-alignment: center;
+                                    visible: root.request-filters-active;
+                                    height: self.visible ? self.preferred-height : 0px;
                                 }
                                 Hint {
                                     text: root.request-filters-active
@@ -3247,6 +3365,8 @@ export component MainWindow inherits Window {
                     animate width { duration: Theme.settle; easing: ease-out; }
                     title: root.request-detail-title;
                     body: root.request-detail;
+                    id-label: root.selected-request;
+                    copy-id => { root.copy-text(root.selected-request); }
                     closed => { root.selected-request = ""; }
                 }
                 }
@@ -4502,7 +4622,33 @@ export component MainWindow inherits Window {
                     min-height: self.preferred-height;
                     spacing: 12px;
                     padding-right: 8px;
+                    // The help page is a static reference; one field filters the
+                    // entries instead of leaving every card to be scanned by eye.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        help-search := MaterialField {
+                            width: root.compact ? 200px : 280px;
+                            icon: "search";
+                            placeholder: "关键词";
+                            clearable: true;
+                            text <=> root.help-keyword;
+                        }
+                        help-count := Hint {
+                            text: root.help-visible-count + " 条帮助";
+                            vertical-alignment: center;
+                            visible: root.help-visible-count > 0;
+                        }
+                        help-no-result := Hint {
+                            text: "没有匹配的帮助条目";
+                            color: Theme.warn-text;
+                            vertical-alignment: center;
+                            visible: root.help-visible-count == 0;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
                     Card {
+                        visible: root.help-card-visible(0);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4516,6 +4662,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(1);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4527,6 +4675,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(2);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4535,6 +4685,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(3);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4543,6 +4695,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(4);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4551,6 +4705,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(5);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4560,6 +4716,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(6);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4569,6 +4727,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(7);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4580,6 +4740,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        visible: root.help-card-visible(8);
+                        height: self.visible ? self.preferred-height : 0px;
                         VerticalLayout {
                             alignment: start;
                             spacing: 9px;
@@ -4624,7 +4786,7 @@ export component MainWindow inherits Window {
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                DataText { text: "更新于 " + root.last-update; vertical-alignment: center; }
+                DataText { text: root.last-update-label; vertical-alignment: center; }
             }
         }
     }

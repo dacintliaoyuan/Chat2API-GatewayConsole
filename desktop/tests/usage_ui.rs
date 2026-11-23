@@ -557,6 +557,8 @@ fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
     window.set_page(1);
     let metrics = metric_cards();
     window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
 
@@ -601,6 +603,8 @@ fn the_empty_model_speed_hint_stays_inside_the_analytics_card() {
     window.set_request_chart_collapsed_explicit(true);
     window.set_request_chart_collapsed(false);
     window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 
@@ -691,6 +695,8 @@ fn request_window() -> main_ui::MainWindow {
 #[test]
 fn the_wide_request_page_folds_the_chart_from_the_status_row() {
     let window = request_window();
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     let metrics = metric_cards();
     window.set_request_metrics(ModelRc::from(metrics.as_slice()));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
@@ -747,6 +753,8 @@ fn the_wide_request_page_folds_the_chart_from_the_status_row() {
 #[test]
 fn a_tall_request_window_starts_with_the_chart_expanded() {
     let window = request_window();
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     window
         .window()
         .set_size(LogicalSize::new(1060.0, 900.0));
@@ -761,6 +769,8 @@ fn a_tall_request_window_starts_with_the_chart_expanded() {
 #[test]
 fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
     let window = request_window();
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     window.set_request_result(2);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_chart_visible());
@@ -777,12 +787,60 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
 }
 
 #[test]
+fn an_unfiltered_empty_request_list_leaves_the_copy_to_the_status_row() {
+    let window = request_window();
+    window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
+    window.set_request_status("所选时间没有请求记录。".into());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+
+    assert_eq!(
+        window.get_request_status_text().as_str(),
+        "所选时间没有请求记录。",
+        "the status row is the one place that explains the empty time window"
+    );
+    assert_eq!(
+        window.get_request_empty_title().as_str(),
+        "",
+        "the list header must not repeat the status row's copy"
+    );
+    assert!(!window.get_request_empty_title_visible());
+}
+
+#[test]
+fn an_empty_request_window_shows_one_reason_instead_of_five_dash_cards() {
+    let window = request_window();
+    let metrics = metric_cards();
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+
+    assert!(
+        !window.get_request_kpi_visible(),
+        "an empty window must not draw five 76 px cards of dashes"
+    );
+    assert!(
+        window.get_request_analytics_empty_visible(),
+        "the analytics card names the reason in one line"
+    );
+    assert!(
+        window.get_request_analytics_empty_text().contains("暂无请求"),
+        "{}",
+        window.get_request_analytics_empty_text()
+    );
+}
+
+#[test]
 fn typing_in_the_request_search_filters_after_a_short_pause() {
     let window = request_window();
     let queries = std::rc::Rc::new(std::cell::Cell::new(0));
     window.on_query_requests({
         let queries = queries.clone();
         move |_| queries.set(queries.get() + 1)
+    });
+    let saves = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_settings_changed({
+        let saves = saves.clone();
+        move || saves.set(saves.get() + 1)
     });
     window.set_request_keyword("fixture".into());
     // The changed handler runs on the next event-loop turn; process it before
@@ -792,10 +850,17 @@ fn typing_in_the_request_search_filters_after_a_short_pause() {
         window.get_request_search_pending(),
         "typing starts the debounce timer"
     );
+    assert!(
+        window.get_request_search_pending_visible(),
+        "the status row says the keyword is still being queried"
+    );
+    assert_eq!(saves.get(), 0, "typing must not save on every key");
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
     assert_eq!(queries.get(), 0, "the debounce waits for the pause");
+    assert_eq!(saves.get(), 0, "the debounce waits to save");
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
     assert_eq!(queries.get(), 1, "the paused search filters once");
+    assert_eq!(saves.get(), 1, "one pause saves desktop.json once");
 }
 
 #[test]
@@ -827,6 +892,8 @@ fn an_empty_filtered_request_list_explains_the_filter_and_offers_to_clear_it() {
 #[test]
 fn the_one_key_failure_filter_folds_the_chart_and_toggles_back() {
     let window = request_window();
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
     window.invoke_toggle_request_failures();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert_eq!(window.get_request_result(), 2);
