@@ -18,14 +18,14 @@ use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::error::{ErrorProtocol, GatewayError};
-use crate::event_log::{AttemptStats, FinalFailure};
+use crate::event_log::{AttemptStats, ChatAttemptEvidence, FinalFailure};
 use crate::gate::{Admission, ShareGate};
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{estimate_tokens, merge_usage_snapshots, message_tokens, UsageRecord};
 use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::{valid_chat_request, AppState};
-use crate::upstream::{NextItem, StreamReader, UpstreamBody};
+use crate::upstream::{NextItem, StreamReader, UpstreamBody, UpstreamFailure, UpstreamResponse};
 
 /// SSE content type used after the 200 commit.
 pub const SSE_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8";
@@ -181,6 +181,112 @@ struct ChatContext<'a> {
     origin: Option<String>,
 }
 
+fn post_chat_attempt(
+    context: &ChatContext<'_>,
+    credential: &str,
+    body: &Map<String, Value>,
+    streaming: bool,
+    compat_retry_used: bool,
+    attempt: u32,
+    attempt_started: Instant,
+) -> (Result<(UpstreamResponse, bool), UpstreamFailure>, Duration) {
+    let mut result = crate::upstream::post_chat(
+        &context.state.config,
+        credential,
+        &serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default(),
+        streaming,
+        context.deadline,
+    );
+    let elapsed = attempt_started.elapsed();
+    let sent_stream_options = body.contains_key("stream_options");
+    let status = result.as_ref().ok().map(|response| response.status);
+    let retry_without_stream_options = status == Some(400) && sent_stream_options && !compat_retry_used;
+
+    let log = &context.state.event_log;
+    if context.state.config.role == crate::config::Role::Local
+        && log.enabled()
+        && (status == Some(400) || compat_retry_used)
+    {
+        let (reason, error_body) = match &mut result {
+            Ok(response) if retry_without_stream_options => {
+                let text = response.read_discarded_error_text();
+                if text == Err(UpstreamFailure::Timeout) {
+                    (Some("unknown"), Some("not_ready"))
+                } else {
+                    chat_error_evidence(text.as_deref().map_err(|error| *error))
+                }
+            }
+            Ok(response) if response.status == 400 => {
+                chat_error_evidence(response.capture_error_text())
+            }
+            _ => (None, None),
+        };
+        log.chat_attempt(ChatAttemptEvidence {
+            request_id: context.http_request_id,
+            attempt,
+            upstream_status: status,
+            upstream_request_id: result.as_ref().ok().and_then(upstream_request_id),
+            transport_error: result.as_ref().err().map(|error| error.name()),
+            reason,
+            error_body,
+            stream_options: if compat_retry_used {
+                "removed_for_retry"
+            } else if sent_stream_options {
+                "sent"
+            } else {
+                "absent"
+            },
+            retry_without_stream_options,
+        });
+    }
+    (result.map(|response| (response, retry_without_stream_options)), elapsed)
+}
+
+fn upstream_request_id(response: &UpstreamResponse) -> Option<&str> {
+    let id = response.headers.get("x-request-id")?;
+    let bytes = id.as_bytes();
+    let is_uuid = bytes.len() == 36 && bytes.iter().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    });
+    (is_uuid || (bytes.len() == 32 && bytes.iter().all(u8::is_ascii_hexdigit))).then_some(id)
+}
+
+fn chat_error_evidence(
+    text: Result<&str, UpstreamFailure>,
+) -> (Option<&'static str>, Option<&'static str>) {
+    let text = match text {
+        Err(_) => return (Some("unknown"), Some("read_failed")),
+        Ok(text) if text.trim().is_empty() => return (Some("unknown"), Some("empty")),
+        Ok(text) => text,
+    };
+    let value = serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
+    let reason = [&value["error"], &value["detail"], &value]
+        .into_iter()
+        .find_map(|detail| {
+            if detail["param"].as_str() == Some("stream_options") {
+                return Some("stream_options");
+            }
+            [detail["code"].as_str(), detail["type"].as_str()]
+                .into_iter()
+                .flatten()
+                .find_map(|code| match code {
+                    "context_length_exceeded" => Some("context_length_exceeded"),
+                    "image_too_large" => Some("image_too_large"),
+                    "invalid_image" | "invalid_image_url" => Some("invalid_image"),
+                    "invalid_tool_call" | "invalid_tool_calls" => Some("invalid_tool_call"),
+                    "invalid_json" => Some("invalid_json"),
+                    "model_not_found" => Some("model_not_found"),
+                    _ => None,
+                })
+        })
+        .unwrap_or("unknown");
+    (Some(reason), Some("present"))
+}
+
 fn forward_json(context: &ChatContext<'_>) -> ChatResult {
     let mut stats = AttemptStats::default();
     let result = forward_json_inner(context, &mut stats);
@@ -207,21 +313,24 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
         stats.record_attempt();
         let attempt_started = Instant::now();
         let credential = context.state.proxy.upstream_credential();
-        let mut response = match crate::upstream::post_chat(
-            &context.state.config,
+        let (attempt, attempt_elapsed) = post_chat_attempt(
+            context,
             &credential.value,
-            &serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default(),
+            &body,
             false,
-            context.deadline,
-        ) {
-            Ok(response) => response,
+            compat_retry_used,
+            stats.physical_attempts,
+            attempt_started,
+        );
+        let (mut response, retry_without_stream_options) = match attempt {
+            Ok(attempt) => attempt,
             Err(failure) => {
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
                     &limits,
                     context.deadline,
-                    attempt_started.elapsed(),
+                    attempt_elapsed,
                 ) {
                     if !retry::sleep_with_deadline(plan.delay, context.deadline) {
                         return ChatResult::Response(last.deadline_error().response());
@@ -236,7 +345,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
             }
         };
         let status = response.status;
-        if status == 400 && body.contains_key("stream_options") && !compat_retry_used {
+        if retry_without_stream_options {
             body.remove("stream_options");
             compat_retry_used = true;
             drop(response);
@@ -248,7 +357,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
                 &mut retry_state,
                 &mut last,
                 response,
-                attempt_started.elapsed(),
+                attempt_elapsed,
                 context.deadline,
                 &mut auth_wait_budget,
                 &credential,
@@ -410,21 +519,24 @@ fn forward_stream_inner(
         stats.record_attempt();
         let attempt_started = Instant::now();
         let credential = context.state.proxy.upstream_credential();
-        let response = match crate::upstream::post_chat(
-            &context.state.config,
+        let (attempt, attempt_elapsed) = post_chat_attempt(
+            context,
             &credential.value,
-            &serde_json::to_vec(&Value::Object(upstream_body.clone())).unwrap_or_default(),
+            &upstream_body,
             true,
-            context.deadline,
-        ) {
-            Ok(response) => response,
+            compat_retry_used,
+            stats.physical_attempts,
+            attempt_started,
+        );
+        let (response, retry_without_stream_options) = match attempt {
+            Ok(attempt) => attempt,
             Err(failure) => {
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
                     &limits,
                     context.deadline,
-                    attempt_started.elapsed(),
+                    attempt_elapsed,
                 ) {
                     if !retry::sleep_with_deadline(plan.delay, context.deadline) {
                         return ChatResult::Response(last.deadline_error().response());
@@ -438,10 +550,7 @@ fn forward_stream_inner(
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
-        if response.status == 400
-            && upstream_body.contains_key("stream_options")
-            && !compat_retry_used
-        {
+        if retry_without_stream_options {
             compat_retry_used = true;
             upstream_body.remove("stream_options");
             drop(response);
@@ -453,7 +562,7 @@ fn forward_stream_inner(
                 &mut retry_state,
                 &mut last,
                 response,
-                attempt_started.elapsed(),
+                attempt_elapsed,
                 context.deadline,
                 &mut auth_wait_budget,
                 &credential,

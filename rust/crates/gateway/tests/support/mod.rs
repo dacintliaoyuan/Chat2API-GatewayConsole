@@ -825,6 +825,10 @@ impl ChatChunk {
 
 #[derive(Debug, Clone)]
 pub enum ChatAttempt {
+    RawResponse {
+        bytes: Vec<u8>,
+        hold: Duration,
+    },
     Json {
         status: u16,
         body: Value,
@@ -1050,6 +1054,11 @@ fn serve_chat(
             body: json!({"error": "no scripted chat attempt"}),
         });
     match attempt {
+        ChatAttempt::RawResponse { bytes, hold } => {
+            stream.write_all(&bytes)?;
+            stream.flush()?;
+            thread::sleep(hold);
+        }
         ChatAttempt::Json { status, body } => {
             let raw = serde_json::to_vec(&body).unwrap_or_default();
             let head = format!(

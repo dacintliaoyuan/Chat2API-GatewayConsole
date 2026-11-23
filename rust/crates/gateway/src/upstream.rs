@@ -61,6 +61,7 @@ pub struct UpstreamResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body: UpstreamBody,
+    error_text: Option<Result<String, UpstreamFailure>>,
 }
 
 impl UpstreamResponse {
@@ -68,11 +69,32 @@ impl UpstreamResponse {
     /// `detail.upstream_message`. A read failure yields an empty string, exactly
     /// like the pre-#61 final-error path.
     pub fn read_error_text(&mut self) -> String {
+        self.error_text
+            .take()
+            .unwrap_or_else(|| self.read_error_prefix())
+            .unwrap_or_default()
+    }
+
+    /// Capture the same error text the retry classifier needs without another read.
+    pub(crate) fn capture_error_text(&mut self) -> Result<&str, UpstreamFailure> {
+        let text = self.read_error_prefix();
+        self.error_text.insert(text).as_deref().map_err(|error| *error)
+    }
+
+    /// The compatibility branch previously discarded this response unread.
+    /// Read only immediately available bytes so diagnostics cannot wait on it.
+    pub(crate) fn read_discarded_error_text(&mut self) -> Result<String, UpstreamFailure> {
+        self.body
+            .stream
+            .set_nonblocking(true)
+            .map_err(|_| UpstreamFailure::ConnectionError)?;
+        self.read_error_prefix()
+    }
+
+    fn read_error_prefix(&mut self) -> Result<String, UpstreamFailure> {
         self.body
             .read_prefix(MAX_UPSTREAM_ERROR_TEXT)
-            .ok()
-            .map(|raw| String::from_utf8_lossy(&raw).to_string())
-            .unwrap_or_default()
+            .map(|raw| String::from_utf8_lossy(&raw).into_owned())
     }
 }
 
@@ -372,6 +394,7 @@ pub fn post_compat(
     Ok(UpstreamResponse {
         status,
         headers,
+        error_text: None,
         body: UpstreamBody {
             stream: upstream,
             buffered: leftover,
