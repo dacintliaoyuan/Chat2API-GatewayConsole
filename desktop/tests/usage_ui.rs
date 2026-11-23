@@ -1064,6 +1064,7 @@ fn the_usage_chart_shows_a_visible_keyboard_focus_and_starts_on_the_first_bucket
         "the usage chart must draw a visible focus border"
     );
     assert_eq!(window.get_usage_active_index(), 0);
+}
 
 #[test]
 fn the_request_page_marks_the_pinned_bucket() {
@@ -1106,5 +1107,4 @@ fn the_request_page_marks_the_pinned_bucket() {
     window.invoke_pin_request_bucket(1);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_pinned_marker_visible());
-}
 }

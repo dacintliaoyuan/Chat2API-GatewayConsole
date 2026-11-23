@@ -3355,6 +3355,14 @@ export component MainWindow inherits Window {
                     }
                     // The paused keyword is still pending; name it instead of
                     // showing a stale status as if the query had landed.
+                    // The compact KPI summary keeps its five cards at full width;
+                    // the scope caption moves into this row instead of a sixth
+                    // cell that would elide every value.
+                    request-kpi-scope-hint := Hint {
+                        visible: root.compact && !root.request-empty;
+                        text: "指标按所选范围";
+                        vertical-alignment: center;
+                    }
                     request-pending-hint := Hint {
                         visible: root.request-search-pending;
                         height: self.visible ? self.preferred-height : 0px;
