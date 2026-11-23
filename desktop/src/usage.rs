@@ -182,6 +182,16 @@ impl RequestSummary {
         // The failure count is the one metric that reads as bad when it is real.
         let failures = self.request_failed.trim();
         let failed = failures != "0" && failures != "—" && !failures.is_empty();
+        // The value already carries Token/秒; a note that repeats it would print
+        // the unit twice, so only the qualifier stays in the detail line.
+        let speed_note = self.speed_note.as_str();
+        let speed_detail = if speed_note.is_empty() {
+            "整次平均，含首字等待"
+        } else {
+            speed_note
+                .strip_prefix("Token/秒 · ")
+                .unwrap_or(speed_note)
+        };
         vec![
             MetricCard {
                 label: "Token".into(),
@@ -204,11 +214,7 @@ impl RequestSummary {
             MetricCard {
                 label: "输出速度".into(),
                 value: speed,
-                detail: if self.speed_note.is_empty() {
-                    "Token/秒 · 整次平均".into()
-                } else {
-                    self.speed_note.clone()
-                },
+                detail: speed_detail.into(),
                 detail_tone: 3,
             },
             MetricCard {

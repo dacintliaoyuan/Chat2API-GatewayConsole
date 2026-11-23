@@ -3013,3 +3013,67 @@ fn the_request_kpi_scope_caption_sits_above_the_five_cards() {
         scope_height
     );
 }
+
+#[test]
+fn the_first_run_footer_hint_retires_after_help_and_answers_ctrl_r() {
+    let window = window_at(1060.0, 720.0);
+    assert!(
+        window.get_footer_help_hint_visible(),
+        "the first-run footer points at the help page"
+    );
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "按 F1 查看帮助"
+    );
+
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "opening help retires the first-run hint"
+    );
+
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_footer_help_hint_visible());
+
+    window.set_page(4);
+    window.invoke_show_help_no_refresh();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_footer_help_hint_visible());
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "帮助页无刷新",
+        "Ctrl+R on the static help page names the no-op instead of spinning a hidden icon"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "the note is transient"
+    );
+}
+
+#[test]
+fn the_history_level_filter_names_the_empty_selection() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_mode(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(window.get_log_level_hint_visible());
+    assert_eq!(
+        window.get_log_level_hint_text().as_str(),
+        "未选级别 = 全部"
+    );
+}
+
+#[test]
+fn the_maintenance_menu_uses_a_wrench_not_the_settings_gear() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_maintenance_toggle_icon().as_str(),
+        "wrench",
+        "the maintenance menu must not reuse the settings page's gear"
+    );
+}

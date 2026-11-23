@@ -292,6 +292,30 @@ fn request_metric_cards_include_first_token_and_keep_missing_as_a_dash() {
 }
 
 #[test]
+fn the_output_speed_card_keeps_the_unit_out_of_its_detail_line() {
+    let summary = RequestSummary {
+        speed: "38.6".into(),
+        speed_note: "Token/秒 · 整次平均".into(),
+        ..RequestSummary::default()
+    };
+    let card = &summary.cards()[3];
+    assert_eq!(card.value, "38.6 Token/秒");
+    assert!(
+        !card.detail.contains("Token/秒"),
+        "the value already carries the unit: {}",
+        card.detail
+    );
+
+    let fallback = RequestSummary {
+        speed: "38.6".into(),
+        speed_note: String::new(),
+        ..RequestSummary::default()
+    };
+    let card = &fallback.cards()[3];
+    assert!(!card.detail.contains("Token/秒"), "{}", card.detail);
+}
+
+#[test]
 fn request_detail_shows_first_token_or_a_dash_for_legacy_rows() {
     let tmp = common::TempDir::new("usage-first-token");
     let ledger = tmp.path().join("usage.jsonl");

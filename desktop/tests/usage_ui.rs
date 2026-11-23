@@ -919,13 +919,12 @@ fn an_empty_request_window_shows_one_reason_instead_of_five_dash_cards() {
         "an empty window must not draw five 76 px cards of dashes"
     );
     assert!(
-        window.get_request_analytics_empty_visible(),
-        "the analytics card names the reason in one line"
+        !window.get_request_analytics_card_visible(),
+        "the analytics card must not draw a second empty reason"
     );
     assert!(
-        window.get_request_analytics_empty_text().contains("暂无请求"),
-        "{}",
-        window.get_request_analytics_empty_text()
+        window.get_request_list_empty_visible(),
+        "the list card is the one empty state"
     );
 }
 

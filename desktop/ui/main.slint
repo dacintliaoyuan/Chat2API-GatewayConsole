@@ -1002,6 +1002,7 @@ export component MainWindow inherits Window {
     out property <length> maintenance-toggle-y: maintenance-toggle.absolute-position.y;
     out property <length> maintenance-toggle-width: maintenance-toggle.width;
     out property <length> maintenance-toggle-height: maintenance-toggle.height;
+    out property <string> maintenance-toggle-icon: maintenance-toggle.icon;
     out property <length> maintenance-verify-x: maintenance-verify.button-x;
     out property <length> maintenance-verify-y: maintenance-verify.button-y;
     out property <length> maintenance-verify-width: maintenance-verify.button-width;
@@ -1676,6 +1677,8 @@ export component MainWindow inherits Window {
     // request row must stay above it.
     out property <length> footer-height: status-row.height;
     out property <bool> footer-time-visible: footer-updated.visible;
+    out property <bool> footer-help-hint-visible: footer-help-hint.visible;
+    out property <string> footer-help-hint-text: footer-help-hint.text;
     out property <length> technical-card-x: technical-card.absolute-position.x;
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
@@ -1909,6 +1912,8 @@ export component MainWindow inherits Window {
     out property <length> log-level-debug-y: log-level-debug.absolute-position.y;
     out property <length> log-level-debug-width: log-level-debug.width;
     out property <length> log-level-debug-height: log-level-debug.height;
+    out property <bool> log-level-hint-visible: log-level-hint.visible;
+    out property <string> log-level-hint-text: log-level-hint.text;
     out property <length> log-source-x: log-source-control.absolute-position.x;
     out property <length> log-source-y: log-source-control.absolute-position.y;
     out property <length> log-source-width: log-source-control.width;
@@ -1987,6 +1992,17 @@ export component MainWindow inherits Window {
     out property <float> page-host-opacity: page-host.opacity;
     // The footer points at the help page once; opening help retires it.
     out property <bool> f1-seen: false;
+    // Ctrl+R on the static help page says there is nothing to re-read for
+    // 2 s instead of spinning the hidden page-refresh icon.
+    private property <bool> help-no-refresh: false;
+    help-no-refresh-timer := Timer {
+        interval: 2s;
+        running: false;
+        triggered => {
+            root.help-no-refresh = false;
+            help-no-refresh-timer.running = false;
+        }
+    }
     // Test seams: the refresh controls, their disabled state, the rotation
     // angle and the per-page update labels.
     out property <string> overview-updated-at-label: root.overview-updated-at;
@@ -2207,6 +2223,9 @@ export component MainWindow inherits Window {
     changed page => {
         root.confirm-clear = false;
         root.confirm-quit = false;
+        // Reaching help by F1, Ctrl+5 or the rail all retire the first-run
+        // footer hint, whichever path set the page.
+        if (root.page == 4) { root.f1-seen = true; }
         // A page change is a modal exit too: an open maintenance overlay must
         // not survive on a page where its trigger no longer exists.
         if (root.maintenance-menu-open) {
@@ -2397,6 +2416,12 @@ export component MainWindow inherits Window {
         root.begin-manual-refresh();
         root.refresh-page-data();
     }
+    // The static help page answers Ctrl+R with the footer note instead of a
+    // read that cannot happen.
+    public function show-help-no-refresh() {
+        root.help-no-refresh = true;
+        help-no-refresh-timer.start();
+    }
     changed auto-refresh => {
         root.auto-refresh-index = root.auto-refresh-index-for(root.auto-refresh);
         if (root.auto-refresh > 0 && !root.refresh-paused && !root.refreshing) {
@@ -2575,7 +2600,17 @@ export component MainWindow inherits Window {
                 if (event.text == "3") { root.navigate-to(3); return accept; }
                 if (event.text == "4") { root.navigate-to(2); return accept; }
                 if (event.text == "5") { root.navigate-to(4); return accept; }
-                if (event.text == "r" || event.text == "R") { root.refresh-page(); return accept; }
+                if (event.text == "r" || event.text == "R") {
+                    // The static help page has nothing to re-read; say so
+                    // instead of spinning a refresh icon that is not drawn.
+                    if (root.page == 4) {
+                        root.help-no-refresh = true;
+                        help-no-refresh-timer.start();
+                        return accept;
+                    }
+                    root.refresh-page();
+                    return accept;
+                }
                 // Ctrl+F focuses the search field of the current page; inside a
                 // text field the platform keeps its own find behavior.
                 if ((event.text == "f" || event.text == "F")
@@ -2593,7 +2628,7 @@ export component MainWindow inherits Window {
                 root.toggle-request-failures();
                 return accept;
             }
-            if (event.text == Key.F1) { root.f1-seen = true; root.navigate-to(4); return accept; }
+            if (event.text == Key.F1) { root.navigate-to(4); return accept; }
             return reject;
         }
 
@@ -2759,7 +2794,9 @@ export component MainWindow inherits Window {
                 // menu never moves the page content or clips the settings copy.
                 maintenance-toggle := ActionButton {
                     label: "维护";
-                    icon: "settings";
+                    // The wrench keeps the maintenance menu distinct from the
+                    // settings page's gear in the rail.
+                    icon: "wrench";
                     tooltip: "打开维护菜单";
                     quiet: true;
                     width: 76px;
@@ -3587,6 +3624,13 @@ export component MainWindow inherits Window {
                         checked <=> root.log-level-debug;
                         toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
+                    // The four levels are independent toggles: an empty
+                    // selection keeps every level instead of hiding rows.
+                    log-level-hint := Hint {
+                        visible: root.log-mode == 1;
+                        text: "未选级别 = 全部";
+                        vertical-alignment: center;
+                    }
                 }
                 // The source and the page actions share the second filter row,
                 // so the first row keeps its controls without wrapping at the
@@ -3906,7 +3950,10 @@ export component MainWindow inherits Window {
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.account-saved-detail;
                             }
-                            if !root.account-detail.is-empty : Hint { text: root.account-detail; color: Theme.status_ink(root.account-tone); }
+                            if !root.account-state-detail().is-empty : Hint {
+                                text: root.account-state-detail();
+                                color: Theme.status_ink(root.account-tone);
+                            }
                             account-actions := HorizontalLayout {
                                 height: root.account-form-visible ? 0px : self.preferred-height;
                                 spacing: 8px; alignment: start;
@@ -4934,6 +4981,16 @@ export component MainWindow inherits Window {
                 spacing: 8px;
                 status-dot := StatusDot { tone: root.status-tone; y: (parent.height - self.height) / 2; }
                 Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
+                // The first-run footer points at F1; a Ctrl+R on the static
+                // help page takes the same slot to say there is no refresh.
+                footer-help-hint := Hint {
+                    visible: !root.f1-seen || root.help-no-refresh;
+                    text: root.help-no-refresh ? "帮助页无刷新" : "按 F1 查看帮助";
+                    color: root.help-no-refresh ? Theme.warn-text : Theme.muted;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
                 copy-status-hint := Hint {
                     visible: !root.copy-status.is-empty;
                     text: root.copy-status;
