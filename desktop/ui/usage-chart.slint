@@ -468,6 +468,9 @@ export component UsageChart inherits Panel {
     in property <bool> refreshing: false;
     in property <angle> refresh-rotation: 0deg;
     in property <string> updated-at: "—";
+    // The page footer is the one visible 更新于 source; the chart keeps the read
+    // time as a data seam without drawing a second label.
+    out property <bool> updated-at-visible: false;
     callback refresh();
     callback period-changed(int);
     private property <int> auto-refresh-index: 0;
@@ -655,11 +658,6 @@ export component UsageChart inherits Panel {
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
                         }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
                         VerticalLayout {
                             alignment: end;
                             spacing: 2px;
@@ -716,11 +714,6 @@ export component UsageChart inherits Panel {
                             label: "用量指标";
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
-                        }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
                         }
                     }
                 }

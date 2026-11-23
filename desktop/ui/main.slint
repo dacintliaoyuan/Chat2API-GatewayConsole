@@ -994,7 +994,10 @@ export component MainWindow inherits Window {
     private property <bool> confirm-clear: false;
     // The tray-less exit uses the same two-step inline confirmation.
     private property <bool> confirm-quit: false;
-    in property <string> last-update: "—";
+    // The footer is the one visible 更新于 source. Each page's read still carries
+    // its own timestamp, but the footer mirrors it so the screen never shows two
+    // different 更新于 labels at once.
+    in-out property <string> last-update: "—";
     // Manual refresh is one shared action: the icon spins for 600 ms and every
     // refresh button stays disabled until the spin ends. Auto refresh only drives
     // the overview and never touches the log page's live follow.
@@ -1562,6 +1565,9 @@ export component MainWindow inherits Window {
     out property <bool> copy-v1-enabled: copy-v1.enabled;
     out property <length> access-type-row-y: access-type-row.absolute-position.y;
     out property <length> access-hints-y: access-hints.absolute-position.y;
+    out property <string> autostart-status-text: autostart-status.label;
+    out property <string> autostart-hint-text: autostart-hint.text;
+    out property <length> autostart-row-y: autostart-row.absolute-position.y;
     out property <string> access-address-note-text: access-address-note.text;
     out property <bool> access-address-note-visible: access-address-note.visible;
     out property <length> copy-base-x: copy-base.absolute-position.x;
@@ -1608,6 +1614,7 @@ export component MainWindow inherits Window {
     out property <length> request-list-header-model-width: request-list-header-model.width;
     out property <length> request-list-header-first-token-x: request-list-header-first-token.absolute-position.x;
     out property <length> request-list-header-first-token-width: request-list-header-first-token.width;
+    out property <string> request-list-header-first-token-text: request-list-header-first-token.text;
     out property <length> request-list-header-outcome-x: request-list-header-outcome.absolute-position.x;
     out property <length> request-list-header-outcome-width: request-list-header-outcome.width;
     out property <length> request-rows-y: request-rows.absolute-position.y;
@@ -1770,6 +1777,7 @@ export component MainWindow inherits Window {
     out property <length> overview-refresh-width: usage-chart.refresh-width;
     out property <length> overview-refresh-height: usage-chart.refresh-height;
     out property <bool> overview-refresh-enabled: usage-chart.refresh-enabled;
+    out property <bool> overview-chart-updated-at-visible: usage-chart.updated-at-visible;
     out property <length> request-refresh-x: request-refresh.absolute-position.x;
     out property <length> request-refresh-y: request-refresh.absolute-position.y;
     out property <length> request-refresh-width: request-refresh.width;
@@ -1858,6 +1866,9 @@ export component MainWindow inherits Window {
     out property <length> request-search-clear-height: request-search.clear-height;
     out property <bool> help-visible: help-scroll.visible;
     out property <string> help-terminology-text: help-terminology.text;
+    out property <string> help-credential-text: help-credential.text;
+    out property <string> help-cache-hit-text: help-cache-hit.text;
+    out property <string> help-first-token-text: help-first-token.text;
     out property <string> help-export-text: help-export.text;
     out property <string> help-troubleshoot-text: help-troubleshoot.text;
     out property <bool> quit-confirm-visible: root.confirm-quit;
@@ -2116,6 +2127,19 @@ export component MainWindow inherits Window {
         root.settings-changed();
         request-search-timer.start();
     }
+    // Every page's read time flows into the one footer label; the per-page
+    // seams stay as data but are no longer drawn. A later read replaces an
+    // earlier one, and an explicit last-update (the shell's overview stamp) is
+    // never rolled back by a page read.
+    public function note-page-read(at: string) {
+        if (!at.is-empty && (root.last-update == "—" || at > root.last-update)) {
+            root.last-update = at;
+        }
+    }
+    changed request-updated-at => { root.note-page-read(root.request-updated-at); }
+    changed log-updated-at => { root.note-page-read(root.log-updated-at); }
+    changed settings-updated-at => { root.note-page-read(root.settings-updated-at); }
+    changed overview-updated-at => { root.note-page-read(root.overview-updated-at); }
     changed log-period => { root.settings-changed(); }
     // Typing only starts the pause; the save and the query land once the user
     // stops, so a five-letter word writes desktop.json once instead of five
@@ -2994,7 +3018,6 @@ export component MainWindow inherits Window {
                         tooltip: root.request-chart-collapsed ? "查看图表" : "收起图表";
                         clicked => { request-analytics.toggle-chart(); }
                     }
-                    DataText { text: root.request-updated-at-label; vertical-alignment: center; }
                 }
                 request-analytics := RequestAnalytics {
                     width: 100%;
@@ -3060,7 +3083,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 request-list-header-at := Hint { text: "时间"; width: 96px; vertical-alignment: center; }
                                 request-list-header-model := Hint { text: "模型"; horizontal-stretch: 1; vertical-alignment: center; }
-                                request-list-header-first-token := Hint { text: "首字"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
+                                request-list-header-first-token := Hint { text: "首字耗时"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                                 request-list-header-outcome := Hint { text: "结果"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                             }
                             request-empty := VerticalLayout {
@@ -3290,12 +3313,6 @@ export component MainWindow inherits Window {
                     }
                     // The success acknowledgement is text, not only the glyph
                     // swap; it stays for the same 1.2 s as the check.
-                    log-refreshed-label := Hint {
-                        visible: root.log-refreshed;
-                        text: "已刷新";
-                        color: Theme.good-text;
-                        vertical-alignment: center;
-                    }
                     // Live follow stays next to the live layer it belongs to;
                     // pausing only stops the list from jumping, never the read.
                     log-follow := ActionButton {
@@ -3347,7 +3364,23 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                     Hint { visible: root.log-mode == 1 && !root.log-history-note.is-empty; text: root.log-history-note; vertical-alignment: center; }
-                    DataText { text: root.log-updated-at-label; vertical-alignment: center; }
+                    // The success acknowledgement keeps a fixed slot in the
+                    // status row, so showing 已刷新 never shifts the toolbar
+                    // icons to its right.
+                    Rectangle {
+                        width: 44px;
+                        height: 20px;
+                        background: transparent;
+                        log-refreshed-label := Hint {
+                            visible: root.log-refreshed;
+                            text: "已刷新";
+                            color: Theme.good-text;
+                            width: parent.width;
+                            height: parent.height;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                     log-earlier := ActionButton {
                         visible: root.log-mode == 1;
                         height: Theme.icon-button;
@@ -3455,7 +3488,6 @@ export component MainWindow inherits Window {
                             enabled: !root.refreshing;
                             clicked => { root.refresh-current-page(); }
                         }
-                        Hint { text: root.settings-updated-at-label; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                     }
                     appearance-card := Card {
@@ -3896,6 +3928,22 @@ export component MainWindow inherits Window {
                                 height: self.visible ? self.preferred-height : 0px;
                                 text: root.access-status;
                                 color: Theme.status_ink(root.access-tone);
+                            }
+                            Divider { }
+                            // ADR 0012 makes autostart an installer-owned
+                            // state. The App reports it and never writes the
+                            // registry Run key itself.
+                            autostart-row := SettingRow {
+                                label: "开机自启";
+                                Rectangle { horizontal-stretch: 1; }
+                                autostart-status := Tag {
+                                    label: "由安装器管理";
+                                    tone: 3;
+                                    cross-axis-self-alignment: center;
+                                }
+                            }
+                            autostart-hint := Hint {
+                                text: "自启项由安装器写入，App 不修改注册表 Run 键；当前构建未随附安装器。";
                             }
                         }
                     }
@@ -4461,6 +4509,9 @@ export component MainWindow inherits Window {
                             spacing: 9px;
                             SectionLabel { text: "术语"; }
                             help-terminology := Hint { text: "「本机网关」指控制台管理的本机网关服务（chat2api）；旧文案里的「UM 服务」「本实例网关」都指它。UM 是上游模型来源。"; }
+                            HorizontalLayout { spacing: 12px; DataText { text: "凭据"; width: 96px; } help-credential := Hint { text: "网关访问 UM 用的凭据（账号密码），保存在本机，供自动重登；不会写进日志。"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "缓存命中率"; width: 96px; } help-cache-hit := Hint { text: "缓存读取的 Token 占输入 Token 的比例；越高越省上游开销。"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "首字耗时"; width: 96px; } help-first-token := Hint { text: "从请求开始到首个输出 Token 的时间；越短首屏响应越快。"; horizontal-stretch: 1; } }
                         }
                     }
                     Card {

@@ -1619,6 +1619,79 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     );
 }
 
+#[test]
+fn the_footer_is_the_one_visible_time_source() {
+    let window = window_at(1060.0, 720.0);
+    assert!(
+        !window.get_overview_chart_updated_at_visible(),
+        "the overview chart header must not repeat 更新于"
+    );
+    window.set_request_updated_at("10:01:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 10:01:00",
+        "the footer follows the request page read time"
+    );
+    window.set_log_updated_at("10:02:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 10:02:00");
+    window.set_settings_updated_at("10:03:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 10:03:00");
+}
+
+#[test]
+fn the_request_list_header_names_first_token_duration() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_request_list_header_first_token_text(),
+        "首字耗时",
+        "the list header must use the same term as the detail, help and metric card"
+    );
+}
+
+#[test]
+fn settings_explains_that_the_installer_owns_autostart() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_autostart_status_text(), "由安装器管理");
+    assert!(
+        window.get_autostart_hint_text().contains("安装器"),
+        "the autostart state must name its owner: {}",
+        window.get_autostart_hint_text()
+    );
+    assert!(
+        window.get_autostart_hint_text().contains("不修改注册表"),
+        "the App must not claim it writes the Run key"
+    );
+}
+
+#[test]
+fn help_explains_credentials_cache_hit_and_first_token() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_help_credential_text().contains("凭据"),
+        "{}",
+        window.get_help_credential_text()
+    );
+    assert!(
+        window.get_help_cache_hit_text().contains("缓存"),
+        "{}",
+        window.get_help_cache_hit_text()
+    );
+    assert!(
+        window.get_help_first_token_text().contains("首个输出 Token"),
+        "{}",
+        window.get_help_first_token_text()
+    );
+}
+
 fn request_row(index: usize) -> RequestRow {
     RequestRow {
         id: format!("key-{index}").into(),
@@ -2291,12 +2364,24 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
 fn log_refresh_acknowledgement_expires() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
+    let follow_x = window.get_log_follow_x();
+    let settings_x = window.get_log_settings_x();
     window.set_log_refreshed(true);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert!(window.get_log_refreshed());
     assert!(
         window.get_log_refreshed_text_visible(),
         "the success is text, not only the glyph swap"
+    );
+    assert_eq!(
+        window.get_log_follow_x(),
+        follow_x,
+        "the fixed acknowledgement slot must not move 暂停跟随"
+    );
+    assert_eq!(
+        window.get_log_settings_x(),
+        settings_x,
+        "the fixed acknowledgement slot must not move 设置"
     );
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
     assert!(
