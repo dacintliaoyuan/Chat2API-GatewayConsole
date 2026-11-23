@@ -140,6 +140,9 @@ export component RequestAnalytics inherits Panel {
     in-out property <int> metric: 0;
     in-out property <bool> split-by-model: false;
     in property <bool> allow-motion: true;
+    // The wide page persists a manual disclosure choice; the compact card keeps
+    // its own in-card toggle and does not report through this callback.
+    callback chart-toggled(bool);
 
     out property <int> metric-index: root.metric;
     // The chart, the metric cards and the speed table share one disclosure
@@ -226,6 +229,7 @@ export component RequestAnalytics inherits Panel {
             root.details-open = !root.details-open;
         } else {
             root.wide-collapsed = !root.wide-collapsed;
+            root.chart-toggled(root.wide-collapsed);
         }
     }
     // Reads the table that is actually laid out at the current width.

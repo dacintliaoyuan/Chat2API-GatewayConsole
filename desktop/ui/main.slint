@@ -354,6 +354,13 @@ component MaintenanceItem inherits VerticalLayout {
     out property <length> cancel-y: cancel-button.absolute-position.y;
     out property <length> cancel-width: cancel-button.width;
     out property <length> cancel-height: cancel-button.height;
+    // The menu's focus trap reads these instead of walking the focus tree.
+    out property <bool> activate-focused: activate-button.has-focus;
+    out property <bool> confirm-focused: confirm-button.has-focus;
+    out property <bool> cancel-focused: cancel-button.has-focus;
+    public function focus-activate() { activate-button.take-focus(); }
+    public function focus-confirm() { confirm-button.take-focus(); }
+    public function focus-cancel() { cancel-button.take-focus(); }
     spacing: 6px;
     HorizontalLayout {
         spacing: 8px;
@@ -559,6 +566,16 @@ export component MainWindow inherits Window {
         Theme.motion = root.allow-motion;
         Theme.reduce-transparency = root.reduce-transparency;
         root.apply-chart-theme();
+        // Before the user makes a choice, a short viewport starts with the
+        // request analytics folded so the list gets the first screen.
+        root.request-chart-collapsed = root.height < 760px;
+    }
+    // A live resize keeps following the viewport until the user toggles the
+    // chart by hand; after that the saved choice is not overridden.
+    changed height => {
+        if (!root.request-chart-collapsed-explicit) {
+            root.request-chart-collapsed = root.height < 760px || root.request-result == 2;
+        }
     }
     changed allow-motion => {
         Theme.motion = root.allow-motion;
@@ -748,6 +765,103 @@ export component MainWindow inherits Window {
     out property <length> maintenance-menu-height: maintenance-menu.height;
     out property <bool> maintenance-menu-scrollable:
         maintenance-menu.height < maintenance-menu-content.preferred-height;
+    // The menu is a modal surface for the keyboard too. Opening moves focus into
+    // the first enabled action, Tab and Shift+Tab cycle inside the panel, and
+    // every close path returns focus to the 维护 button.
+    out property <bool> maintenance-toggle-focused: maintenance-toggle.has-focus;
+    out property <bool> maintenance-verify-focused: maintenance-verify.activate-focused;
+    out property <bool> maintenance-login-focused: maintenance-login.activate-focused;
+    out property <bool> maintenance-stop-focused: maintenance-stop.activate-focused;
+    out property <bool> maintenance-restart-focused: maintenance-restart.activate-focused;
+    out property <string> maintenance-announcement-text:
+        root.maintenance-menu-open ? "维护菜单已打开，Tab 在面板内循环，Esc 关闭" : "";
+    public function focus-maintenance-first() {
+        root.focus-maintenance-forward(1);
+    }
+    public function focus-maintenance-last() {
+        root.focus-maintenance-backward(15);
+    }
+    public function focus-maintenance-next() {
+        if (maintenance-close.has-focus) { root.focus-maintenance-first(); }
+        else if (maintenance-verify.activate-focused) { root.focus-maintenance-forward(2); }
+        else if (maintenance-verify.confirm-focused) { root.focus-maintenance-forward(3); }
+        else if (maintenance-verify.cancel-focused) { root.focus-maintenance-forward(4); }
+        else if (maintenance-login.activate-focused) { root.focus-maintenance-forward(5); }
+        else if (maintenance-login.confirm-focused) { root.focus-maintenance-forward(6); }
+        else if (maintenance-login.cancel-focused) { root.focus-maintenance-forward(7); }
+        else if (maintenance-start.activate-focused) { root.focus-maintenance-forward(8); }
+        else if (maintenance-start.confirm-focused) { root.focus-maintenance-forward(9); }
+        else if (maintenance-start.cancel-focused) { root.focus-maintenance-forward(10); }
+        else if (maintenance-stop.activate-focused) { root.focus-maintenance-forward(11); }
+        else if (maintenance-stop.confirm-focused) { root.focus-maintenance-forward(12); }
+        else if (maintenance-stop.cancel-focused) { root.focus-maintenance-forward(13); }
+        else if (maintenance-restart.activate-focused) {
+            if (root.maintenance-confirm == 4) { root.focus-maintenance-forward(14); }
+            else { root.focus-maintenance-first(); }
+        }
+        else if (maintenance-restart.confirm-focused) { root.focus-maintenance-forward(15); }
+        else if (maintenance-restart.cancel-focused) { root.focus-maintenance-first(); }
+        else { root.focus-maintenance-first(); }
+    }
+    public function focus-maintenance-previous() {
+        if (maintenance-close.has-focus) { root.focus-maintenance-last(); }
+        else if (maintenance-verify.activate-focused) { root.focus-maintenance-backward(0); }
+        else if (maintenance-verify.confirm-focused) { root.focus-maintenance-backward(1); }
+        else if (maintenance-verify.cancel-focused) { root.focus-maintenance-backward(2); }
+        else if (maintenance-login.activate-focused) { root.focus-maintenance-backward(3); }
+        else if (maintenance-login.confirm-focused) { root.focus-maintenance-backward(4); }
+        else if (maintenance-login.cancel-focused) { root.focus-maintenance-backward(5); }
+        else if (maintenance-start.activate-focused) { root.focus-maintenance-backward(6); }
+        else if (maintenance-start.confirm-focused) { root.focus-maintenance-backward(7); }
+        else if (maintenance-start.cancel-focused) { root.focus-maintenance-backward(8); }
+        else if (maintenance-stop.activate-focused) { root.focus-maintenance-backward(9); }
+        else if (maintenance-stop.confirm-focused) { root.focus-maintenance-backward(10); }
+        else if (maintenance-stop.cancel-focused) { root.focus-maintenance-backward(11); }
+        else if (maintenance-restart.activate-focused) { root.focus-maintenance-backward(12); }
+        else if (maintenance-restart.confirm-focused) { root.focus-maintenance-backward(13); }
+        else if (maintenance-restart.cancel-focused) { root.focus-maintenance-backward(14); }
+        else { root.focus-maintenance-last(); }
+    }
+    // `start` is the lowest slot the forward walk may visit. Closed or
+    // disabled controls are skipped, so the trap never lands on a dead control;
+    // past the last action it wraps to the first one.
+    public function focus-maintenance-forward(start: int) {
+        if (start <= 0) { maintenance-close.take-focus(); return; }
+        if (start <= 1 && root.maintenance-items[0].enabled) { maintenance-verify.focus-activate(); return; }
+        if (start <= 2 && root.maintenance-confirm == 0) { maintenance-verify.focus-confirm(); return; }
+        if (start <= 3 && root.maintenance-confirm == 0) { maintenance-verify.focus-cancel(); return; }
+        if (start <= 4 && root.maintenance-items[1].enabled) { maintenance-login.focus-activate(); return; }
+        if (start <= 5 && root.maintenance-confirm == 1) { maintenance-login.focus-confirm(); return; }
+        if (start <= 6 && root.maintenance-confirm == 1) { maintenance-login.focus-cancel(); return; }
+        if (start <= 7 && root.maintenance-items[2].enabled) { maintenance-start.focus-activate(); return; }
+        if (start <= 8 && root.maintenance-confirm == 2) { maintenance-start.focus-confirm(); return; }
+        if (start <= 9 && root.maintenance-confirm == 2) { maintenance-start.focus-cancel(); return; }
+        if (start <= 10 && root.maintenance-items[3].enabled) { maintenance-stop.focus-activate(); return; }
+        if (start <= 11 && root.maintenance-confirm == 3) { maintenance-stop.focus-confirm(); return; }
+        if (start <= 12 && root.maintenance-confirm == 3) { maintenance-stop.focus-cancel(); return; }
+        if (start <= 13 && root.maintenance-items[4].enabled) { maintenance-restart.focus-activate(); return; }
+        if (start <= 14 && root.maintenance-confirm == 4) { maintenance-restart.focus-confirm(); return; }
+        if (start <= 15 && root.maintenance-confirm == 4) { maintenance-restart.focus-cancel(); return; }
+        maintenance-close.take-focus();
+    }
+    public function focus-maintenance-backward(start: int) {
+        if (start >= 15 && root.maintenance-confirm == 4) { maintenance-restart.focus-cancel(); return; }
+        if (start >= 14 && root.maintenance-confirm == 4) { maintenance-restart.focus-confirm(); return; }
+        if (start >= 13 && root.maintenance-items[4].enabled) { maintenance-restart.focus-activate(); return; }
+        if (start >= 12 && root.maintenance-confirm == 3) { maintenance-stop.focus-cancel(); return; }
+        if (start >= 11 && root.maintenance-confirm == 3) { maintenance-stop.focus-confirm(); return; }
+        if (start >= 10 && root.maintenance-items[3].enabled) { maintenance-stop.focus-activate(); return; }
+        if (start >= 9 && root.maintenance-confirm == 2) { maintenance-start.focus-cancel(); return; }
+        if (start >= 8 && root.maintenance-confirm == 2) { maintenance-start.focus-confirm(); return; }
+        if (start >= 7 && root.maintenance-items[2].enabled) { maintenance-start.focus-activate(); return; }
+        if (start >= 6 && root.maintenance-confirm == 1) { maintenance-login.focus-cancel(); return; }
+        if (start >= 5 && root.maintenance-confirm == 1) { maintenance-login.focus-confirm(); return; }
+        if (start >= 4 && root.maintenance-items[1].enabled) { maintenance-login.focus-activate(); return; }
+        if (start >= 3 && root.maintenance-confirm == 0) { maintenance-verify.focus-cancel(); return; }
+        if (start >= 2 && root.maintenance-confirm == 0) { maintenance-verify.focus-confirm(); return; }
+        if (start >= 1 && root.maintenance-items[0].enabled) { maintenance-verify.focus-activate(); return; }
+        maintenance-close.take-focus();
+    }
     out property <bool> maintenance-records-area-visible:
         !root.maintenance-records-not-applicable;
     out property <length> maintenance-toggle-x: maintenance-toggle.absolute-position.x;
@@ -1027,7 +1141,16 @@ export component MainWindow inherits Window {
     in-out property <bool> request-split-by-model: false;
     // The wide request page folds the analytics card from the status row so the
     // request list can take the height; the compact page keeps its own toggle.
+    // The default follows the viewport height and the failure filter until the
+    // user makes a manual choice; that choice is saved in desktop.json.
     in-out property <bool> request-chart-collapsed: false;
+    in-out property <bool> request-chart-collapsed-explicit: false;
+    out property <bool> request-chart-collapsed-explicit-value:
+        root.request-chart-collapsed-explicit;
+    public function apply-auto-chart-collapse() {
+        root.request-chart-collapsed-explicit = false;
+        root.request-chart-collapsed = root.height < 760px || root.request-result == 2;
+    }
     out property <bool> request-chart-visible: request-analytics.expanded;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
@@ -1788,6 +1911,15 @@ export component MainWindow inherits Window {
             edit-account.take-focus();
         }
     }
+    // The visual overlay is a keyboard modal too: opening moves focus into the
+    // first enabled action, closing from anywhere returns it to 维护.
+    changed maintenance-menu-open => {
+        if (root.maintenance-menu-open) {
+            root.focus-maintenance-first();
+        } else {
+            maintenance-toggle.take-focus();
+        }
+    }
     changed log-version => {
         if (root.log-mode == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
@@ -2104,6 +2236,7 @@ export component MainWindow inherits Window {
                 if (root.maintenance-menu-open) {
                     root.maintenance-menu-open = false;
                     root.maintenance-confirm = -1;
+                    maintenance-toggle.take-focus();
                     return accept;
                 }
                 if (root.page == 2 && root.account-form-visible) { root.close-account-form(); return accept; }
@@ -2859,7 +2992,7 @@ export component MainWindow inherits Window {
                         icon: root.request-chart-collapsed ? "chevron-right" : "chevron-down";
                         quiet: true;
                         tooltip: root.request-chart-collapsed ? "查看图表" : "收起图表";
-                        clicked => { root.request-chart-collapsed = !root.request-chart-collapsed; }
+                        clicked => { request-analytics.toggle-chart(); }
                     }
                     DataText { text: root.request-updated-at-label; vertical-alignment: center; }
                 }
@@ -2881,6 +3014,13 @@ export component MainWindow inherits Window {
                     metric <=> root.request-metric;
                     split-by-model <=> root.request-split-by-model;
                     allow-motion: root.allow-motion;
+                    // A manual wide toggle is a saved choice; the status-row
+                    // toggle and the in-card summary share this one callback.
+                    chart-toggled(collapsed) => {
+                        root.request-chart-collapsed-explicit = true;
+                        root.request-chart-collapsed = collapsed;
+                        root.settings-changed();
+                    }
                 }
                 request-row := HorizontalLayout {
                     width: 100%;
@@ -4449,15 +4589,51 @@ export component MainWindow inherits Window {
             // Escape closes it, and the content scrolls when the window is small.
             maintenance-menu := Panel {
                 visible: root.maintenance-menu-open && root.page == 0;
+                // Slint 1.19 has no `dialog` accessible role; `groupbox` is the
+                // closest modal container role and the live-region text below
+                // announces the open state to assistive technology.
+                accessible-role: groupbox;
+                accessible-label: "维护菜单";
+                accessible-description: "模态面板，Tab 在面板内循环，Esc 关闭";
                 x: page-host.absolute-position.x + page-host.width - self.width - 8px;
                 y: maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px;
                 width: min(520px, page-host.width - 16px);
                 height: min(maintenance-menu-content.preferred-height, root.height - 56px);
                 z: 20;
+                // An always-instantiated, zero-height live region so the open
+                // and close transitions are announced even when the panel's
+                // visible subtree changes.
+                Text {
+                    height: 0px;
+                    text: root.maintenance-announcement-text;
+                    color: transparent;
+                    accessible-role: text;
+                    accessible-live-region: polite;
+                }
                 ScrollView {
                     width: parent.width;
                     height: parent.height;
                     content-width: self.visible-width;
+                    // A real focus trap: every control inside rejects Tab, so the
+                    // walk bubbles here and cycles inside the panel instead of
+                    // escaping to the page behind the overlay.
+                    maintenance-focus := FocusScope {
+                    width: parent.width;
+                    height: maintenance-menu-content.preferred-height;
+                    key-pressed(event) => {
+                        if (event.text == Key.Tab) {
+                            if (event.modifiers.shift) { root.focus-maintenance-previous(); }
+                            else { root.focus-maintenance-next(); }
+                            return accept;
+                        }
+                        if (event.text == Key.Escape) {
+                            root.maintenance-menu-open = false;
+                            root.maintenance-confirm = -1;
+                            maintenance-toggle.take-focus();
+                            return accept;
+                        }
+                        return reject;
+                    }
                     maintenance-menu-content := VerticalLayout {
                     width: parent.width;
                     padding: 12px;
@@ -4469,7 +4645,7 @@ export component MainWindow inherits Window {
                             horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
-                        ActionButton {
+                        maintenance-close := ActionButton {
                             label: "关闭维护菜单";
                             icon: "close";
                             icon-only: true;
@@ -4627,6 +4803,7 @@ export component MainWindow inherits Window {
                         text: "没有维护记录";
                     }
                 }
+            }
             }
             }
 }

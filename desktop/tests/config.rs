@@ -4,8 +4,8 @@ use std::sync::Once;
 use slint::ComponentHandle;
 use um_desktop::config::{
     apply_settings, apply_theme, config_path, load_from, load_from_with_warnings, model_api_bind,
-    parse_config, parse_config_with_warnings, save_to, save_window_settings, validate_port,
-    AutoRefresh, DesktopConfig, LoadOutcome, LogLevels, LogRange, MotionPreference,
+    parse_config, parse_config_with_warnings, save_to, save_window_settings, settings_from_window,
+    validate_port, AutoRefresh, DesktopConfig, LoadOutcome, LogLevels, LogRange, MotionPreference,
     RequestResult, Settings, SidebarMode, ThemeMode, TimeRange, DEFAULT_MODEL_API_PORT,
     MODEL_API_HOST,
 };
@@ -42,6 +42,7 @@ fn assert_default_settings(settings: &Settings) {
     assert_eq!(settings.sidebar, SidebarMode::Expanded);
     assert_eq!(settings.reduced_motion, MotionPreference::System);
     assert!(!settings.reduce_transparency);
+    assert_eq!(settings.request_chart_collapsed, None);
 }
 
 fn non_default_settings() -> Settings {
@@ -57,6 +58,7 @@ fn non_default_settings() -> Settings {
         sidebar: SidebarMode::IconsOnly,
         reduced_motion: MotionPreference::Reduced,
         reduce_transparency: true,
+        request_chart_collapsed: Some(true),
     }
 }
 
@@ -243,6 +245,7 @@ fn saving_writes_every_setting_to_desktop_json() {
     assert_eq!(body["sidebar"], "icons", "{text}");
     assert_eq!(body["reduced_motion"], "reduced", "{text}");
     assert_eq!(body["reduce_transparency"], true, "{text}");
+    assert_eq!(body["request_chart_collapsed"], true, "{text}");
 }
 
 #[test]
@@ -310,7 +313,8 @@ fn invalid_setting_values_fall_back_with_reasons() {
             "log_keyword":false,
             "sidebar":"hidden",
             "reduced_motion":"always",
-            "reduce_transparency":"yes"
+            "reduce_transparency":"yes",
+            "request_chart_collapsed":"auto"
         }"#,
     )
     .expect("invalid settings are warnings, not load failures");
@@ -327,6 +331,7 @@ fn invalid_setting_values_fall_back_with_reasons() {
         "sidebar",
         "reduced_motion",
         "reduce_transparency",
+        "request_chart_collapsed",
     ] {
         assert!(
             warnings.iter().any(|warning| warning.contains(field)),
@@ -354,6 +359,38 @@ fn save_then_load_keeps_every_setting() {
         LoadOutcome::Loaded(config) => assert_eq!(config.settings, settings),
         other => panic!("saved settings must load, got {other:?}"),
     }
+}
+
+#[test]
+fn a_manual_request_chart_choice_round_trips_through_desktop_json() {
+    let dir = TempDir::new("config-request-chart");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let first = window();
+    first.set_request_chart_collapsed_explicit(true);
+    first.set_request_chart_collapsed(false);
+    let captured = settings_from_window(&first);
+    assert_eq!(captured.request_chart_collapsed, Some(false));
+
+    let mut config = DesktopConfig {
+        settings: captured,
+        ..DesktopConfig::default()
+    };
+    save_window_settings(Some(&path), &mut config, &first).expect("save chart choice");
+    let (outcome, warnings) = load_from_with_warnings(&path);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let saved = match outcome {
+        LoadOutcome::Loaded(config) => config,
+        other => panic!("saved settings must load, got {other:?}"),
+    };
+    assert_eq!(saved.settings.request_chart_collapsed, Some(false));
+
+    let restored = window();
+    apply_settings(&restored, &saved, true);
+    assert!(restored.get_request_chart_collapsed_explicit());
+    assert!(
+        !restored.get_request_chart_collapsed(),
+        "the saved manual expand must beat the short-viewport default"
+    );
 }
 
 #[test]

@@ -458,6 +458,10 @@ pub struct Settings {
     pub sidebar: SidebarMode,
     pub reduced_motion: MotionPreference,
     pub reduce_transparency: bool,
+    /// The request page's manual chart disclosure choice. `None` means no
+    /// explicit choice yet, so the window follows its viewport height and the
+    /// failure filter.
+    pub request_chart_collapsed: Option<bool>,
 }
 
 /// The saved appearance choice. `System` follows the Windows app theme; the two
@@ -699,6 +703,16 @@ fn parse_settings(body: &Value) -> (Settings, Vec<String>) {
             None => warnings.push(invalid_setting("reduce_transparency", "布尔值", "false")),
         }
     }
+    if let Some(value) = body.get("request_chart_collapsed") {
+        match value.as_bool() {
+            Some(parsed) => settings.request_chart_collapsed = Some(parsed),
+            None => warnings.push(invalid_setting(
+                "request_chart_collapsed",
+                "布尔值",
+                "跟随窗口高度",
+            )),
+        }
+    }
 
     (settings, warnings)
 }
@@ -743,7 +757,7 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
         .ok_or_else(|| "配置路径没有父目录".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| format!("创建配置目录失败：{error}"))?;
     let settings = &config.settings;
-    let text = serde_json::to_string_pretty(&json!({
+    let mut body = json!({
         "version": CONFIG_VERSION,
         "model_api_port": config.model_api_port,
         "intro_dismissed": config.intro_dismissed,
@@ -759,8 +773,14 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
         "sidebar": settings.sidebar.key(),
         "reduced_motion": settings.reduced_motion.key(),
         "reduce_transparency": settings.reduce_transparency,
-    }))
-    .map_err(|error| format!("序列化配置失败：{error}"))?;
+    });
+    // An absent key means the window still follows its height; writing false
+    // would turn an auto default into a manual choice.
+    if let Some(collapsed) = settings.request_chart_collapsed {
+        body["request_chart_collapsed"] = json!(collapsed);
+    }
+    let text = serde_json::to_string_pretty(&body)
+        .map_err(|error| format!("序列化配置失败：{error}"))?;
     let temp = parent.join(format!(".desktop.json.{}.tmp", std::process::id()));
     std::fs::write(&temp, format!("{text}\n"))
         .map_err(|error| format!("写入临时配置失败：{error}"))?;
@@ -840,6 +860,13 @@ pub fn apply_settings(window: &MainWindow, config: &DesktopConfig, system_allows
     window.set_motion_mode(settings.reduced_motion.index());
     window.set_system_allows_motion(system_allows_motion);
     window.set_reduce_transparency(settings.reduce_transparency);
+    match settings.request_chart_collapsed {
+        Some(collapsed) => {
+            window.set_request_chart_collapsed_explicit(true);
+            window.set_request_chart_collapsed(collapsed);
+        }
+        None => window.invoke_apply_auto_chart_collapse(),
+    }
 }
 
 /// Reads the page settings that have a window control. Appearance choices that
@@ -859,6 +886,11 @@ pub fn settings_from_window(window: &MainWindow) -> Settings {
             window.get_log_level_debug(),
         ),
         log_keyword: window.get_log_filter_keyword().to_string(),
+        request_chart_collapsed: if window.get_request_chart_collapsed_explicit() {
+            Some(window.get_request_chart_collapsed())
+        } else {
+            None
+        },
         ..Settings::default()
     }
 }
@@ -879,6 +911,11 @@ pub fn save_window_settings(
     config.settings.log_range = captured.log_range;
     config.settings.log_level = captured.log_level;
     config.settings.log_keyword = captured.log_keyword;
+    // Only a manual chart choice replaces the saved one; an untouched window
+    // still follows its height and must not erase the previous choice.
+    if captured.request_chart_collapsed.is_some() {
+        config.settings.request_chart_collapsed = captured.request_chart_collapsed;
+    }
     persist(path, config, "设置已更新")
 }
 

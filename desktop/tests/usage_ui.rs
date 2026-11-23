@@ -548,6 +548,10 @@ fn the_empty_model_speed_hint_stays_inside_the_analytics_card() {
     let window = main_ui::MainWindow::new().expect("create MainWindow");
     main_ui::register_chart(&window);
     window.window().set_size(LogicalSize::new(1060.0, 720.0));
+    // The empty-hint seam only exists while the analytics card is expanded;
+    // make that manual choice before the viewport default folds it.
+    window.set_request_chart_collapsed_explicit(true);
+    window.set_request_chart_collapsed(false);
     window.set_page(1);
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
@@ -639,8 +643,28 @@ fn request_window() -> main_ui::MainWindow {
 #[test]
 fn the_wide_request_page_folds_the_chart_from_the_status_row() {
     let window = request_window();
+    // At 720 px the viewport default folds the chart, so the list owns the
+    // first screen before the user makes a manual choice.
+    assert!(!window.get_request_chart_visible());
+    let folded_list = window.get_request_list_height();
+    assert!(folded_list >= 240.0);
+
+    click(
+        &window,
+        window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
+        window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(window.get_request_chart_visible());
+    assert!(
+        window.get_request_chart_collapsed_explicit_value(),
+        "a manual toggle is a saved choice"
+    );
     let expanded_list = window.get_request_list_height();
+    assert!(
+        expanded_list < folded_list,
+        "the expanded analytics card takes height back from the list"
+    );
 
     click(
         &window,
@@ -653,19 +677,21 @@ fn the_wide_request_page_folds_the_chart_from_the_status_row() {
         window.get_request_analytics_height() < 160.0,
         "the folded analytics card stays one summary row"
     );
-    assert!(
-        window.get_request_list_height() > expanded_list,
-        "the request list takes the height back"
-    );
     assert!(window.get_request_list_height() >= 240.0);
+}
 
-    click(
-        &window,
-        window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
-        window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
-    );
+#[test]
+fn a_tall_request_window_starts_with_the_chart_expanded() {
+    let window = request_window();
+    window
+        .window()
+        .set_size(LogicalSize::new(1060.0, 900.0));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
-    assert!(window.get_request_chart_visible());
+    assert!(
+        window.get_request_chart_visible(),
+        "at 900 px the viewport leaves room for the analytics card"
+    );
+    assert!(!window.get_request_chart_collapsed_explicit_value());
 }
 
 #[test]
