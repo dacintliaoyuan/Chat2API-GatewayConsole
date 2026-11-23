@@ -437,7 +437,13 @@ fn the_refresh_button_asks_the_shell_for_a_strict_read() {
         move || refreshed.set(refreshed.get() + 1)
     });
     let x = window.get_um_model_refresh_x() + window.get_um_model_refresh_width() / 2.0;
-    let y = window.get_um_model_refresh_y() + window.get_um_model_refresh_height() / 2.0;
+    let mut y = window.get_um_model_refresh_y() + window.get_um_model_refresh_height() / 2.0;
+    if y > window.get_window_height() {
+        // The settings page now carries the ADR 0012 autostart row; bring the
+        // model card's refresh action into view before clicking it.
+        scroll(&window, 500.0, 600.0, -200.0);
+        y = window.get_um_model_refresh_y() + window.get_um_model_refresh_height() / 2.0;
+    }
     click(&window, x, y);
     assert_eq!(refreshed.get(), 1);
     assert!(window.get_um_model_refresh_enabled());

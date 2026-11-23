@@ -498,6 +498,76 @@ fn press_escape(window: &MainWindow) {
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 }
 
+fn press(window: &MainWindow, key: slint::platform::Key) {
+    let text: slint::SharedString = key.into();
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+}
+
+#[test]
+fn opening_the_menu_focuses_the_first_action_and_escape_returns_to_the_toggle() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    assert!(
+        window.get_maintenance_verify_focused(),
+        "opening the modal menu moves focus into its first enabled action"
+    );
+    assert!(!window.get_maintenance_toggle_focused());
+
+    press_escape(&window);
+    assert!(!window.get_maintenance_menu_visible());
+    assert!(
+        window.get_maintenance_toggle_focused(),
+        "Escape closes the menu and returns focus to 维护"
+    );
+
+    open_maintenance_menu(&window);
+    click(&window, 5.0, 400.0);
+    assert!(!window.get_maintenance_menu_visible());
+    assert!(
+        window.get_maintenance_toggle_focused(),
+        "an outside click closes the menu and returns focus to 维护"
+    );
+}
+
+#[test]
+fn tab_cycles_inside_the_maintenance_panel() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    assert!(window.get_maintenance_verify_focused());
+
+    press(&window, slint::platform::Key::Tab);
+    assert!(
+        window.get_maintenance_login_focused(),
+        "Tab moves to the next enabled action, not out of the panel"
+    );
+    press(&window, slint::platform::Key::Tab);
+    assert!(window.get_maintenance_stop_focused());
+    press(&window, slint::platform::Key::Tab);
+    assert!(window.get_maintenance_restart_focused());
+    press(&window, slint::platform::Key::Tab);
+    assert!(
+        window.get_maintenance_verify_focused(),
+        "Tab from the last action wraps to the first"
+    );
+
+    window.invoke_focus_maintenance_last();
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert!(window.get_maintenance_restart_focused());
+    press_escape(&window);
+    assert!(!window.get_maintenance_menu_visible());
+    assert!(window.get_maintenance_toggle_focused());
+}
+
 #[test]
 fn escape_and_an_outside_click_close_the_maintenance_menu() {
     let window = window();

@@ -140,6 +140,9 @@ export component RequestAnalytics inherits Panel {
     in-out property <int> metric: 0;
     in-out property <bool> split-by-model: false;
     in property <bool> allow-motion: true;
+    // The wide page persists a manual disclosure choice; the compact card keeps
+    // its own in-card toggle and does not report through this callback.
+    callback chart-toggled(bool);
 
     out property <int> metric-index: root.metric;
     // The chart, the metric cards and the speed table share one disclosure
@@ -149,6 +152,11 @@ export component RequestAnalytics inherits Panel {
     out property <bool> split: root.split-by-model;
     out property <string> metric-label: root.metric == 1 ? "请求数"
         : root.metric == 2 ? "输出速度" : "Token";
+    // The subtitle names the unit the selected metric plots, so switching the
+    // metric never leaves 亿 on a request-count or speed chart.
+    out property <string> metric-unit-text: root.metric == 1 ? "所选范围 · 单位：次"
+        : root.metric == 2 ? "所选范围 · 单位：Token/秒"
+        : "所选范围 · 单位：亿";
     out property <[float]> plotted-values: root.metric == 1 ? root.request-counts
         : root.metric == 2 ? root.speed-counts : root.token-counts;
     out property <int> series-count: !root.split-by-model ? 1
@@ -221,6 +229,7 @@ export component RequestAnalytics inherits Panel {
             root.details-open = !root.details-open;
         } else {
             root.wide-collapsed = !root.wide-collapsed;
+            root.chart-toggled(root.wide-collapsed);
         }
     }
     // Reads the table that is actually laid out at the current width.
@@ -318,7 +327,7 @@ export component RequestAnalytics inherits Panel {
             height: root.expanded ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
-            Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
+            Hint { text: root.metric-unit-text; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
                 visible: root.expanded;
@@ -459,6 +468,9 @@ export component UsageChart inherits Panel {
     in property <bool> refreshing: false;
     in property <angle> refresh-rotation: 0deg;
     in property <string> updated-at: "—";
+    // The page footer is the one visible 更新于 source; the chart keeps the read
+    // time as a data seam without drawing a second label.
+    out property <bool> updated-at-visible: false;
     callback refresh();
     callback period-changed(int);
     private property <int> auto-refresh-index: 0;
@@ -646,11 +658,6 @@ export component UsageChart inherits Panel {
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
                         }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
                         VerticalLayout {
                             alignment: end;
                             spacing: 2px;
@@ -707,11 +714,6 @@ export component UsageChart inherits Panel {
                             label: "用量指标";
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
-                        }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
                         }
                     }
                 }
