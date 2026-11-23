@@ -231,6 +231,13 @@ export component FocusAction inherits Rectangle {
     // and the same text is exposed to assistive technology.
     in property <string> tooltip: "";
     out property <bool> has-focus: focus.has-focus;
+    // Test seams: a quiet button keeps a 1 px transparent frame so keyboard
+    // focus can step it up to the 3:1 control edge instead of relying on the
+    // ~1.1:1 hover fill alone.
+    out property <color> focus-ring-color: root.border-color;
+    out property <length> focus-ring-width: root.border-width;
+    out property <bool> focus-visible:
+        focus.has-focus && root.border-color == Theme.edge-control-strong;
     callback clicked();
     public function take-focus() { focus.focus(); }
     height: Theme.control-height;
@@ -241,8 +248,15 @@ export component FocusAction inherits Rectangle {
         : root.primary ? (pointer.pressed || pointer.has-hover || focus.has-focus ? Theme.accent-strong : Theme.accent)
         : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
         : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
-    border-width: root.quiet || root.link ? 0px : 1px;
-    border-color: root.danger ? Theme.bad : root.primary ? Theme.accent : focus.has-focus ? Theme.edge-strong : Theme.edge;
+    // Quiet and link actions keep the transparent frame at rest so their focus
+    // border never shifts the text by a pixel.
+    border-width: 1px;
+    border-color: root.quiet || root.link
+        ? (focus.has-focus ? Theme.edge-control-strong : transparent)
+        : root.danger ? Theme.bad
+        : root.primary ? Theme.accent
+        : focus.has-focus ? Theme.edge-control-strong
+        : Theme.edge;
     opacity: root.enabled ? 1 : 0.55;
     animate background { duration: Theme.quick; easing: ease-in-out; }
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
@@ -676,7 +690,9 @@ export component Toggle inherits Rectangle {
             border-radius: 4px;
             background: root.checked ? Theme.accent : focus.has-focus ? Theme.field-strong : Theme.field;
             border-width: 1px;
-            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-strong : pointer.has-hover ? Theme.edge-strong : Theme.edge;
+            // Keyboard focus uses the control-strength edge (3:1); the old
+            // edge-strong sat at about 2.1:1 on the page.
+            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-control-strong : pointer.has-hover ? Theme.edge-control-strong : Theme.edge;
             animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
             AppIcon {
                 x: (parent.width - self.width) / 2;
@@ -733,7 +749,12 @@ export component NavItem inherits Rectangle {
     background: root.selected ? Theme.rail-selected
         : keyboard.has-focus ? Theme.rail-hover
         : pointer.has-hover ? Theme.rail-hover : transparent;
+    // A selected item keeps its accent-soft fill, so keyboard focus needs its
+    // own neutral 3:1 edge instead of relying on the fill step.
+    border-width: 1px;
+    border-color: keyboard.has-focus ? Theme.edge-control-strong : transparent;
     animate background { duration: Theme.quick; easing: ease-in-out; }
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
     keyboard := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {

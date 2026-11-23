@@ -1550,10 +1550,15 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     let settings = Rc::clone(&calls);
     window.on_refresh_settings(move || settings.borrow_mut().push("settings"));
 
+    window.set_overview_updated_seq(1);
     window.set_overview_updated_at("10:00:00".into());
+    window.set_request_updated_seq(2);
     window.set_request_updated_at("10:01:00".into());
+    window.set_log_updated_seq(3);
     window.set_log_updated_at("10:02:00".into());
+    window.set_settings_updated_seq(4);
     window.set_settings_updated_at("10:03:00".into());
+    window.set_last_update_seq(5);
     window.set_last_update("10:04:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(window.get_overview_updated_at_label(), "10:00:00");
@@ -1630,6 +1635,47 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
         !window.get_page_refresh_visible(),
         "the static help page has no data read to refresh"
     );
+    assert!(
+        !window.get_footer_time_visible(),
+        "the static help page must not carry an 更新于 stamp"
+    );
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_footer_time_visible(),
+        "the data pages keep the one footer read time"
+    );
+}
+
+#[test]
+fn quiet_request_actions_show_keyboard_focus_on_a_three_to_one_edge() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let idle = window.get_request_fail_toggle_focus_ring_color();
+    assert_eq!(
+        window.get_request_fail_toggle_focus_ring_width(),
+        1.0,
+        "a quiet action keeps a transparent frame so focus never shifts the row"
+    );
+    window.invoke_focus_request_fail_toggle();
+    // The border colour animates for 120 ms; read it after that step so the
+    // focus ring is the settled control edge, not its transparent start.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        window.get_request_fail_toggle_has_focus(),
+        "the quiet action takes keyboard focus"
+    );
+    assert!(
+        window.get_request_fail_toggle_focus_visible(),
+        "the quiet action must show keyboard focus"
+    );
+    assert_eq!(window.get_request_fail_toggle_focus_ring_width(), 1.0);
+    assert_ne!(
+        window.get_request_fail_toggle_focus_ring_color(),
+        idle,
+        "focus must step the frame edge, not only the ~1.1:1 fill"
+    );
 }
 
 #[test]
@@ -1639,6 +1685,7 @@ fn the_footer_is_the_one_visible_time_source() {
         !window.get_overview_chart_updated_at_visible(),
         "the overview chart header must not repeat 更新于"
     );
+    window.set_request_updated_seq(1);
     window.set_request_updated_at("10:01:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(
@@ -1646,12 +1693,51 @@ fn the_footer_is_the_one_visible_time_source() {
         "更新于 10:01:00",
         "the footer follows the request page read time"
     );
+    window.set_log_updated_seq(2);
     window.set_log_updated_at("10:02:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(window.get_last_update_label(), "更新于 10:02:00");
+    window.set_settings_updated_seq(3);
     window.set_settings_updated_at("10:03:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(window.get_last_update_label(), "更新于 10:03:00");
+}
+
+#[test]
+fn the_footer_time_survives_midnight_with_a_monotonic_read_stamp() {
+    let window = window_at(1060.0, 720.0);
+    window.set_overview_updated_seq(1);
+    window.set_overview_updated_at("23:59:59".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 23:59:59");
+
+    // The next read is after midnight: 00:00:01 sorts before 23:59:59 as a
+    // string, so the footer must follow the monotonic stamp instead.
+    window.set_request_updated_seq(2);
+    window.set_request_updated_at("00:00:01".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 00:00:01",
+        "a read after midnight must replace the previous day's time"
+    );
+}
+
+#[test]
+fn the_query_and_export_actions_use_search_and_download_glyphs() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_request_query_icon(),
+        "search",
+        "查询 is a search action, not a forward arrow"
+    );
+    assert_eq!(
+        window.get_request_export_icon(),
+        "download",
+        "导出 CSV is a download, not a forward arrow"
+    );
 }
 
 #[test]

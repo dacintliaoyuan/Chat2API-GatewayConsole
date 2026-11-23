@@ -269,6 +269,44 @@ fn the_metric_switch_sits_in_the_chart_card_and_switches_the_plot() {
 }
 
 #[test]
+fn auto_refresh_choices_live_in_one_chart_settings_popover() {
+    let chart = chart();
+    assert!(
+        !chart.get_usage_settings_open_value(),
+        "the five cadence options stay closed by default"
+    );
+    click(
+        &chart,
+        chart.get_usage_settings_toggle_x() + chart.get_usage_settings_toggle_width() / 2.0,
+        chart.get_usage_settings_toggle_y() + chart.get_usage_settings_toggle_height() / 2.0,
+    );
+    assert!(
+        chart.get_usage_settings_open_value(),
+        "图表设置 opens the one popover"
+    );
+    assert_eq!(
+        chart.get_usage_settings_auto_refresh_index(),
+        0,
+        "5 秒 stays the default cadence"
+    );
+    assert!(
+        chart.get_usage_settings_panel_width() >= 200.0
+            && chart.get_usage_settings_panel_height() > 0.0,
+        "the popover holds the five cadence options"
+    );
+    click_segment(
+        &chart,
+        chart.get_usage_settings_auto_refresh_x(),
+        chart.get_usage_settings_auto_refresh_y(),
+        chart.get_usage_settings_auto_refresh_width(),
+        1,
+        5,
+    );
+    assert_eq!(chart.get_auto_refresh(), 15);
+    assert_eq!(chart.get_usage_settings_auto_refresh_index(), 1);
+}
+
+#[test]
 fn the_plot_fills_the_chart_card_without_a_blank_band() {
     let chart = chart();
     let chart_y = chart.get_overview_chart_absolute_y();
@@ -573,19 +611,35 @@ fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
         "the compact KPI row keeps all five cards in 2+2+1 order"
     );
     assert!(
-        window.get_request_analytics_height() > 160.0,
-        "the folded analytics card keeps the five metric cards"
+        window.get_request_analytics_height() >= 110.0,
+        "the folded analytics card keeps the five KPI numbers in one summary row"
     );
     assert!(
         window.get_request_analytics_y() + window.get_request_analytics_height()
             < window.get_request_list_y(),
         "the request list starts below the folded KPI row"
     );
+    let first_row_bottom = window.get_request_rows_y() + 50.0;
+    let footer_top = 420.0 - window.get_footer_height();
+    assert!(
+        first_row_bottom <= footer_top + 1.0,
+        "the 540×420 first screen must show a request row: row bottom={first_row_bottom} footer top={footer_top}"
+    );
+    assert_eq!(
+        window.get_request_chart_toggle_label().as_str(),
+        "查看图表",
+        "the folded compact card offers the chart"
+    );
     let folded_height = window.get_request_analytics_height();
 
     window.invoke_toggle_request_chart();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert!(window.get_request_details_open());
+    assert_eq!(
+        window.get_request_chart_toggle_label().as_str(),
+        "收起图表",
+        "the compact toggle follows the disclosure it controls"
+    );
     assert!(
         window.get_request_analytics_height() > folded_height,
         "the expanded analytics card brings the chart back"
@@ -775,6 +829,10 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_chart_visible());
     assert!(
+        window.get_request_fail_toggle_visible(),
+        "with a request row the failure filter stays available"
+    );
+    assert!(
         window.get_request_kpi_visible(),
         "the failure filter folds only the chart"
     );
@@ -804,6 +862,10 @@ fn an_unfiltered_empty_request_list_leaves_the_copy_to_the_status_row() {
         "the list header must not repeat the status row's copy"
     );
     assert!(!window.get_request_empty_title_visible());
+    assert!(
+        !window.get_request_fail_toggle_visible(),
+        "the empty state must not offer 只看失败"
+    );
 }
 
 #[test]

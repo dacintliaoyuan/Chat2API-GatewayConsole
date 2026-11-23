@@ -69,6 +69,9 @@ static LOGIN_ROUNDS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+// One monotonic stamp per page read; the footer compares it instead of
+// ordering HH:MM:SS strings, so a read after midnight still wins.
+static PAGE_READ_SEQ: AtomicI32 = AtomicI32::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// One log-page update produced by the reader thread.
@@ -145,6 +148,10 @@ fn clock(at: Option<i64>) -> String {
 
 fn clock_now() -> String {
     clock(Some(chrono::Local::now().timestamp_millis()))
+}
+
+fn next_page_read_seq() -> i32 {
+    PAGE_READ_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
 fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved: &LoadOutcome) {
@@ -282,6 +289,7 @@ fn apply_overview(window: &MainWindow, overview: &Overview, account: &AccountVie
     window.set_status_tone(if overview.failures.is_empty() { 0 } else { 2 });
     if overview.failures.is_empty() {
         let now = clock_now();
+        window.set_last_update_seq(next_page_read_seq());
         window.set_last_update(now.clone().into());
         window.set_overview_updated_at(now.into());
     }
@@ -373,9 +381,9 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     let status = if total == 0 {
         "本实例暂无日志记录".to_string()
     } else if visible == total {
-        format!("实时 · 最近 {total} 条")
+        format!("已连接 · 最近 {total} 条")
     } else {
-        format!("实时 · 显示 {visible} / {total} 条")
+        format!("已连接 · 显示 {visible} / {total} 条")
     };
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
@@ -387,6 +395,7 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     });
     window.set_log_history_note("".into());
     window.set_log_version(window.get_log_version().wrapping_add(1));
+    window.set_log_updated_seq(next_page_read_seq());
     window.set_log_updated_at(clock_now().into());
 }
 
@@ -544,7 +553,7 @@ fn load_log_history(
                             };
                             view.tone = Tone::Neutral;
                         } else if !query.keyword.trim().is_empty() {
-                            view.status = format!("历史 · 本页 {} 条", view.rows.len());
+                            view.status = format!("本页 {} 条", view.rows.len());
                             view.tone = Tone::Good;
                         }
                         let rows = if append {
@@ -570,7 +579,7 @@ fn load_log_history(
                         });
                         window.set_log_status(
                             if append {
-                                format!("历史 · 已加载 {} 条", rows.len())
+                                format!("已加载 {} 条", rows.len())
                             } else {
                                 view.status.clone()
                             }
@@ -578,6 +587,7 @@ fn load_log_history(
                         );
                         window.set_log_tone(status_tone(view.tone));
                         window.set_log_total(rows.len() as i32);
+                        window.set_log_updated_seq(next_page_read_seq());
                         window.set_log_updated_at(clock_now().into());
                         window.set_log_version(window.get_log_version().wrapping_add(1));
                     }
@@ -668,6 +678,7 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
     window.set_usage_tone(coverage_tone(view.coverage));
     window.set_usage_loading(false);
     if view.coverage != Coverage::Unavailable {
+        window.set_overview_updated_seq(next_page_read_seq());
         window.set_overview_updated_at(clock_now().into());
     }
 }
@@ -773,6 +784,7 @@ fn apply_request_page(
     window.set_request_tone(coverage_tone(page.coverage));
     window.set_older_requests(page.earlier.is_some());
     if page.coverage != Coverage::Unavailable {
+        window.set_request_updated_seq(next_page_read_seq());
         window.set_request_updated_at(clock_now().into());
     }
 }
@@ -948,6 +960,7 @@ fn load_requests(
                                 .into(),
                         );
                         window.set_request_tone(0);
+                        window.set_request_updated_seq(next_page_read_seq());
                         window.set_request_updated_at(clock_now().into());
                     }
                     usage::EarlierOutcome::NoMore => {
@@ -2478,6 +2491,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         apply_overview(&window, &overview, &account);
                         window.set_settings_status("已重新检查网关与账号状态".into());
                         window.set_settings_tone(status_tone(Tone::Good));
+                        window.set_settings_updated_seq(next_page_read_seq());
                         window.set_settings_updated_at(clock_now().into());
                     } else {
                         window.set_settings_status(

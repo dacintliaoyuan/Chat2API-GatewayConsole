@@ -250,7 +250,7 @@ pub fn logs_status(view: &LogsView) -> (String, Tone) {
             ("暂无日志记录（本实例）".to_string(), Tone::Warn)
         }
         LogsView::Loaded(rows) => (
-            format!("最近 {} 条 · 本实例运行日志 · 实时增量", rows.len()),
+            format!("最近 {} 条", rows.len()),
             Tone::Good,
         ),
         LogsView::Failed(reason) => (format!("日志读取失败：{reason}"), Tone::Bad),
