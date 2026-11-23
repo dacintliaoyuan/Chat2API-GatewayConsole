@@ -340,6 +340,41 @@ fn request_row(index: usize) -> main_ui::RequestRow {
     }
 }
 
+fn metric_cards() -> Vec<main_ui::RequestMetric> {
+    vec![
+        main_ui::RequestMetric {
+            label: "Token".into(),
+            value: "1,400".into(),
+            detail: "输入 700 · 输出 700".into(),
+            detail_tone: 3,
+        },
+        main_ui::RequestMetric {
+            label: "请求".into(),
+            value: "70".into(),
+            detail: "失败 0".into(),
+            detail_tone: 3,
+        },
+        main_ui::RequestMetric {
+            label: "缓存命中率".into(),
+            value: "20.0%".into(),
+            detail: "缓存读取 / 输入 Token".into(),
+            detail_tone: 3,
+        },
+        main_ui::RequestMetric {
+            label: "输出速度".into(),
+            value: "10.0 Token/秒".into(),
+            detail: "Token/秒 · 整次平均".into(),
+            detail_tone: 3,
+        },
+        main_ui::RequestMetric {
+            label: "首字耗时".into(),
+            value: "120 ms".into(),
+            detail: "请求开始到首个输出".into(),
+            detail_tone: 3,
+        },
+    ]
+}
+
 #[test]
 fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
     init_backend();
@@ -424,6 +459,11 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
 
     assert_eq!(window.get_request_metrics().row_count(), 5);
+    assert!(
+        window.get_request_kpi_visible(),
+        "the five metric cards are part of the analytics card"
+    );
+    assert_eq!(window.get_request_kpi_count(), 5);
     assert_eq!(
         window
             .get_request_metrics()
@@ -515,29 +555,37 @@ fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
     main_ui::register_chart(&window);
     window.window().set_size(LogicalSize::new(540.0, 420.0));
     window.set_page(1);
+    let metrics = metric_cards();
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
     window.show().expect("show MainWindow");
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
 
     assert!(!window.get_request_details_open());
     assert!(
-        window.get_request_analytics_height() < 160.0,
-        "the folded analytics card stays one summary row"
+        window.get_request_kpi_visible(),
+        "the KPI row stays visible while the chart is folded"
+    );
+    assert_eq!(
+        window.get_request_kpi_count(),
+        5,
+        "the compact KPI row keeps all five cards in 2+2+1 order"
+    );
+    assert!(
+        window.get_request_analytics_height() > 160.0,
+        "the folded analytics card keeps the five metric cards"
     );
     assert!(
         window.get_request_analytics_y() + window.get_request_analytics_height()
             < window.get_request_list_y(),
-        "the request list starts below the folded summary"
+        "the request list starts below the folded KPI row"
     );
+    let folded_height = window.get_request_analytics_height();
 
-    click(
-        &window,
-        window.get_request_details_toggle_x() + window.get_request_details_toggle_width() / 2.0,
-        window.get_request_details_toggle_y() + window.get_request_details_toggle_height() / 2.0,
-    );
+    window.invoke_toggle_request_chart();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
     assert!(window.get_request_details_open());
     assert!(
-        window.get_request_analytics_height() > 160.0,
+        window.get_request_analytics_height() > folded_height,
         "the expanded analytics card brings the chart back"
     );
 }
@@ -643,9 +691,21 @@ fn request_window() -> main_ui::MainWindow {
 #[test]
 fn the_wide_request_page_folds_the_chart_from_the_status_row() {
     let window = request_window();
+    let metrics = metric_cards();
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     // At 720 px the viewport default folds the chart, so the list owns the
     // first screen before the user makes a manual choice.
     assert!(!window.get_request_chart_visible());
+    assert!(
+        window.get_request_kpi_visible(),
+        "folding the chart never removes the KPI row"
+    );
+    assert_eq!(window.get_request_kpi_count(), 5);
+    assert!(
+        window.get_request_analytics_height() > 120.0,
+        "the folded analytics card still draws the five metric cards"
+    );
     let folded_list = window.get_request_list_height();
     assert!(folded_list >= 240.0);
 
@@ -674,8 +734,12 @@ fn the_wide_request_page_folds_the_chart_from_the_status_row() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_chart_visible());
     assert!(
-        window.get_request_analytics_height() < 160.0,
-        "the folded analytics card stays one summary row"
+        window.get_request_kpi_visible(),
+        "folding the chart never removes the KPI row"
+    );
+    assert!(
+        window.get_request_analytics_height() > 120.0,
+        "the folded analytics card still draws the five metric cards"
     );
     assert!(window.get_request_list_height() >= 240.0);
 }
@@ -700,6 +764,10 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
     window.set_request_result(2);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert!(!window.get_request_chart_visible());
+    assert!(
+        window.get_request_kpi_visible(),
+        "the failure filter folds only the chart"
+    );
     assert!(window.get_request_list_height() >= 240.0);
     assert_eq!(
         window.get_request_fail_toggle_text(),
@@ -763,6 +831,10 @@ fn the_one_key_failure_filter_folds_the_chart_and_toggles_back() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
     assert_eq!(window.get_request_result(), 2);
     assert!(!window.get_request_chart_visible());
+    assert!(
+        window.get_request_kpi_visible(),
+        "the failure filter folds only the chart"
+    );
     assert!(window.get_request_list_height() >= 240.0);
     window.invoke_toggle_request_failures();
     assert_eq!(window.get_request_result(), 0);
@@ -805,4 +877,25 @@ fn the_request_chart_shows_a_visible_keyboard_focus() {
         window.get_request_chart_focused(),
         "the request chart must show focus like the usage chart"
     );
+}
+
+#[test]
+fn the_usage_chart_shows_a_visible_keyboard_focus_and_starts_on_the_first_bucket() {
+    let window = chart();
+    assert!(
+        !window.get_usage_chart_focused(),
+        "the chart is not focused before Tab reaches it"
+    );
+    assert_eq!(
+        window.get_usage_chart_key_index(),
+        0,
+        "the keyboard cursor starts on the first bucket"
+    );
+    window.invoke_focus_usage_chart();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(
+        window.get_usage_chart_focused(),
+        "the usage chart must draw a visible focus border"
+    );
+    assert_eq!(window.get_usage_active_index(), 0);
 }

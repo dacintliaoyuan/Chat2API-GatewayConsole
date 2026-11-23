@@ -566,15 +566,24 @@ export component MainWindow inherits Window {
         Theme.motion = root.allow-motion;
         Theme.reduce-transparency = root.reduce-transparency;
         root.apply-chart-theme();
-        // Before the user makes a choice, a short viewport starts with the
-        // request analytics folded so the list gets the first screen.
-        root.request-chart-collapsed = root.height < 760px;
+        // Before the user makes a choice, the safe default folds the chart
+        // until the layout measures how much height the list keeps.
+        root.request-chart-collapsed = true;
     }
-    // A live resize keeps following the viewport until the user toggles the
-    // chart by hand; after that the saved choice is not overridden.
+    // A live resize keeps following the measured list height until the user
+    // toggles the chart by hand; after that the saved choice is not overridden.
+    changed request-list-available-height => {
+        if (!root.request-chart-collapsed-explicit) {
+            root.request-chart-collapsed =
+                root.request-list-available-height < 240px
+                || root.request-result == 2;
+        }
+    }
     changed height => {
         if (!root.request-chart-collapsed-explicit) {
-            root.request-chart-collapsed = root.height < 760px || root.request-result == 2;
+            root.request-chart-collapsed =
+                root.request-list-available-height < 240px
+                || root.request-result == 2;
         }
     }
     changed allow-motion => {
@@ -714,6 +723,9 @@ export component MainWindow inherits Window {
     // concrete reason a closed action shows. The first click only arms the
     // shared confirmation; only its confirm button runs the action.
     in-out property <bool> maintenance-menu-open: false;
+    // A close caused by navigation still owes the focus back to 维护, but only
+    // while that button is on screen.
+    private property <bool> maintenance-return-focus: false;
     in property <[MaintenanceRow]> maintenance-items: [
         { action: 0, label: "", impact: "", enabled: false,
             reason: "维护菜单尚未读取", confirm-title: "", confirm-body: "",
@@ -763,6 +775,10 @@ export component MainWindow inherits Window {
     out property <bool> maintenance-restart-enabled: root.maintenance-items[4].enabled;
     out property <bool> maintenance-menu-visible: maintenance-menu.visible;
     out property <length> maintenance-menu-height: maintenance-menu.height;
+    out property <length> maintenance-menu-y: maintenance-menu.y;
+    out property <length> overview-state-card-y: state-card.absolute-position.y;
+    out property <length> overview-state-card-bottom:
+        state-card.absolute-position.y + state-card.height;
     out property <bool> maintenance-menu-scrollable:
         maintenance-menu.height < maintenance-menu-content.preferred-height;
     // The menu is a modal surface for the keyboard too. Opening moves focus into
@@ -1063,10 +1079,6 @@ export component MainWindow inherits Window {
 
     in property <string> log-status: "尚未读取日志";
     in property <int> log-tone: 3;
-    // The manual refresh acknowledges itself twice: the status line says it is
-    // refreshing, then the button shows 已刷新 for 1.2 s after the read lands.
-    in-out property <bool> log-refreshed: false;
-    in-out property <bool> log-refresh-pending: false;
     in property <[LogRow]> logs: [];
     // The log page has two layers. `log-mode` 0 tails the instance's own file;
     // 1 reads the gateway's bounded server-side history. The history filters
@@ -1131,7 +1143,6 @@ export component MainWindow inherits Window {
     in property <string> request-detail;
     in-out property <length> request-scroll-y: 0px;
     in property <[RequestMetric]> request-metrics;
-    in property <string> request-summary: "";
     in property <[string]> request-chart-labels;
     in property <[float]> request-chart-token-counts;
     in property <[float]> request-chart-request-counts;
@@ -1150,13 +1161,29 @@ export component MainWindow inherits Window {
     in-out property <bool> request-chart-collapsed-explicit: false;
     out property <bool> request-chart-collapsed-explicit-value:
         root.request-chart-collapsed-explicit;
+    // The fold decision reads the height the request list would keep with the
+    // chart open, not the window height: filters, status row and the expanded
+    // analytics card come off the viewport first.
+    out property <length> request-list-available-height:
+        max(0px, request-scroll.visible-height
+            - request-filters.height
+            - request-status-row.height
+            - request-analytics.expanded-height
+            - 24px);
     public function apply-auto-chart-collapse() {
         root.request-chart-collapsed-explicit = false;
-        root.request-chart-collapsed = root.height < 760px || root.request-result == 2;
+        root.request-chart-collapsed =
+            root.request-list-available-height < 240px
+            || root.request-result == 2;
     }
     out property <bool> request-chart-visible: request-analytics.expanded;
+    out property <bool> request-kpi-visible: request-analytics.kpi-visible;
+    out property <int> request-kpi-count: request-analytics.kpi-count;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
+    out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
+    out property <int> usage-chart-key-index: usage-chart.chart-key-index;
+    public function focus-usage-chart() { usage-chart.focus-chart(); }
     out property <string> request-fail-toggle-text:
         root.request-result == 2 ? "查看全部" : "只看失败";
     out property <bool> request-search-pending: request-search-timer.running;
@@ -1632,6 +1659,8 @@ export component MainWindow inherits Window {
     out property <int> request-chart-series-count: request-analytics.series-count;
     out property <int> request-model-row-count: request-analytics.model-row-count;
     out property <bool> request-details-open: request-analytics.details-open;
+    // Test seam: the compact in-card toggle shares the one chart disclosure.
+    public function toggle-request-chart() { request-analytics.toggle-chart(); }
     // Test seams: the address chips and the restart confirmation.
     out property <bool> overview-address-visible: overview-address.visible;
     out property <bool> overview-v1-visible: overview-v1.visible;
@@ -1722,7 +1751,6 @@ export component MainWindow inherits Window {
     out property <length> log-toolbar-y: log-toolbar.absolute-position.y;
     out property <length> log-toolbar-width: log-toolbar.width;
     out property <length> log-toolbar-height: log-toolbar.height;
-    out property <bool> log-refreshed-text-visible: log-refreshed-label.visible;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -1769,30 +1797,41 @@ export component MainWindow inherits Window {
     out property <string> request-updated-at-label: root.request-updated-at;
     out property <string> log-updated-at-label: root.log-updated-at;
     out property <string> settings-updated-at-label: root.settings-updated-at;
-    // The footer carries the single 更新于 label; each page shows only its
-    // own time so the word is not repeated three times.
-    out property <string> last-update-label: "更新于 " + root.last-update;
-    out property <length> overview-refresh-x: usage-chart.refresh-x;
-    out property <length> overview-refresh-y: usage-chart.refresh-y;
-    out property <length> overview-refresh-width: usage-chart.refresh-width;
-    out property <length> overview-refresh-height: usage-chart.refresh-height;
-    out property <bool> overview-refresh-enabled: usage-chart.refresh-enabled;
+    // The footer carries the single read-time label; each page shows only its
+    // own time so the word is not repeated three times. The log page calls the
+    // same stamp 读取于 because the last row's time is not the read time.
+    out property <string> last-update-label:
+        (root.page == 3 ? "读取于 " : "更新于 ") + root.last-update;
+    out property <length> page-refresh-x: page-refresh.absolute-position.x;
+    out property <length> page-refresh-y: page-refresh.absolute-position.y;
+    out property <length> page-refresh-width: page-refresh.width;
+    out property <length> page-refresh-height: page-refresh.height;
+    out property <bool> page-refresh-enabled: page-refresh.enabled;
+    out property <bool> page-refresh-visible: page-refresh.visible;
+    out property <string> page-refresh-tooltip: page-refresh.tooltip;
+    // The four data pages share the title-row button; the old page seams stay
+    // as aliases so a page cannot drift to a second refresh position.
+    out property <length> overview-refresh-x: page-refresh.absolute-position.x;
+    out property <length> overview-refresh-y: page-refresh.absolute-position.y;
+    out property <length> overview-refresh-width: page-refresh.width;
+    out property <length> overview-refresh-height: page-refresh.height;
+    out property <bool> overview-refresh-enabled: page-refresh.enabled;
     out property <bool> overview-chart-updated-at-visible: usage-chart.updated-at-visible;
-    out property <length> request-refresh-x: request-refresh.absolute-position.x;
-    out property <length> request-refresh-y: request-refresh.absolute-position.y;
-    out property <length> request-refresh-width: request-refresh.width;
-    out property <length> request-refresh-height: request-refresh.height;
-    out property <bool> request-refresh-enabled: request-refresh.enabled;
-    out property <length> log-refresh-x: log-refresh.absolute-position.x;
-    out property <length> log-refresh-y: log-refresh.absolute-position.y;
-    out property <length> log-refresh-width: log-refresh.width;
-    out property <length> log-refresh-height: log-refresh.height;
-    out property <bool> log-refresh-enabled: log-refresh.enabled;
-    out property <length> settings-refresh-x: settings-refresh.absolute-position.x;
-    out property <length> settings-refresh-y: settings-refresh.absolute-position.y;
-    out property <length> settings-refresh-width: settings-refresh.width;
-    out property <length> settings-refresh-height: settings-refresh.height;
-    out property <bool> settings-refresh-enabled: settings-refresh.enabled;
+    out property <length> request-refresh-x: page-refresh.absolute-position.x;
+    out property <length> request-refresh-y: page-refresh.absolute-position.y;
+    out property <length> request-refresh-width: page-refresh.width;
+    out property <length> request-refresh-height: page-refresh.height;
+    out property <bool> request-refresh-enabled: page-refresh.enabled;
+    out property <length> log-refresh-x: page-refresh.absolute-position.x;
+    out property <length> log-refresh-y: page-refresh.absolute-position.y;
+    out property <length> log-refresh-width: page-refresh.width;
+    out property <length> log-refresh-height: page-refresh.height;
+    out property <bool> log-refresh-enabled: page-refresh.enabled;
+    out property <length> settings-refresh-x: page-refresh.absolute-position.x;
+    out property <length> settings-refresh-y: page-refresh.absolute-position.y;
+    out property <length> settings-refresh-width: page-refresh.width;
+    out property <length> settings-refresh-height: page-refresh.height;
+    out property <bool> settings-refresh-enabled: page-refresh.enabled;
     // Test seams: the settings catalog's table, empty state, stale mark and detail.
     out property <int> um-model-row-count: root.um-models.length;
     out property <bool> um-model-table-visible: um-model-list.visible;
@@ -1927,7 +1966,7 @@ export component MainWindow inherits Window {
     changed maintenance-menu-open => {
         if (root.maintenance-menu-open) {
             root.focus-maintenance-first();
-        } else {
+        } else if (root.page == 0) {
             maintenance-toggle.take-focus();
         }
     }
@@ -1939,6 +1978,18 @@ export component MainWindow inherits Window {
     changed page => {
         root.confirm-clear = false;
         root.confirm-quit = false;
+        // A page change is a modal exit too: an open maintenance overlay must
+        // not survive on a page where its trigger no longer exists.
+        if (root.maintenance-menu-open) {
+            root.maintenance-menu-open = false;
+            root.maintenance-confirm = -1;
+            root.maintenance-return-focus = true;
+        }
+        if (root.maintenance-return-focus) {
+            root.maintenance-return-focus = false;
+            if (root.page == 0) { maintenance-toggle.take-focus(); }
+            else { root-focus.focus(); }
+        }
         root.apply-chart-theme();
         if (root.page == 3 && root.log-mode == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
@@ -1958,6 +2009,14 @@ export component MainWindow inherits Window {
     // focus automatically, so the shortcut tests focus the root handler first.
     public function focus-root() { root-focus.focus(); }
     public function navigate-to(page: int) {
+        // A page change is a modal exit: close the overlay and clear its
+        // confirmation before the fade starts, even when the target page is the
+        // current one.
+        if (root.maintenance-menu-open) {
+            root.maintenance-menu-open = false;
+            root.maintenance-confirm = -1;
+            root.maintenance-return-focus = true;
+        }
         if (root.page == page) { return; }
         if (!root.allow-motion) { root.navigate(page); return; }
         root.pending-page = page;
@@ -2120,8 +2179,13 @@ export component MainWindow inherits Window {
     changed request-result => {
         root.settings-changed();
         // Selecting 失败 is an evidence-first view: fold the chart so the
-        // request rows take the first screen, as the critique asks.
-        if (root.request-result == 2) { root.request-chart-collapsed = true; }
+        // request rows take the first screen. The KPI cards stay visible.
+        if (root.request-result == 2) {
+            root.request-chart-collapsed = true;
+        } else if (!root.request-chart-collapsed-explicit) {
+            root.request-chart-collapsed =
+                root.request-list-available-height < 240px;
+        }
     }
     changed request-keyword => {
         root.settings-changed();
@@ -2231,14 +2295,6 @@ export component MainWindow inherits Window {
             root.settings-changed();
         }
     }
-    // The refresh acknowledgement stays visible for 1.2 s, then the button
-    // returns to its normal refresh affordance.
-    log-refreshed-timer := Timer {
-        interval: 1.2s;
-        running: false;
-        triggered => { root.log-refreshed = false; log-refreshed-timer.running = false; }
-    }
-    changed log-refreshed => { if (root.log-refreshed) { log-refreshed-timer.start(); } }
     // The tray-less exit confirmation expires after three seconds, like the
     // inline credential clear.
     quit-confirm-timer := Timer {
@@ -2468,6 +2524,27 @@ export component MainWindow inherits Window {
                         if (!root.maintenance-menu-open) { root.maintenance-confirm = -1; }
                     }
                 }
+                // The title row owns the one manual refresh action for every
+                // data page; each page's read time lands in the footer, so a
+                // separate per-page acknowledgement would duplicate it.
+                page-refresh := ActionButton {
+                    width: Theme.icon-button;
+                    height: Theme.icon-button;
+                    label: "刷新";
+                    icon: "refresh";
+                    icon-rotation: root.refresh-rotation;
+                    icon-only: true;
+                    quiet: true;
+                    visible: root.page <= 3;
+                    tooltip: root.page == 0 ? "刷新总览：服务状态与用量趋势"
+                        : root.page == 1 ? "刷新请求列表（保留当前筛选）"
+                        : root.page == 2 ? "重新检查网关与账号状态"
+                        : "刷新运行日志";
+                    enabled: !root.refreshing;
+                    cross-axis-self-alignment: center;
+                    opacity: root.page-opacity;
+                    clicked => { root.refresh-current-page(); }
+                }
             }
 
             page-host := Rectangle {
@@ -2672,10 +2749,7 @@ export component MainWindow inherits Window {
                         show-line <=> root.usage-show-line;
                         show-requests <=> root.usage-show-requests;
                         auto-refresh <=> root.auto-refresh;
-                        refreshing: root.refreshing;
-                        refresh-rotation: root.refresh-rotation;
                         updated-at: root.overview-updated-at;
-                        refresh => { root.refresh-current-page(); }
                         period-changed(index) => { root.usage-range-changed(index); }
                     }
                     // The recent verify card always exists: a never-verified
@@ -2914,18 +2988,6 @@ export component MainWindow inherits Window {
                             selected(_) => { root.query-requests(0); }
                         }
                         Rectangle { horizontal-stretch: 1; }
-                        request-refresh := ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新请求";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "刷新请求";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh-current-page(); }
-                        }
                     }
                     // Second filter row: the model and result selects, the search
                     // field and the query action. The search covers request ID,
@@ -3025,7 +3087,6 @@ export component MainWindow inherits Window {
                     compact: root.compact;
                     wide-collapsed <=> root.request-chart-collapsed;
                     metrics: root.request-metrics;
-                    summary-line: root.request-summary;
                     labels: root.request-chart-labels;
                     token-counts: root.request-chart-token-counts;
                     request-counts: root.request-chart-request-counts;
@@ -3297,22 +3358,6 @@ export component MainWindow inherits Window {
                             root.settings-changed();
                         }
                     }
-                    // The slot keeps its width; only the glyph swaps to a
-                    // check so the neighbouring actions never shift.
-                    log-refresh := ActionButton {
-                        width: Theme.icon-button;
-                        height: Theme.icon-button;
-                        label: root.log-refreshed ? "已刷新" : "刷新";
-                        icon: root.log-refreshed ? "check" : "refresh";
-                        icon-rotation: root.refresh-rotation;
-                        icon-only: true;
-                        quiet: true;
-                        tooltip: root.log-refreshed ? "已刷新" : "刷新日志";
-                        enabled: !root.refreshing;
-                        clicked => { root.refresh-current-page(); }
-                    }
-                    // The success acknowledgement is text, not only the glyph
-                    // swap; it stays for the same 1.2 s as the check.
                     // Live follow stays next to the live layer it belongs to;
                     // pausing only stops the list from jumping, never the read.
                     log-follow := ActionButton {
@@ -3364,23 +3409,6 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                     Hint { visible: root.log-mode == 1 && !root.log-history-note.is-empty; text: root.log-history-note; vertical-alignment: center; }
-                    // The success acknowledgement keeps a fixed slot in the
-                    // status row, so showing 已刷新 never shifts the toolbar
-                    // icons to its right.
-                    Rectangle {
-                        width: 44px;
-                        height: 20px;
-                        background: transparent;
-                        log-refreshed-label := Hint {
-                            visible: root.log-refreshed;
-                            text: "已刷新";
-                            color: Theme.good-text;
-                            width: parent.width;
-                            height: parent.height;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
                     log-earlier := ActionButton {
                         visible: root.log-mode == 1;
                         height: Theme.icon-button;
@@ -3474,22 +3502,6 @@ export component MainWindow inherits Window {
                     // Leave a gutter below the last card instead of letting
                     // the footer cut through the API address row.
                     padding-bottom: 8px;
-                    HorizontalLayout {
-                        spacing: 8px;
-                        settings-refresh := ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "重新检查网关与账号状态";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh-current-page(); }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
-                    }
                     appearance-card := Card {
                         inset: 16px;
                         inset-y: 12px;
@@ -4647,9 +4659,14 @@ export component MainWindow inherits Window {
                 accessible-label: "维护菜单";
                 accessible-description: "模态面板，Tab 在面板内循环，Esc 关闭";
                 x: page-host.absolute-position.x + page-host.width - self.width - 8px;
-                y: maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px;
+                // The overlay never covers the three-state band: it opens below
+                // the state card while that card is visible, and falls back to
+                // the 维护 button's row once the page has scrolled it away.
+                y: max(state-card.absolute-position.y + state-card.height + 8px,
+                    maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px);
                 width: min(520px, page-host.width - 16px);
-                height: min(maintenance-menu-content.preferred-height, root.height - 56px);
+                height: min(maintenance-menu-content.preferred-height,
+                    root.height - self.y - 56px);
                 z: 20;
                 // An always-instantiated, zero-height live region so the open
                 // and close transitions are announced even when the panel's

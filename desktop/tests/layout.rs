@@ -316,12 +316,13 @@ fn settings_cards_share_one_column_and_uniform_spacing() {
     }
 
     assert!(
-        (window.get_settings_refresh_x() - cards[0].1).abs() < 0.5,
-        "设置刷新按钮必须与卡片左对齐"
+        window.get_settings_refresh_x() + window.get_settings_refresh_width()
+            > window.get_window_width() - 20.0 - 1.0,
+        "the one refresh action sits at the title row's right edge"
     );
     assert!(
         window.get_settings_refresh_y() + window.get_settings_refresh_height() <= cards[0].2 + 0.5,
-        "设置刷新按钮必须排在首张卡上方"
+        "the title-row refresh stays above the first card"
     );
 }
 
@@ -1568,12 +1569,14 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     window.set_page(0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert!(window.get_overview_refresh_enabled());
+    assert!(window.get_page_refresh_visible());
+    assert!(window.get_page_refresh_tooltip().contains("总览"));
     click_refresh(
         &window,
-        window.get_overview_refresh_x(),
-        window.get_overview_refresh_y(),
-        window.get_overview_refresh_width(),
-        window.get_overview_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview"]);
     assert!(window.get_refreshing());
@@ -1582,40 +1585,50 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
 
     window.set_page(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("请求"));
     click_refresh(
         &window,
-        window.get_request_refresh_x(),
-        window.get_request_refresh_y(),
-        window.get_request_refresh_width(),
-        window.get_request_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview", "requests"]);
     finish_refresh();
 
     window.set_page(3);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("日志"));
     click_refresh(
         &window,
-        window.get_log_refresh_x(),
-        window.get_log_refresh_y(),
-        window.get_log_refresh_width(),
-        window.get_log_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview", "requests", "logs"]);
     finish_refresh();
 
     window.set_page(2);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("网关"));
     click_refresh(
         &window,
-        window.get_settings_refresh_x(),
-        window.get_settings_refresh_y(),
-        window.get_settings_refresh_width(),
-        window.get_settings_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(
         calls.borrow().as_slice(),
         ["overview", "requests", "logs", "settings"]
+    );
+
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        !window.get_page_refresh_visible(),
+        "the static help page has no data read to refresh"
     );
 }
 
@@ -1797,12 +1810,13 @@ fn the_request_filter_rows_align_the_range_result_search_and_refresh() {
         "the range row starts at the page edge"
     );
     assert!(
-        (window.get_request_refresh_y() - window.get_request_period_y()).abs() < 1.0,
-        "refresh shares the range row"
+        window.get_page_refresh_y() + window.get_page_refresh_height()
+            < window.get_request_period_y(),
+        "the one refresh action sits in the title row above the filters"
     );
     assert!(
-        window.get_request_refresh_x() + window.get_request_refresh_width() > page_right - 1.0,
-        "refresh closes the first filter row at the right edge"
+        window.get_page_refresh_x() + window.get_page_refresh_width() > page_right - 1.0,
+        "the refresh action closes the title row at the right edge"
     );
 
     assert!(
@@ -1964,11 +1978,12 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
         "the filter rows fill the compact page content"
     );
     assert!(
-        (window.get_request_period_x() - page_left).abs() < 1.0
-            && (window.get_request_refresh_x() + window.get_request_refresh_width() - page_right)
-                .abs()
-                < 1.0,
-        "the compact range and refresh rows stay inside the page"
+        (window.get_request_period_x() - page_left).abs() < 1.0,
+        "the compact range row stays inside the page"
+    );
+    assert!(
+        window.get_page_refresh_x() + window.get_page_refresh_width() > page_right - 1.0,
+        "the one refresh action stays in the title row at the page's right edge"
     );
     assert!(
         window.get_request_search_width() > 140.0
@@ -2310,13 +2325,6 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
             window.get_log_search_height(),
         ),
         (
-            "refresh",
-            window.get_log_refresh_x(),
-            window.get_log_refresh_y(),
-            window.get_log_refresh_width(),
-            window.get_log_refresh_height(),
-        ),
-        (
             "settings",
             window.get_log_settings_x(),
             window.get_log_settings_y(),
@@ -2356,39 +2364,33 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
     let second_order: Vec<f32> = second_row.iter().map(|(_, x, _, _, _)| *x).collect();
     assert!(
         second_order.windows(2).all(|pair| pair[0] < pair[1]),
-        "the source, search, refresh and settings must read left to right: {second_order:?}"
+        "the source, search and settings must read left to right: {second_order:?}"
+    );
+    assert!(
+        window.get_page_refresh_y() + window.get_page_refresh_height()
+            < window.get_log_mode_y(),
+        "the one refresh action sits in the title row above the log filters"
     );
 }
 
 #[test]
-fn log_refresh_acknowledgement_expires() {
+fn the_log_page_footer_names_the_read_time_instead_of_the_update_time() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
-    let follow_x = window.get_log_follow_x();
-    let settings_x = window.get_log_settings_x();
-    window.set_log_refreshed(true);
+    window.set_log_updated_at("10:02:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert!(window.get_log_refreshed());
-    assert!(
-        window.get_log_refreshed_text_visible(),
-        "the success is text, not only the glyph swap"
-    );
     assert_eq!(
-        window.get_log_follow_x(),
-        follow_x,
-        "the fixed acknowledgement slot must not move 暂停跟随"
+        window.get_last_update_label(),
+        "读取于 10:02:00",
+        "the log page footer is the read time, not the last row's time"
     );
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(
-        window.get_log_settings_x(),
-        settings_x,
-        "the fixed acknowledgement slot must not move 设置"
+        window.get_last_update_label(),
+        "更新于 10:02:00",
+        "the other pages keep the update wording"
     );
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
-    assert!(
-        !window.get_log_refreshed(),
-        "the refresh acknowledgement must return to its normal state"
-    );
-    assert!(!window.get_log_refreshed_text_visible());
 }
 
 #[test]

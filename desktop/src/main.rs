@@ -334,11 +334,8 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     if let Some(reason) = &update.failure {
         window.set_log_status(format!("刷新失败：{reason}").into());
         window.set_log_tone(status_tone(Tone::Bad));
-        window.set_log_refresh_pending(false);
-        window.set_log_refreshed(false);
         return;
     }
-    let acknowledge_refresh = window.get_log_refresh_pending();
 
     // The live layer is the unfiltered tail; the history filters never reach it.
     let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
@@ -388,10 +385,6 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     } else {
         status_tone(Tone::Good)
     });
-    window.set_log_refresh_pending(false);
-    if acknowledge_refresh {
-        window.set_log_refreshed(true);
-    }
     window.set_log_history_note("".into());
     window.set_log_version(window.get_log_version().wrapping_add(1));
     window.set_log_updated_at(clock_now().into());
@@ -459,8 +452,6 @@ fn apply_history_failure(window: &MainWindow, nav: &mut HistoryNav, reason: Stri
     window.set_log_tone(status_tone(failure.tone));
     window.set_older_logs(nav.cursor.is_some());
     window.set_log_history_note("".into());
-    window.set_log_refresh_pending(false);
-    window.set_log_refreshed(false);
 }
 
 fn load_log_history(
@@ -536,7 +527,6 @@ fn load_log_history(
             let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
                 return;
             };
-            let acknowledge_refresh = window.get_log_refresh_pending();
             match result {
                 Ok(payload) => match log_history::parse_history_payload(&payload) {
                     Ok(view) if view.tone == Tone::Bad => {
@@ -590,10 +580,6 @@ fn load_log_history(
                         window.set_log_total(rows.len() as i32);
                         window.set_log_updated_at(clock_now().into());
                         window.set_log_version(window.get_log_version().wrapping_add(1));
-                        window.set_log_refresh_pending(false);
-                        if acknowledge_refresh {
-                            window.set_log_refreshed(true);
-                        }
                     }
                     Err(reason) => apply_history_failure(&window, &mut nav, reason),
                 },
@@ -793,21 +779,6 @@ fn apply_request_page(
 
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
     let cards = page.summary.cards();
-    // The compact request page folds the five cards into two readable lines;
-    // the break lands between whole metrics instead of inside a unit.
-    let summary = cards
-        .iter()
-        .map(|card| format!("{} {}", card.label, card.value))
-        .collect::<Vec<_>>();
-    window.set_request_summary(
-        format!(
-            "{}
-{}",
-            summary[..3].join(" · "),
-            summary[3..].join(" · ")
-        )
-        .into(),
-    );
     let metrics = cards
         .into_iter()
         .map(|card| RequestMetric {
@@ -2373,10 +2344,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak_refresh = window.as_weak();
     window.on_refresh_logs(move || {
         if let Some(window) = weak_refresh.upgrade() {
-            // Acknowledge the click before the reader's next 160 ms poll lands;
-            // apply_logs restores the real count and flips the button to 已刷新.
-            window.set_log_refreshed(false);
-            window.set_log_refresh_pending(true);
+            // The footer read time is the one visible acknowledgement; the
+            // status line only says the read is in flight.
             window.set_log_status("正在刷新…".into());
             window.set_log_tone(3);
         }
@@ -2652,9 +2621,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_query.upgrade() else {
             return;
         };
-        if window.get_refreshing() {
-            window.set_log_refresh_pending(true);
-        }
         let base = format!("http://127.0.0.1:{}", query_port.load(Ordering::SeqCst));
         load_log_history(
             &window,

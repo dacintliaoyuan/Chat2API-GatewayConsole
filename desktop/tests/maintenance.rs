@@ -589,23 +589,67 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
 }
 
 #[test]
-fn the_small_maintenance_menu_scrolls_and_hides_the_records_area() {
+fn the_small_maintenance_menu_scrolls_below_the_state_band_and_hides_the_records_area() {
     let window = window_at(540.0, 420.0);
     let menu = maintenance::menu(&running_state());
     maintenance::apply_menu(&window, &menu);
     open_maintenance_menu(&window);
 
     assert!(
+        window.get_maintenance_menu_y()
+            >= window.get_overview_state_card_bottom() + 7.0,
+        "the overlay opens below the three-state band, menu y={} band bottom={}",
+        window.get_maintenance_menu_y(),
+        window.get_overview_state_card_bottom()
+    );
+    assert!(
         window.get_maintenance_menu_height() <= 420.0 - 56.0 + 1.0,
         "the menu never runs past the window bottom, actual {}",
         window.get_maintenance_menu_height()
     );
     assert!(
-        !window.get_maintenance_menu_scrollable(),
-        "the actions fit once the empty records area is hidden"
+        window.get_maintenance_menu_scrollable(),
+        "a short window scrolls the actions instead of covering the state band"
     );
     assert!(
         !window.get_maintenance_records_area_visible(),
         "a source with no records hides the records area"
+    );
+}
+
+#[test]
+fn navigating_away_closes_the_maintenance_menu_and_clears_its_confirmation() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    click_action(&window, Action::Verify);
+    assert!(
+        window.get_maintenance_confirm_visible(),
+        "the action is armed before navigating"
+    );
+
+    // The testing backend cannot dispatch a modifier chord, so this drives the
+    // same navigate-to path the Ctrl+2 shortcut reaches.
+    window.on_navigate({
+        let weak = window.as_weak();
+        move |page| {
+            if let Some(window) = weak.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    window.invoke_navigate_to(1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(500));
+
+    assert_eq!(window.get_page(), 1);
+    assert!(
+        !window.get_maintenance_menu_visible(),
+        "a page change closes the maintenance overlay"
+    );
+    assert!(
+        !window.get_maintenance_confirm_visible(),
+        "the armed confirmation is cleared with the overlay"
     );
 }
