@@ -403,6 +403,35 @@ fn an_empty_catalog_shows_no_models_and_drops_the_old_rows() {
 }
 
 #[test]
+fn an_unread_catalog_leaves_no_blank_band_above_the_probe_section() {
+    let window = model_window();
+
+    assert!(!window.get_um_model_empty_visible());
+    assert!(
+        (window.get_um_model_empty_height()).abs() < 0.5,
+        "the hidden empty state must take no height, got {}",
+        window.get_um_model_empty_height()
+    );
+    assert!(
+        (window.get_um_model_header_height()).abs() < 0.5,
+        "the hidden column header must take no height, got {}",
+        window.get_um_model_header_height()
+    );
+    let gap = window.get_um_model_divider_y() - window.get_um_model_status_bottom();
+    // The named probe section title sits between the status line and the divider;
+    // only the hidden empty/header must be zero-height.
+    assert!(
+        gap <= 64.0,
+        "the probe section must follow the status line without a blank band, got a {gap} px band"
+    );
+    assert_eq!(
+        window.get_probe_section_title(),
+        "上下文探测",
+        "the probe controls sit under their own named section"
+    );
+}
+
+#[test]
 fn a_failed_refresh_keeps_the_rows_visible_and_marks_them_stale() {
     use um_desktop::models::apply_catalog;
 

@@ -1081,24 +1081,34 @@ pub struct RequestDetail {
     pub log_text: String,
 }
 
+// One rule between the detail body's sections: the monospace TextEdit cannot
+// bold a heading, so a full-width line carries the section boundary instead.
+const SECTION_RULE: &str = "────────────";
+
 pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> RequestDetail {
+    // 错误 comes right after 结果: the detail panel's first screen must answer
+    // "did it work and why not" before the duration and token readings, which
+    // sat below the fold in the old 结果 → 耗时 → Token → 错误 order.
     let body = format!(
-        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n  结果说明  {}\n{}\n\n耗时\n  {}\n  {}\n  {}\n  {}\n\nToken\n  {}\n  {}\n  {}\n  {}\n\n错误\n{}",
+        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n  结果说明  {}\n{}\n\n{}\n错误\n{}\n\n{}\n耗时\n  {}\n  {}\n  {}\n  {}\n\n{}\nToken\n  {}\n  {}\n  {}\n  {}",
         row.at,
         row.result,
         row.model,
         http_status_line(row),
         row.detail,
         indent(&retry_lines(row)),
+        SECTION_RULE,
+        indent(&error_lines(row)),
+        SECTION_RULE,
         row.duration,
         first_token_line(row),
         reading_line("速度", &row.speed, " Token/秒", ""),
         format!("速度口径  {}", row.speed_basis),
+        SECTION_RULE,
         reading_line("输入", &row.input, " Token", ""),
         reading_line("输出", &row.output, " Token", ""),
         reading_line("缓存读取", &row.cache_read, " Token", "（已含在输入中）"),
         reading_line("思考 Token", &row.reasoning, "", "（已计入输出）"),
-        indent(&error_lines(row)),
     );
     let (log_label, log_note, log_text) = match logs {
         Some(logs) => (

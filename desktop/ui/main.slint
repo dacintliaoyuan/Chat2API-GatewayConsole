@@ -1948,10 +1948,10 @@ export component MainWindow inherits Window {
     out property <length> log-settings-width: log-settings-button.width;
     out property <length> log-settings-height: log-settings-button.height;
     out property <string> log-settings-icon: log-settings-button.icon;
-    out property <length> log-toolbar-x: log-toolbar.absolute-position.x;
-    out property <length> log-toolbar-y: log-toolbar.absolute-position.y;
-    out property <length> log-toolbar-width: log-toolbar.width;
-    out property <length> log-toolbar-height: log-toolbar.height;
+    out property <length> log-status-row-x: log-status-row.absolute-position.x;
+    out property <length> log-status-row-y: log-status-row.absolute-position.y;
+    out property <length> log-status-row-width: log-status-row.width;
+    out property <length> log-status-row-height: log-status-row.height;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -2061,6 +2061,14 @@ export component MainWindow inherits Window {
     out property <bool> um-model-detail-visible: um-model-detail.visible;
     out property <string> um-model-detail-title-text: um-model-detail.title;
     out property <string> um-model-detail-body: um-model-detail.body;
+    // Test seams: the hidden catalog slots must collapse to zero height so an
+    // unread or empty catalog leaves no blank band above the probe section.
+    out property <length> um-model-empty-height: um-model-empty.height;
+    out property <length> um-model-header-height: um-model-header.height;
+    out property <length> um-model-status-bottom:
+        um-model-status-hint.absolute-position.y + um-model-status-hint.height;
+    out property <length> um-model-divider-y: model-probe-divider.absolute-position.y;
+    out property <string> probe-section-title: probe-section-label.text;
     // Test seams: the context-probe batch list, selection, run/stop controls and
     // the collapsible history. The visible properties are the user-facing facts.
     out property <int> probe-row-count: root.probe-models.length;
@@ -2146,6 +2154,16 @@ export component MainWindow inherits Window {
     // A quiet danger action keeps its red identity on the label and icon and
     // draws no frame, so the frame token comes from a framed danger action.
     out property <color> danger-action-frame-tint: probe-stop.frame-tint;
+    // Test seams: the disabled primary action's drawn colours. 上下文探测 is
+    // disabled until a model is checked; it must read as a neutral resting
+    // control instead of a dimmed blue button.
+    out property <color> probe-run-label-tint: probe-run.label-tint;
+    out property <color> probe-run-frame-tint: probe-run.frame-tint;
+    out property <color> probe-run-fill: probe-run.background;
+    out property <bool> probe-run-focus-visible: probe-run.focus-visible;
+    out property <color> console-field-color: Theme.field;
+    out property <color> console-muted-color: Theme.muted;
+    out property <color> console-edge-control-color: Theme.edge-control;
     out property <color> console-surface-color: Theme.surface;
     out property <bool> help-no-result-visible: help-no-result.visible;
     out property <string> help-search-placeholder: help-search.placeholder;
@@ -3635,20 +3653,10 @@ export component MainWindow inherits Window {
                     // The four levels are independent toggles: an empty
                     // selection keeps every level instead of hiding rows.
                     log-level-hint := Hint {
-                        visible: root.log-mode == 1;
+                        visible: root.log-mode == 1 && !root.compact;
                         text: "未选级别 = 全部";
                         vertical-alignment: center;
                     }
-                }
-                // The source and the page actions share the second filter row,
-                // so the first row keeps its controls without wrapping at the
-                // common window width. The row fills the page and aligns its
-                // controls to the right edge instead of floating mid-page.
-                log-toolbar := FlexboxLayout {
-                    width: 100%;
-                    alignment: end;
-                    flex-wrap: wrap;
-                    spacing: 8px;
                     // The source list is the gateway's closed set; the first entry
                     // is "all sources". The app instance owns one run log
                     // (`gateway.log`), so the tooltip explains the one real
@@ -3667,9 +3675,9 @@ export component MainWindow inherits Window {
                             root.query-log-history();
                         }
                     }
-                    // The whole toolbar reads like the Magpie session list:
-                    // filters first, then search, the page actions and the one
-                    // jump to settings. It wraps at the minimum width.
+                    // Filters, search and the layer controls share one flex row:
+                    // the source and keyword join the level filters in history
+                    // mode instead of floating on their own toolbar line.
                     log-search := MaterialField {
                         visible: root.log-mode == 1;
                         width: root.compact ? 140px : 160px;
@@ -3689,8 +3697,53 @@ export component MainWindow inherits Window {
                             root.settings-changed();
                         }
                     }
-                    // Live follow stays next to the live layer it belongs to;
-                    // pausing only stops the list from jumping, never the read.
+                }
+                // The status row carries the connection state and the page
+                // actions: 跟随 and 设置 sit at its right edge instead of on a
+                // second toolbar line of their own.
+                log-status-row := HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    alignment: stretch;
+                    // The segmented control above already names the layer; the
+                    // status row keeps only the connection state and count.
+                    StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
+                    Hint {
+                        visible: !root.compact;
+                        text: root.log-status;
+                        color: Theme.status_ink(root.log-tone);
+                        vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Hint {
+                        visible: root.log-mode == 1 && root.log-search-pending;
+                        width: self.visible ? self.preferred-width : 0px;
+                        text: "查询中…";
+                        color: Theme.warn-text;
+                        vertical-alignment: center;
+                    }
+                    Hint {
+                        visible: root.log-mode == 1 && !root.log-history-note.is-empty && !root.compact;
+                        width: self.visible ? self.preferred-width : 0px;
+                        text: root.log-history-note;
+                        vertical-alignment: center;
+                    }
+                    log-earlier := ActionButton {
+                        visible: root.log-mode == 1;
+                        width: self.visible ? (root.compact ? Theme.icon-button : self.preferred-width) : 0px;
+                        height: Theme.icon-button;
+                        quiet: true;
+                        label: root.compact ? "" : "加载更早";
+                        icon: "chevron-down";
+                        icon-only: root.compact;
+                        tooltip: "加载更早的历史日志";
+                        enabled: root.older-logs;
+                        clicked => { root.load-earlier-logs(); }
+                    }
+                    // Live follow belongs to the live layer; pausing only stops
+                    // the list from jumping, never the read.
                     log-follow := ActionButton {
                         visible: root.log-mode == 0;
                         width: Theme.icon-button;
@@ -3720,32 +3773,6 @@ export component MainWindow inherits Window {
                         quiet: true;
                         tooltip: "打开设置";
                         clicked => { root.navigate-to(2); }
-                    }
-                }
-                HorizontalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 8px;
-                    alignment: start;
-                    // The segmented control above already names the layer; the
-                    // status row keeps only the connection state and count.
-                    StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
-                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
-                    Hint {
-                        visible: root.log-mode == 1 && root.log-search-pending;
-                        text: "查询中…";
-                        color: Theme.warn-text;
-                        vertical-alignment: center;
-                    }
-                    Hint { visible: root.log-mode == 1 && !root.log-history-note.is-empty; text: root.log-history-note; vertical-alignment: center; }
-                    log-earlier := ActionButton {
-                        visible: root.log-mode == 1;
-                        height: Theme.icon-button;
-                        quiet: true;
-                        label: "加载更早";
-                        icon: "chevron-down";
-                        tooltip: "加载更早的历史日志";
-                        enabled: root.older-logs;
-                        clicked => { root.load-earlier-logs(); }
                     }
                 }
                 Panel {
@@ -4446,6 +4473,10 @@ export component MainWindow inherits Window {
                             }
                             um-model-empty := VerticalLayout {
                                 visible: root.um-model-empty;
+                                // A hidden empty state must not reserve its
+                                // preferred height: that blank band pushed the
+                                // probe section away from the status line.
+                                height: self.visible ? self.preferred-height : 0px;
                                 alignment: center;
                                 spacing: 4px;
                                 Hint { text: "无模型"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
@@ -4453,7 +4484,7 @@ export component MainWindow inherits Window {
                             }
                             um-model-header := HorizontalLayout {
                                 visible: root.um-models.length > 0;
-                                height: 20px;
+                                height: self.visible ? 20px : 0px;
                                 padding-left: 10px;
                                 padding-right: 10px;
                                 spacing: 8px;
@@ -4503,11 +4534,14 @@ export component MainWindow inherits Window {
                             // rest and read the collapsible history. The gateway keeps
                             // the queue and the per-model results, so this card only
                             // reads and submits; a failed probe keeps its reason.
-                            Divider { }
+                            // A named section separates the probe controls from the
+                            // catalog rows above instead of mixing two toolbars.
+                            model-probe-divider := Divider { }
+                            probe-section-label := SectionLabel { text: "上下文探测"; }
                             probe-toolbar := HorizontalLayout {
                                 spacing: 8px;
                                 probe-select-all := ActionButton {
-                                    label: "全选";
+                                    label: "全选模型";
                                     quiet: true;
                                     enabled: root.probe-models.length > 0;
                                     clicked => { root.select-all-probes(); }
@@ -4518,7 +4552,7 @@ export component MainWindow inherits Window {
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 probe-run := ActionButton {
-                                    label: root.probe-loading ? "正在提交…" : "上下文探测";
+                                    label: root.probe-loading ? "正在提交…" : "开始探测";
                                     icon: "play";
                                     primary: true;
                                     enabled: root.probe-run-enabled;
@@ -4535,7 +4569,7 @@ export component MainWindow inherits Window {
                                     clicked => { root.stop-context-probe(); }
                                 }
                                 probe-clear := ActionButton {
-                                    label: "清空选择";
+                                    label: "清空已选";
                                     quiet: true;
                                     enabled: root.probe-selected.length > 0;
                                     clicked => { root.clear-probe-selection(); }
@@ -4554,6 +4588,7 @@ export component MainWindow inherits Window {
                             }
                             probe-empty := Hint {
                                 visible: root.probe-models.length == 0;
+                                height: self.visible ? self.preferred-height : 0px;
                                 text: "没有可探测的模型：先刷新 UM 模型目录";
                             }
                             probe-model-list := ListView {

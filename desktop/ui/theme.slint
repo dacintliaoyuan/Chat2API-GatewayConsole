@@ -36,9 +36,11 @@ export global Theme {
     out property <color> edge-control: dark ? #6a6a6e : #8e8e93;
     out property <color> edge-control-strong: dark ? #a0a0a8 : #6e6e73;
     out property <color> ink: dark ? #f5f5f7 : #1d1d1f;
-    // Secondary text follows the product palette (#6e6e73 / #b0b0b8); both clear
-    // AA against the page and card surfaces.
-    out property <color> muted: dark ? #b0b0b8 : #6e6e73;
+    // Secondary text follows the product palette (#6d6d72 / #b0b0b8); both
+    // clear AA against the page, card and field surfaces. The light value is
+    // one step darker than #6e6e73 so a disabled action's muted label still
+    // clears 4.5:1 on the #f0f0f2 field fill.
+    out property <color> muted: dark ? #b0b0b8 : #6d6d72;
     out property <color> accent: dark ? #0a84ff : #0071e3;
     out property <color> accent-strong: dark ? #409cff : #0062c4;
     out property <color> on-accent: dark ? #06121f : #ffffff;
@@ -237,15 +239,23 @@ export component FocusAction inherits Rectangle {
     // Test seams: the colours the danger label, icon and frame actually draw.
     // The label and icon use `bad-text` so a 12 px red label clears 4.5:1 on
     // both surfaces; the frame keeps the vivid red for its 3:1 non-text edge.
-    out property <color> label-tint: root.primary ? Theme.on-accent
+    // A disabled action draws its own resting state instead of dimming the
+    // enabled colours: the neutral field fill, the control edge and the muted
+    // label. Dimming the accent button to 55 % left a pale blue frame that
+    // still read as a focused primary action and dropped the label under 4.5:1.
+    out property <color> label-tint: !root.enabled ? Theme.muted
+        : root.primary ? Theme.on-accent
         : root.danger ? Theme.bad-text
         : root.link ? Theme.accent : Theme.ink;
     out property <color> icon-tint: root.label-tint;
     out property <color> frame-tint: root.border-color;
     out property <color> focus-ring-color: root.border-color;
     out property <length> focus-ring-width: root.border-width;
+    // A disabled action never counts as a visible focus target: it cannot be
+    // tabbed to (the FocusScope is disabled too) and its edge is the resting
+    // control edge, not the focus step.
     out property <bool> focus-visible:
-        focus.has-focus && (root.border-color == Theme.edge-control-strong
+        root.enabled && focus.has-focus && (root.border-color == Theme.edge-control-strong
             || (root.danger && root.border-color == Theme.bad-text));
     callback clicked();
     public function take-focus() { focus.focus(); }
@@ -264,16 +274,15 @@ export component FocusAction inherits Rectangle {
     // edge to the same readable red instead of the neutral control edge, so the
     // red identity survives keyboard focus.
     border-width: 1px;
-    border-color: root.quiet || root.link
+    border-color: !root.enabled ? Theme.edge-control
+        : root.quiet || root.link
         ? (focus.has-focus ? Theme.edge-control-strong : transparent)
         : root.danger ? (focus.has-focus ? Theme.bad-text : Theme.bad)
         : root.primary ? Theme.accent
         : focus.has-focus ? Theme.edge-control-strong
         : Theme.edge;
-    opacity: root.enabled ? 1 : 0.55;
     animate background { duration: Theme.quick; easing: ease-in-out; }
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
-    animate opacity { duration: Theme.quick; easing: ease-in-out; }
     HorizontalLayout {
         padding-left: root.icon-only ? 0px : 10px;
         padding-right: root.icon-only ? 0px : 10px;
@@ -319,6 +328,9 @@ export component FocusAction inherits Rectangle {
         }
     }
     focus := FocusScope {
+        // A disabled action is not a tab stop either: the frame, the label and
+        // the fill already say 不可用, so focus must not land on it.
+        enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 if (root.enabled) { root.clicked(); }
