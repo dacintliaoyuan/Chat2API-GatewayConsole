@@ -149,6 +149,11 @@ export component RequestAnalytics inherits Panel {
     out property <bool> split: root.split-by-model;
     out property <string> metric-label: root.metric == 1 ? "请求数"
         : root.metric == 2 ? "输出速度" : "Token";
+    // The subtitle names the unit the selected metric plots, so switching the
+    // metric never leaves 亿 on a request-count or speed chart.
+    out property <string> metric-unit-text: root.metric == 1 ? "所选范围 · 单位：次"
+        : root.metric == 2 ? "所选范围 · 单位：Token/秒"
+        : "所选范围 · 单位：亿";
     out property <[float]> plotted-values: root.metric == 1 ? root.request-counts
         : root.metric == 2 ? root.speed-counts : root.token-counts;
     out property <int> series-count: !root.split-by-model ? 1
@@ -318,7 +323,7 @@ export component RequestAnalytics inherits Panel {
             height: root.expanded ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
-            Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
+            Hint { text: root.metric-unit-text; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
                 visible: root.expanded;

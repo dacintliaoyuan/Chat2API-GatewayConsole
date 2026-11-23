@@ -969,6 +969,9 @@ export component MainWindow inherits Window {
     // "没有更早记录" once the last history page is loaded.
     in property <string> log-history-note;
     in-out property <string> log-filter-keyword;
+    // The keyword is a debounced query: typing starts a 250 ms pause, Enter and
+    // 清除 query immediately, and switching layers cancels the pause.
+    out property <bool> log-search-pending: log-search-timer.running;
     in-out property <bool> log-follow: true;
     in-out property <length> log-scroll-y: 0px;
     in-out property <int> new-log-count;
@@ -1494,6 +1497,7 @@ export component MainWindow inherits Window {
     out property <int> request-metric-index: request-analytics.metric-index;
     out property <bool> request-split: request-analytics.split;
     out property <string> request-metric-label: request-analytics.metric-label;
+    out property <string> request-metric-unit: request-analytics.metric-unit-text;
     out property <[float]> request-plotted-values: request-analytics.plotted-values;
     out property <int> request-chart-series-count: request-analytics.series-count;
     out property <int> request-model-row-count: request-analytics.model-row-count;
@@ -1981,7 +1985,14 @@ export component MainWindow inherits Window {
         request-search-timer.start();
     }
     changed log-period => { root.settings-changed(); }
-    changed log-filter-keyword => { root.settings-changed(); }
+    // Typing only starts the pause; the save and the query land once the user
+    // stops, so a five-letter word writes desktop.json once instead of five
+    // times.
+    changed log-filter-keyword => { log-search-timer.start(); }
+    // Leaving the history layer cancels a query that has not landed yet. The
+    // guard keeps an unrelated mode set to 1 from stopping the keyword timer
+    // that was just started.
+    changed log-mode => { if (root.log-mode != 1) { log-search-timer.stop(); } }
     changed log-level-error => { root.settings-changed(); }
     changed log-level-warn => { root.settings-changed(); }
     changed log-level-info => { root.settings-changed(); }
@@ -2050,6 +2061,18 @@ export component MainWindow inherits Window {
         triggered => {
             request-search-timer.running = false;
             if (root.page == 1) { root.query-requests(0); }
+        }
+    }
+    // The log history keyword follows the same 250 ms pause as the request
+    // search. Enter, 清除, the mode switch and every other filter action cancel
+    // the pause so a stale query never lands.
+    log-search-timer := Timer {
+        interval: 250ms;
+        running: false;
+        triggered => {
+            log-search-timer.running = false;
+            if (root.page == 3 && root.log-mode == 1) { root.query-log-history(); }
+            root.settings-changed();
         }
     }
     // The refresh acknowledgement stays visible for 1.2 s, then the button
@@ -3018,7 +3041,10 @@ export component MainWindow inherits Window {
                         options: [{ text: "实时" }, { text: "历史" }];
                         current-index <=> root.log-mode;
                         label: "日志层";
-                        selected(_) => { root.select-log-mode(root.log-mode); }
+                        selected(_) => {
+                            log-search-timer.stop();
+                            root.select-log-mode(root.log-mode);
+                        }
                     }
                     // The five history windows only exist in the history layer.
                     log-range-control := Segmented {
@@ -3027,7 +3053,10 @@ export component MainWindow inherits Window {
                         options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
                         current-index <=> root.log-range;
                         label: "日志日期范围";
-                        selected(_) => { root.select-log-range(root.log-range); }
+                        selected(_) => {
+                            log-search-timer.stop();
+                            root.select-log-range(root.log-range);
+                        }
                     }
                     // The four levels are independent toggles; no selection means
                     // every level, including the ungraded rows.
@@ -3035,25 +3064,25 @@ export component MainWindow inherits Window {
                         visible: root.log-mode == 1;
                         label: "错误";
                         checked <=> root.log-level-error;
-                        toggled => { root.query-log-history(); }
+                        toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-warn := Toggle {
                         visible: root.log-mode == 1;
                         label: "警告";
                         checked <=> root.log-level-warn;
-                        toggled => { root.query-log-history(); }
+                        toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-info := Toggle {
                         visible: root.log-mode == 1;
                         label: "信息";
                         checked <=> root.log-level-info;
-                        toggled => { root.query-log-history(); }
+                        toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-debug := Toggle {
                         visible: root.log-mode == 1;
                         label: "调试";
                         checked <=> root.log-level-debug;
-                        toggled => { root.query-log-history(); }
+                        toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                 }
                 // The source and the page actions share the second filter row,
@@ -3077,6 +3106,7 @@ export component MainWindow inherits Window {
                         label: "日志来源";
                         tooltip: "本机实例只有 chat2api 来源（gateway.log）；下拉只列网关返回的真实来源。";
                         selected(index) => {
+                            log-search-timer.stop();
                             root.log-source = index > 0 && index < root.log-source-options.length
                                 ? root.log-source-options[index] : "";
                             root.query-log-history();
@@ -3092,8 +3122,17 @@ export component MainWindow inherits Window {
                         placeholder: "关键词";
                         clearable: true;
                         text <=> root.log-filter-keyword;
-                        edited(_) => { root.query-log-history(); }
-                        cleared => { root.query-log-history(); }
+                        edited(_) => { log-search-timer.start(); }
+                        accepted => {
+                            log-search-timer.stop();
+                            root.query-log-history();
+                            root.settings-changed();
+                        }
+                        cleared => {
+                            log-search-timer.stop();
+                            root.query-log-history();
+                            root.settings-changed();
+                        }
                     }
                     // The slot keeps its width; only the glyph swaps to a
                     // check so the neighbouring actions never shift.
@@ -3161,6 +3200,12 @@ export component MainWindow inherits Window {
                     }
                     StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
                     Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
+                    Hint {
+                        visible: root.log-mode == 1 && root.log-search-pending;
+                        text: "查询中…";
+                        color: Theme.warn-text;
+                        vertical-alignment: center;
+                    }
                     Hint { visible: root.log-mode == 1 && !root.log-history-note.is-empty; text: root.log-history-note; vertical-alignment: center; }
                     DataText { text: root.log-updated-at-label; vertical-alignment: center; }
                     log-earlier := ActionButton {

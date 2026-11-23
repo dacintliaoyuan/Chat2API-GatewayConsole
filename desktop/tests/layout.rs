@@ -1030,6 +1030,44 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
 }
 
 #[test]
+fn log_keyword_query_is_debounced_and_mode_switch_cancels_the_pending_one() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_mode(1);
+    let applied = Rc::new(Cell::new(0usize));
+    window.on_query_log_history({
+        let applied = Rc::clone(&applied);
+        move || applied.set(applied.get() + 1)
+    });
+    let saved = Rc::new(Cell::new(0usize));
+    window.on_settings_changed({
+        let saved = Rc::clone(&saved);
+        move || saved.set(saved.get() + 1)
+    });
+
+    window.set_log_filter_keyword("timeout".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(applied.get(), 0, "typing must not query on every key");
+    assert_eq!(saved.get(), 0, "typing must not save on every key");
+    assert!(window.get_log_search_pending());
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(applied.get(), 1, "one pause makes one query");
+    assert_eq!(saved.get(), 1, "one pause makes one save");
+    assert!(!window.get_log_search_pending());
+
+    // A second edit while the pause is still pending is cancelled by switching
+    // back to the live layer, so the stale query never lands.
+    window.set_log_filter_keyword("error".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_log_search_pending());
+    window.set_log_mode(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(300));
+    assert_eq!(applied.get(), 1, "the live switch cancels the pending query");
+    assert!(!window.get_log_search_pending());
+}
+
+#[test]
 fn closing_the_log_detail_gives_its_height_back_to_the_list() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);

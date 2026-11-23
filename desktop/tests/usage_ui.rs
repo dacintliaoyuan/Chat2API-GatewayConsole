@@ -443,6 +443,10 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
     assert_eq!(window.get_request_model_speed().as_str(), "10.0");
     assert_eq!(window.get_request_first_token().as_str(), "120 ms");
     assert_eq!(window.get_request_metric_label().as_str(), "Token");
+    assert_eq!(
+        window.get_request_metric_unit().as_str(),
+        "所选范围 · 单位：亿"
+    );
     assert_eq!(window.get_request_plotted_values().row_count(), 2);
     assert_eq!(
         window.get_request_plotted_values().row_data(0),
@@ -450,9 +454,22 @@ fn request_analytics_shows_metric_cards_speed_chart_split_and_model_speeds() {
     );
     assert_eq!(window.get_request_chart_series_count(), 1);
 
+    window.set_request_metric(1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    assert_eq!(window.get_request_metric_label().as_str(), "请求数");
+    assert_eq!(
+        window.get_request_metric_unit().as_str(),
+        "所选范围 · 单位：次",
+        "the subtitle must follow the request metric"
+    );
+
     window.set_request_metric(2);
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
     assert_eq!(window.get_request_metric_label().as_str(), "输出速度");
+    assert_eq!(
+        window.get_request_metric_unit().as_str(),
+        "所选范围 · 单位：Token/秒"
+    );
     assert_eq!(window.get_request_plotted_values().row_data(0), Some(10.0));
 
     window.set_request_split_by_model(true);
