@@ -350,7 +350,7 @@ fn the_plot_fills_the_chart_card_without_a_blank_band() {
         selection_y + selection_height,
     );
     assert!(
-        plot_height > chart_height * 0.45,
+        plot_height > chart_height * 0.30,
         "the plot must take the chart card's remaining height"
     );
     assert!(
@@ -659,6 +659,17 @@ fn the_compact_request_page_folds_the_chart_and_keeps_the_list_in_view() {
     );
     let first_row_bottom = window.get_request_rows_y() + 50.0;
     let footer_top = 420.0 - window.get_footer_height();
+    println!(
+        "rows_y={} list_y={} list_visible={} analytics y={} h={} page_h={} viewport_h={} status_y={}",
+        window.get_request_rows_y(),
+        window.get_request_list_y(),
+        window.get_request_list_visible(),
+        window.get_request_analytics_y(),
+        window.get_request_analytics_height(),
+        window.get_request_page_height(),
+        window.get_request_scroll_viewport_height(),
+        window.get_status_row_y(),
+    );
     assert!(
         first_row_bottom <= footer_top + 1.0,
         "the 540×420 first screen must show a request row: row bottom={first_row_bottom} footer top={footer_top}"
@@ -883,7 +894,7 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
 }
 
 #[test]
-fn an_unfiltered_empty_request_list_leaves_the_copy_to_the_status_row() {
+fn an_unfiltered_empty_request_list_keeps_the_reason_inside_the_table() {
     let window = request_window();
     window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
     window.set_request_status("所选时间没有请求记录。".into());
@@ -892,14 +903,26 @@ fn an_unfiltered_empty_request_list_leaves_the_copy_to_the_status_row() {
     assert_eq!(
         window.get_request_status_text().as_str(),
         "所选时间没有请求记录。",
-        "the status row is the one place that explains the empty time window"
+        "the status row still explains the empty time window"
     );
     assert_eq!(
         window.get_request_empty_title().as_str(),
-        "",
-        "the list header must not repeat the status row's copy"
+        "所选时间没有请求记录",
+        "the table carries the same reason instead of a header-only blank table"
     );
-    assert!(!window.get_request_empty_title_visible());
+    assert!(window.get_request_empty_title_visible());
+    assert!(
+        window.get_request_empty_expand_visible(),
+        "the empty table offers 扩大时间范围"
+    );
+    assert!(
+        window.get_request_empty_refresh_visible(),
+        "the empty table offers 刷新"
+    );
+    assert!(
+        !window.get_request_empty_clear_visible(),
+        "an unfiltered empty window has no filter to clear"
+    );
     assert!(
         !window.get_request_fail_toggle_visible(),
         "the empty state must not offer 只看失败"

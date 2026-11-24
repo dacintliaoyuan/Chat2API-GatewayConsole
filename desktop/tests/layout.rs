@@ -156,6 +156,11 @@ fn overview_content_is_visible_and_scrolls_at_minimum_size() {
         "the usage chart must be visible in the default window"
     );
     assert!(
+        window.get_overview_chart_height() <= 300.0 + 1.0,
+        "the usage chart must not absorb the first screen: {}",
+        window.get_overview_chart_height()
+    );
+    assert!(
         window.get_status_row_y() + window.get_status_row_height() <= 720.0 + 1.0,
         "the status row must not be clipped in the default window"
     );
@@ -3172,5 +3177,154 @@ fn the_maintenance_menu_uses_a_wrench_not_the_settings_gear() {
         window.get_maintenance_toggle_icon().as_str(),
         "wrench",
         "the maintenance menu must not reuse the settings page's gear"
+    );
+}
+
+#[test]
+fn the_request_page_uses_one_column_at_800px() {
+    for (width, height) in [(800.0, 540.0), (800.0, 720.0)] {
+        let window = window_at(width, height);
+        window.set_page(1);
+        let rows = (0..3).map(request_row).collect::<Vec<_>>();
+        window.set_requests(ModelRc::from(rows.as_slice()));
+        window.set_selected_request("key-0".into());
+        window.set_request_detail("HTTP 状态  200\n错误\n  无".into());
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+        assert!(
+            !window.get_request_list_visible(),
+            "800 px must show the detail as a single-column overlay, not squeeze the list"
+        );
+        assert!(
+            window.get_request_detail_width() >= window.get_request_page_host_width() - 1.0,
+            "the detail must take the full content width: detail {} page {}",
+            window.get_request_detail_width(),
+            window.get_request_page_host_width()
+        );
+
+        // The page status row owns the one chart disclosure at this width;
+        // the click is the product callback, not a coordinate guess.
+        click(
+            &window,
+            window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
+            window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
+        );
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        assert!(
+            window.get_request_analytics_compact(),
+            "800 px must stack the analytics card instead of the wide row"
+        );
+        assert!(
+            window.get_request_analytics_chart_width() > 300.0,
+            "the chart keeps a readable width: {}",
+            window.get_request_analytics_chart_width()
+        );
+        assert!(
+            (window.get_request_analytics_chart_width()
+                - window.get_request_analytics_speed_table_width())
+                .abs()
+                < 1.0,
+            "the speed table must sit under the chart at the same width: chart {} table {}",
+            window.get_request_analytics_chart_width(),
+            window.get_request_analytics_speed_table_width()
+        );
+        assert!(
+            window.get_request_analytics_chart_y()
+                + window.get_request_analytics_chart_height()
+                <= window.get_request_analytics_speed_table_y() + 1.0,
+            "the speed table must sit below the chart, chart bottom {} table y {}",
+            window.get_request_analytics_chart_y() + window.get_request_analytics_chart_height(),
+            window.get_request_analytics_speed_table_y()
+        );
+    }
+}
+
+#[test]
+fn keyboard_focus_on_rows_chips_and_cards_uses_a_control_strength_edge() {
+    let probe = RowStyleProbe::new().expect("create RowStyleProbe");
+    probe.show().expect("show RowStyleProbe");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert_eq!(
+        probe.get_row_focus_edge_width(),
+        0.0,
+        "a resting row keeps no focus ring"
+    );
+    probe.invoke_focus_row();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_row_focus_visible());
+    assert_eq!(probe.get_row_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_row_focus_edge(),
+        probe.get_control_strong(),
+        "a focused list row must step to the 3:1 control edge"
+    );
+
+    probe.invoke_focus_chip();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_chip_focus_visible());
+    assert_eq!(probe.get_chip_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_chip_focus_edge(),
+        probe.get_control_strong(),
+        "a focused address chip must step to the 3:1 control edge"
+    );
+
+    probe.invoke_focus_card();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_card_focus_visible());
+    assert_eq!(probe.get_card_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_card_focus_edge(),
+        probe.get_control_strong(),
+        "a focused clickable card must step to the 3:1 control edge"
+    );
+
+    probe.set_probe_row_selected(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(probe.get_row_fill(), probe.get_selected_fill());
+    assert_ne!(
+        probe.get_selected_fill(),
+        probe.get_hover_fill(),
+        "a selected row must not share the hover fill in either theme"
+    );
+    probe.set_probe_theme_mode(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_ne!(
+        probe.get_selected_fill(),
+        probe.get_hover_fill(),
+        "dark selected must stay distinct from hover"
+    );
+    assert_eq!(probe.get_row_fill(), probe.get_selected_fill());
+}
+
+#[test]
+fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
+    let window = window_at(1060.0, 720.0);
+    window.set_account_label("已登录".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "chart_y={} recent_title_y={} recent_title_h={} status_y={} viewport={}",
+        window.get_overview_chart_absolute_y(),
+        window.get_recent_issues_title_y(),
+        window.get_recent_issues_title_height(),
+        window.get_status_row_y(),
+        window.get_overview_viewport_height(),
+    );
+    assert!(
+        window.get_overview_chart_height() <= 300.0 + 1.0,
+        "the usage chart must not absorb the first screen: {}",
+        window.get_overview_chart_height()
+    );
+    assert!(
+        window.get_overview_chart_absolute_y() < window.get_recent_issues_title_y(),
+        "the trend chart precedes the status cards on the overview"
+    );
+    assert!(
+        window.get_recent_issues_title_y() + window.get_recent_issues_title_height()
+            <= window.get_status_row_y() + 1.0,
+        "the 近期问题 title must be visible in the first screen: title bottom {} status y {}",
+        window.get_recent_issues_title_y() + window.get_recent_issues_title_height(),
+        window.get_status_row_y()
     );
 }

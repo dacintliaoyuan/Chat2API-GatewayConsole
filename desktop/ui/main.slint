@@ -376,12 +376,19 @@ component Card inherits Panel {
     callback activated();
     out property <bool> hovered: root.clickable && pointer.has-hover;
     out property <bool> focused: root.clickable && keyboard.has-focus;
+    // Test seams: a clickable card's keyboard focus steps the 1 px frame to
+    // the 3:1 control edge; hover keeps the softer 2.1:1 edge.
+    out property <bool> focus-visible: root.focused;
+    out property <color> focus-edge: root.border-color;
+    out property <length> focus-edge-width: root.border-width;
+    public function take-focus() { keyboard.focus(); }
     out property <length> content-height: content.preferred-height;
     out property <length> content-width: content.width;
     vertical-stretch: 0;
     preferred-height: content.preferred-height;
     background: root.hovered || root.focused ? Theme.surface-2 : Theme.surface;
-    border-color: root.hovered || root.focused ? Theme.edge-strong : Theme.edge;
+    border-color: root.focused ? Theme.edge-control-strong
+        : root.hovered ? Theme.edge-strong : Theme.edge;
     animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     drop-shadow-offset-y: 1px;
     drop-shadow-blur: 3px;
@@ -564,9 +571,16 @@ component CopyChip inherits Rectangle {
     callback clicked();
     height: 24px;
     border-radius: 5px;
+    // Test seams: keyboard focus steps the frame to the 3:1 control edge
+    // instead of stopping at the 2.1:1 hover edge.
+    out property <bool> focus-visible: focus.has-focus;
+    out property <color> focus-edge: root.border-color;
+    out property <length> focus-edge-width: root.border-width;
+    public function take-focus() { focus.focus(); }
     background: pointer.has-hover || focus.has-focus ? Theme.surface-2 : Theme.soft(3);
     border-width: 1px;
-    border-color: pointer.has-hover || focus.has-focus ? Theme.edge-strong : Theme.edge;
+    border-color: focus.has-focus ? Theme.edge-control-strong
+        : pointer.has-hover ? Theme.edge-strong : Theme.edge;
     animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     HorizontalLayout {
         padding-left: 8px;
@@ -618,6 +632,11 @@ export component MainWindow inherits Window {
     // Keep the shortcut handler reachable when no control owns focus.
     forward-focus: root-focus;
     private property <bool> compact: root.sidebar-mode == 1 || root.width < 800px;
+    // The request page needs more room than the other pages: at 800 px the wide
+    // split leaves the list 270 px and the detail 282 px, so the detail becomes
+    // a single-column overlay as soon as the content width drops under 700 px.
+    private property <bool> request-compact:
+        root.compact || root.request-content-width() < 700px;
     // The appearance card switches to one column below the width where three
     // label + control rows still fit side by side.
     private property <bool> appearance-narrow: root.width < 985px;
@@ -906,6 +925,18 @@ export component MainWindow inherits Window {
     out property <length> maintenance-menu-x: maintenance-menu.x;
     out property <length> maintenance-menu-width: maintenance-menu.width;
     out property <length> maintenance-menu-y: maintenance-menu.y;
+    // A low window leaves only a slit below the three-state card (540×420
+    // compact), so the panel starts under the title row instead and takes the
+    // rest of the height. The test seam lets the layout tests assert that the
+    // first action stays inside the visible sheet.
+    out property <bool> maintenance-menu-sheet:
+        root.height - root.maintenance-menu-anchor-y < 300px;
+    out property <length> maintenance-menu-top:
+        root.maintenance-menu-sheet
+        ? page-host.absolute-position.y : root.maintenance-menu-anchor-y;
+    private property <length> maintenance-menu-anchor-y:
+        max(state-card.absolute-position.y + state-card.height + 8px,
+            maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px);
     out property <length> overview-state-card-y: state-card.absolute-position.y;
     out property <length> overview-state-card-bottom:
         state-card.absolute-position.y + state-card.height;
@@ -1348,6 +1379,16 @@ export component MainWindow inherits Window {
     out property <length> request-pinned-marker-width: request-analytics.pinned-marker-width;
     out property <length> request-pinned-marker-y: request-analytics.pinned-marker-y;
     out property <length> request-pinned-marker-height: request-analytics.pinned-marker-height;
+    // At 800 px the request page uses the compact single column, so the
+    // analytics chart and the speed table stack instead of sharing a 148 px row.
+    out property <bool> request-analytics-compact: request-analytics.compact-layout;
+    out property <length> request-analytics-chart-y: request-analytics.chart-y;
+    out property <length> request-analytics-chart-height: request-analytics.chart-height;
+    out property <length> request-analytics-chart-width: request-analytics.chart-width;
+    out property <length> request-analytics-speed-table-y:
+        request-analytics.speed-table-y;
+    out property <length> request-analytics-speed-table-width:
+        request-analytics.speed-table-width;
     out property <string> request-analytics-empty-text: request-analytics.empty-text;
     // An unfiltered empty window is the legal no-requests state; a filter that
     out property <bool> request-analytics-card-visible: request-analytics.visible;
@@ -1550,6 +1591,11 @@ export component MainWindow inherits Window {
     out property <string> recent-issues-status-text: root.recent-issues-status;
     out property <int> recent-issues-tone-value: root.recent-issues-tone;
     out property <length> recent-issues-card-height: recent-issues-card.height;
+    // The first screen ends at the footer's status row; a 720 px window must
+    // reach the 近期问题 title without scrolling past the usage chart.
+    out property <length> recent-issues-card-y: recent-issues-card.absolute-position.y;
+    out property <length> recent-issues-title-y: recent-issues-title.absolute-position.y;
+    out property <length> recent-issues-title-height: recent-issues-title.height;
     out property <length> recent-issue-list-x: recent-issue-list.absolute-position.x;
     out property <length> recent-issue-list-y: recent-issue-list.absolute-position.y;
     out property <length> recent-issue-list-width: recent-issue-list.width;
@@ -1589,6 +1635,11 @@ export component MainWindow inherits Window {
     out property <length> overview-address-y: overview-address.absolute-position.y;
     out property <length> overview-address-width: overview-address.width;
     out property <length> overview-address-height: overview-address.height;
+    out property <bool> overview-address-focus-visible: overview-address.focus-visible;
+    out property <color> overview-address-focus-edge: overview-address.focus-edge;
+    out property <length> overview-address-focus-edge-width:
+        overview-address.focus-edge-width;
+    public function focus-overview-address() { overview-address.take-focus(); }
     out property <length> overview-v1-x: overview-v1.absolute-position.x;
     out property <length> overview-v1-y: overview-v1.absolute-position.y;
     out property <length> overview-v1-width: overview-v1.width;
@@ -1713,6 +1764,11 @@ export component MainWindow inherits Window {
     out property <length> technical-card-y: technical-card.absolute-position.y;
     out property <length> technical-card-width: technical-card.width;
     out property <length> technical-card-height: technical-card.height;
+    out property <bool> technical-card-focus-visible: technical-card.focus-visible;
+    out property <color> technical-card-focus-edge: technical-card.focus-edge;
+    out property <length> technical-card-focus-edge-width:
+        technical-card.focus-edge-width;
+    public function focus-technical-card() { technical-card.take-focus(); }
     // Test seams: the settings cards share one column and one row rhythm, so the
     // geometry tests can assert the card edges and the label/control alignment.
     out property <length> appearance-card-x: appearance-card.absolute-position.x;
@@ -1853,16 +1909,25 @@ export component MainWindow inherits Window {
     out property <length> request-list-height: request-list-panel.height;
     out property <length> request-page-width: request-page.width;
     out property <length> request-page-host-width: page-host.width;
+    out property <length> request-page-height: request-page.preferred-height;
+    out property <length> request-scroll-viewport-height: request-scroll.visible-height;
     out property <length> request-filter-width: request-filters.width;
     out property <length> request-filter-row-width: request-filter-row.width;
     out property <length> request-filter-result-row-width: request-filter-result-row.width;
     out property <bool> request-list-visible: request-list-pane.visible;
     out property <string> request-empty-title:
-        root.request-filters-active ? "没有符合筛选的请求" : "";
+        root.requests.length == 0
+        ? (root.request-filters-active
+            ? "没有符合筛选的请求" : "所选时间没有请求记录")
+        : "";
     out property <bool> request-empty-title-visible:
         request-empty-title-hint.visible;
     out property <bool> request-empty-clear-visible:
         root.requests.length == 0 && root.request-filters-active;
+    out property <bool> request-empty-expand-visible:
+        root.requests.length == 0 && !root.request-filters-active;
+    out property <bool> request-empty-refresh-visible:
+        request-empty-refresh.visible;
     out property <length> request-empty-clear-x:
         request-empty-clear.absolute-position.x;
     out property <length> request-empty-clear-y:
@@ -3077,11 +3142,13 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    // The chart takes the leftover height instead of leaving a
+                    // blank band above the status row, but it never grows past
+                    // 300 px and pushes 最近核验 / 近期问题 / 上游故障历史
+                    // off the first screen.
                     usage-chart := UsageChart {
-                        // The overview is a fixed set of cards; the chart takes
-                        // the leftover height instead of leaving a blank band
-                        // above the status row.
                         vertical-stretch: 1;
+                        max-height: 300px;
                         period <=> root.usage-period;
                         points: root.usage-points;
                         labels: root.usage-labels;
@@ -3155,7 +3222,7 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             HorizontalLayout {
                                 spacing: 8px;
-                                SectionLabel {
+                                recent-issues-title := SectionLabel {
                                     text: "近期问题";
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
@@ -3310,7 +3377,7 @@ export component MainWindow inherits Window {
                 min-height: max(self.preferred-height, request-scroll.visible-height);
                 // Leave a gutter on the right so the scrollbar thumb lands on
                 // the page, never inside a card.
-                padding-right: root.compact ? 8px : 0px;
+                padding-right: root.request-compact ? 8px : 0px;
                 spacing: 8px;
                 // The request page follows Magpie's 用量/请求 order: the two
                 // filter rows first, then the summary hint, the metric cards and
@@ -3346,7 +3413,7 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         spacing: 8px;
                         request-model-control := Dropdown {
-                            width: root.compact ? 110px : 180px;
+                            width: root.request-compact ? 110px : 180px;
                             options: root.request-model-options;
                             current-index <=> root.request-model-index;
                             label: "请求模型";
@@ -3358,7 +3425,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         request-result-control := Dropdown {
-                            width: root.compact ? 110px : 160px;
+                            width: root.request-compact ? 110px : 160px;
                             options: root.request-result-options;
                             current-index <=> root.request-result;
                             label: "请求结果";
@@ -3404,7 +3471,7 @@ export component MainWindow inherits Window {
                     spacing: 8px;
                     // The wide page has no scrollbar gutter; keep the time
                     // label clear of the ScrollView thumb and the window edge.
-                    padding-right: root.compact ? 0px : 8px;
+                    padding-right: root.request-compact ? 0px : 8px;
                     Hint {
                         text: root.request-status-label;
                         color: Theme.status_ink(root.request-tone);
@@ -3421,7 +3488,7 @@ export component MainWindow inherits Window {
                     // the scope caption moves into this row instead of a sixth
                     // cell that would elide every value.
                     request-kpi-scope-hint := Hint {
-                        visible: root.compact && !root.request-empty;
+                        visible: root.request-compact && !root.request-empty;
                         text: "指标按所选范围";
                         vertical-alignment: center;
                     }
@@ -3463,7 +3530,7 @@ export component MainWindow inherits Window {
                     visible: !root.request-empty;
                     width: 100%;
                     horizontal-stretch: 1;
-                    compact: root.compact;
+                    compact: root.request-compact;
                     wide-collapsed <=> root.request-chart-collapsed;
                     metrics: root.request-metrics;
                     empty: root.request-empty;
@@ -3490,19 +3557,23 @@ export component MainWindow inherits Window {
                     width: 100%;
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
-                    spacing: root.compact && !root.selected-request.is-empty ? 0px : 12px;
+                    spacing: root.request-compact && !root.selected-request.is-empty ? 0px : 12px;
                     request-list-pane := VerticalLayout {
                     horizontal-stretch: 0;
                     // The page scrolls; the list keeps the ADR 0015 240 px
                     // floor at every width instead of collapsing to one row.
                     min-height: 240px;
+                    // The card takes the row's remaining height so its own
+                    // centered empty state sits under the status row instead of
+                    // leaving a blank band above the table.
+                    vertical-stretch: 1;
                     // Follow the detail panel's animated width so closing it
                     // gives the space back to the list without a jump.
-                    width: root.compact
+                    width: root.request-compact
                         ? (root.selected-request.is-empty ? root.request-content-width() : 0px)
                         : root.request-content-width()
                             - (request-details.width > 1px ? request-details.width + 12px : 0px);
-                    visible: !root.compact || root.selected-request.is-empty;
+                    visible: !root.request-compact || root.selected-request.is-empty;
                     spacing: 8px;
                     request-list-panel := Panel {
                         vertical-stretch: 1;
@@ -3529,23 +3600,29 @@ export component MainWindow inherits Window {
                             }
                             request-empty := VerticalLayout {
                                 visible: root.requests.length == 0;
-                                height: root.requests.length == 0 ? self.preferred-height : 0px;
+                                // Fill the card body so the one empty state sits
+                                // in the middle of the table instead of under
+                                // its header with a blank 115 px band below.
+                                // max-height 0 collapses the hidden layout;
+                                // the visible one stretches instead of adding
+                                // its preferred height to the page.
+                                min-height: 0px;
+                                max-height: root.requests.length == 0 ? 100000px : 0px;
                                 vertical-stretch: root.requests.length == 0 ? 1 : 0;
                                 alignment: center;
-                                spacing: 4px;
+                                spacing: 6px;
                                 request-empty-title-hint := Hint {
-                                    text: "没有符合筛选的请求";
+                                    text: root.request-filters-active
+                                        ? "没有符合筛选的请求" : "所选时间没有请求记录";
                                     color: Theme.ink;
                                     font-size: 13px;
                                     font-weight: 600;
                                     horizontal-alignment: center;
-                                    visible: root.request-filters-active;
-                                    height: self.visible ? self.preferred-height : 0px;
                                 }
                                 Hint {
-                                    // The status row already names the empty
-                                    // window; the list adds a next step only
-                                    // when a filter is what emptied it.
+                                    // The status row names the empty window;
+                                    // the table adds the next step only when a
+                                    // filter is what emptied it.
                                     visible: root.request-filters-active;
                                     height: self.visible ? self.preferred-height : 0px;
                                     text: "调整筛选条件，或清除筛选后重试";
@@ -3560,6 +3637,28 @@ export component MainWindow inherits Window {
                                         icon: "close";
                                         quiet: true;
                                         clicked => { root.clear-request-filters(); }
+                                    }
+                                }
+                                request-empty-expand-row := HorizontalLayout {
+                                    visible: !root.request-filters-active;
+                                    height: self.visible ? self.preferred-height : 0px;
+                                    alignment: center;
+                                    spacing: 8px;
+                                    request-empty-expand := ActionButton {
+                                        label: "扩大时间范围";
+                                        icon: "chevron-down";
+                                        quiet: true;
+                                        tooltip: "把请求日期范围切到全部";
+                                        clicked => {
+                                            root.request-period = 4;
+                                            root.query-requests(0);
+                                        }
+                                    }
+                                    request-empty-refresh := ActionButton {
+                                        label: "刷新";
+                                        icon: "refresh";
+                                        quiet: true;
+                                        clicked => { root.query-requests(0); }
                                     }
                                 }
                             }
@@ -3626,7 +3725,7 @@ export component MainWindow inherits Window {
                     // The detail fills the list row; its own content must not
                     // raise the page's preferred height.
                     preferred-height: 0px;
-                    width: root.selected-request.is-empty ? 0px : root.compact ? max(300px, root.width - 134px) : min(400px, (root.width - 212px) * 0.48);
+                    width: root.selected-request.is-empty ? 0px : root.request-compact ? max(300px, root.request-content-width()) : min(400px, (root.width - 212px) * 0.48);
                     clip: true;
                     animate width { duration: Theme.settle; easing: ease-out; }
                     title: root.request-detail-title;
@@ -5205,10 +5304,11 @@ export component MainWindow inherits Window {
                 // The overlay never covers the three-state band: it opens below
                 // the state card while that card is visible, and falls back to
                 // the 维护 button's row once the page has scrolled it away.
-                y: max(state-card.absolute-position.y + state-card.height + 8px,
-                    maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px);
+                // A low window flips it to a sheet under the title row, because
+                // the state card would leave less than 300 px for the actions.
+                y: root.maintenance-menu-top;
                 height: min(maintenance-menu-content.preferred-height,
-                    root.height - self.y - 56px);
+                    root.height - self.y - (root.maintenance-menu-sheet ? 8px : 56px));
                 z: 20;
                 // An always-instantiated, zero-height live region so the open
                 // and close transitions are announced even when the panel's
@@ -5416,4 +5516,50 @@ export component MainWindow inherits Window {
             }
             }
             }
+}
+
+// Test seam: the headless tests instantiate one of each interactive row/card
+// component directly, so they can focus it and read the exact ring colour without
+// depending on a row's coordinates inside a ListView. This probe is never
+// instantiated by the product window.
+export component RowStyleProbe inherits Window {
+    width: 320px;
+    height: 240px;
+    background: Theme.background;
+    in-out property <bool> probe-row-selected: false;
+    in property <bool> probe-system-dark <=> Theme.system-dark;
+    in property <int> probe-theme-mode <=> Theme.theme-mode;
+    row := Selectable {
+        y: 0px;
+        width: 300px;
+        height: 36px;
+        label: "probe row";
+        selected: root.probe-row-selected;
+    }
+    chip := CopyChip {
+        y: 40px;
+        width: 160px;
+        label: "127.0.0.1:8000";
+    }
+    card := ClickableCard {
+        y: 72px;
+        width: 300px;
+        card-label: "实例管理";
+    }
+    out property <bool> row-focus-visible: row.focus-visible;
+    out property <color> row-fill: row.fill-tint;
+    out property <color> row-focus-edge: row.focus-edge;
+    out property <length> row-focus-edge-width: row.focus-edge-width;
+    public function focus-row() { row.take-focus(); }
+    out property <color> selected-fill: Theme.selected;
+    out property <color> hover-fill: Theme.hover;
+    out property <color> control-strong: Theme.edge-control-strong;
+    out property <bool> chip-focus-visible: chip.focus-visible;
+    out property <color> chip-focus-edge: chip.focus-edge;
+    out property <length> chip-focus-edge-width: chip.focus-edge-width;
+    public function focus-chip() { chip.take-focus(); }
+    out property <bool> card-focus-visible: card.focus-visible;
+    out property <color> card-focus-edge: card.focus-edge;
+    out property <length> card-focus-edge-width: card.focus-edge-width;
+    public function focus-card() { card.take-focus(); }
 }
