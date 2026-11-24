@@ -291,6 +291,10 @@ impl CatalogSurface for MainWindow {
         self.set_um_model_loading(loading);
     }
 
+    fn set_unread(&self, unread: bool) {
+        self.set_um_model_unread(unread);
+    }
+
     fn selected_model(&self) -> String {
         self.get_selected_model().to_string()
     }

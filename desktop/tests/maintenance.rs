@@ -95,6 +95,26 @@ fn a_starting_gateway_closes_all_five_actions_until_it_is_ready() {
 }
 
 #[test]
+fn the_stop_and_restart_rows_keep_their_danger_identity() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+    open_maintenance_menu(&window);
+
+    assert!(
+        window.get_maintenance_stop_danger(),
+        "停止 must read as a destructive action before confirmation"
+    );
+    assert_eq!(window.get_maintenance_stop_icon().as_str(), "power");
+    assert!(
+        window.get_maintenance_restart_danger(),
+        "重启 must read as a destructive action before confirmation"
+    );
+    assert_eq!(window.get_maintenance_restart_icon().as_str(), "refresh");
+}
+
+#[test]
 fn a_manual_takeover_closes_the_on_demand_login_with_the_automatic_submit_reason() {
     let mut current = state(GatewayPhase::Running, true);
     current.manual_takeover = true;
@@ -136,8 +156,8 @@ fn every_action_has_impact_copy_and_a_second_confirmation() {
             "{action:?}"
         );
     }
-    assert!(row(&menu, Action::Stop).confirm.body.contains("失败"));
-    assert!(row(&menu, Action::Restart).confirm.body.contains("中断"));
+    assert!(row(&menu, Action::Stop).confirm.body.contains("中断在途请求"));
+    assert!(row(&menu, Action::Restart).confirm.body.contains("中断在途请求"));
     assert!(row(&menu, Action::Verify)
         .confirm
         .body
@@ -593,6 +613,26 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
     assert!(
         !window.get_maintenance_menu_visible(),
         "a click outside the panel closes the menu"
+    );
+}
+
+#[test]
+fn the_maintenance_menu_right_edge_aligns_with_its_trigger() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+
+    let menu_right = window.get_maintenance_menu_x() + window.get_maintenance_menu_width();
+    let toggle_right = window.get_maintenance_toggle_x() + window.get_maintenance_toggle_width();
+    assert!(
+        (menu_right - toggle_right).abs() < 1.0,
+        "the menu right edge {menu_right} must align with the 维护 trigger {toggle_right}"
+    );
+    assert!(
+        menu_right <= window.get_page_refresh_x(),
+        "the menu must not cover the refresh action at {}",
+        window.get_page_refresh_x()
     );
 }
 

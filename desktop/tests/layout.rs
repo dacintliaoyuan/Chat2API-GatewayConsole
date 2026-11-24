@@ -1740,6 +1740,11 @@ fn the_query_and_export_actions_use_search_and_download_glyphs() {
         "download",
         "导出 CSV is a download, not a forward arrow"
     );
+    assert_eq!(
+        window.get_request_fail_toggle_icon(),
+        "filter",
+        "只看失败 is a filter, not the search glyph"
+    );
 }
 
 #[test]
@@ -2779,6 +2784,41 @@ fn the_log_page_actions_share_the_status_row_and_align_right() {
         window.get_log_follow_x() + window.get_log_follow_width()
             < window.get_log_settings_x(),
         "跟随 reads before 设置 in the status row"
+    );
+    assert!(
+        (window.get_log_status_text_y() - window.get_log_follow_y()).abs() < 1.0,
+        "the status text and the follow action share one top edge"
+    );
+    assert!(
+        (window.get_log_status_text_height() - window.get_log_status_row_height()).abs() < 1.0,
+        "the status text fills the fixed 34 px status row"
+    );
+    assert!(
+        (window.get_log_status_row_height() - 34.0).abs() < 0.5,
+        "the status row is the 34 px control height, got {}",
+        window.get_log_status_row_height()
+    );
+}
+
+#[test]
+fn the_compact_log_status_keeps_its_text_instead_of_dropping_it() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(3);
+    window.set_log_status("已连接 · 最近 24 条".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert!(window.get_log_status_text_visible());
+    assert_eq!(
+        window.get_log_status_text().as_str(),
+        "已连接 · 最近 24 条"
+    );
+    assert!(
+        window.get_log_status_text_width() > 0.0,
+        "the compact status text keeps a readable box instead of collapsing"
+    );
+    assert!(
+        (window.get_log_status_text_y() - window.get_log_follow_y()).abs() < 1.0,
+        "the compact status text and the follow action share one top edge"
     );
 }
 
