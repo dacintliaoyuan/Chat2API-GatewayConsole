@@ -1089,13 +1089,27 @@ pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> RequestDe
     // 错误 comes right after 结果: the detail panel's first screen must answer
     // "did it work and why not" before the duration and token readings, which
     // sat below the fold in the old 结果 → 耗时 → Token → 错误 order.
+    // A ledger result note that repeats the error message is drawn only once, in
+    // 错误; a distinct note keeps its own 结果说明 line.
+    let mut note_lines = row.detail.lines();
+    let result_note = note_lines.next().unwrap_or("");
+    let result_detail = if row.error_message.as_deref() == Some(result_note) {
+        note_lines.collect::<Vec<_>>().join("\n")
+    } else {
+        row.detail.clone()
+    };
+    let result_section = if result_detail.is_empty() {
+        String::new()
+    } else {
+        format!("  结果说明  {result_detail}\n")
+    };
     let body = format!(
-        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n  结果说明  {}\n{}\n\n{}\n错误\n{}\n\n{}\n耗时\n  {}\n  {}\n  {}\n  {}\n\n{}\nToken\n  {}\n  {}\n  {}\n  {}",
+        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n{}{}\n\n{}\n错误\n{}\n\n{}\n耗时\n  {}\n  {}\n  {}\n  {}\n\n{}\nToken\n  {}\n  {}\n  {}\n  {}",
         row.at,
         row.result,
         row.model,
         http_status_line(row),
-        row.detail,
+        result_section,
         indent(&retry_lines(row)),
         SECTION_RULE,
         indent(&error_lines(row)),

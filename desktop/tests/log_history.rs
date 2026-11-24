@@ -72,6 +72,21 @@ fn the_log_page_separates_live_and_history_without_pausing_live_follow() {
     assert_eq!(window.get_log_mode(), 0, "the live layer starts selected");
     assert!(!window.get_log_range_visible());
     assert!(window.get_log_follow_visible());
+    assert!(
+        window.get_log_paused_hint_visible(),
+        "a paused live follow says so in the status row"
+    );
+    assert_eq!(
+        window.get_log_paused_hint_text().as_str(),
+        "已暂停 · 3 条新日志"
+    );
+    assert!(
+        window
+            .get_log_follow_accessible_label()
+            .contains("3 条新日志"),
+        "the badge count must reach assistive technology: {}",
+        window.get_log_follow_accessible_label()
+    );
 
     window.set_log_mode(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);

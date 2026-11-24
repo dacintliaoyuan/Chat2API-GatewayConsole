@@ -122,6 +122,9 @@ fn open_account_form(window: &MainWindow) {
 #[test]
 fn overview_content_is_visible_and_scrolls_at_minimum_size() {
     let window = window_at(1060.0, 720.0);
+    // Match the captured first screen, including the failure evidence row.
+    window.set_overview_failure_count(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     println!(
         "window={}x{} content={} viewport={} scroll_h={} state={} state_content={}x{} login={} login_content={} chart_y={} chart_h={} status_y={} status_h={}",
         window.get_window_width(),
@@ -156,7 +159,7 @@ fn overview_content_is_visible_and_scrolls_at_minimum_size() {
         "the usage chart must be visible in the default window"
     );
     assert!(
-        window.get_overview_chart_height() <= 300.0 + 1.0,
+        window.get_overview_chart_height() <= 260.0 + 1.0,
         "the usage chart must not absorb the first screen: {}",
         window.get_overview_chart_height()
     );
@@ -3302,6 +3305,7 @@ fn keyboard_focus_on_rows_chips_and_cards_uses_a_control_strength_edge() {
 fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
     let window = window_at(1060.0, 720.0);
     window.set_account_label("已登录".into());
+    window.set_overview_failure_count(3);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     println!(
         "chart_y={} recent_title_y={} recent_title_h={} status_y={} viewport={}",
@@ -3312,7 +3316,7 @@ fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
         window.get_overview_viewport_height(),
     );
     assert!(
-        window.get_overview_chart_height() <= 300.0 + 1.0,
+        window.get_overview_chart_height() <= 260.0 + 1.0,
         "the usage chart must not absorb the first screen: {}",
         window.get_overview_chart_height()
     );
@@ -3326,5 +3330,53 @@ fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
         "the 近期问题 title must be visible in the first screen: title bottom {} status y {}",
         window.get_recent_issues_title_y() + window.get_recent_issues_title_height(),
         window.get_status_row_y()
+    );
+}
+
+#[test]
+fn the_request_row_accessible_label_carries_first_token_and_summary() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    let label = window.get_request_row_label_sample();
+    println!("row label={label}");
+    assert!(label.contains("120 ms"), "missing 首字耗时 in {label}");
+    assert!(label.contains("1200 ms"), "missing summary in {label}");
+    assert!(label.contains("成功"), "missing 结果 in {label}");
+}
+
+#[test]
+fn ctrl_f_reaches_the_help_search_field() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_help_search_focused());
+    window.invoke_focus_page_search();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        window.get_help_search_focused(),
+        "the help page's Ctrl+F target must take focus"
+    );
+}
+
+#[test]
+fn the_settings_directory_scrolls_to_a_lower_card() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(window.get_settings_scroll_y(), 0.0);
+    window.invoke_scroll_settings_to(window.get_settings_viewport_height());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "settings y={} viewport={} content_h={}",
+        window.get_settings_scroll_y(),
+        window.get_settings_viewport_height(),
+        window.get_settings_content_height(),
+    );
+    assert!(
+        window.get_settings_scroll_y() < 0.0,
+        "the settings directory must scroll to a lower card"
     );
 }

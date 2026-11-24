@@ -662,6 +662,12 @@ export component MainWindow inherits Window {
         if (root.account-saved == "未配置账号") { return "未配置账号"; }
         return "登录后可用";
     }
+    // The list row's accessible label carries the same fields the visible row
+    // shows: time, model, first-token duration, outcome and summary.
+    public pure function request-row-label(item: RequestRow) -> string {
+        return item.at + " " + item.model + " " + item.first-token + " "
+            + item.outcome + "，" + item.summary;
+    }
     // The page content width inside the rail and the page padding; the request
     // list and detail split it without touching the other pages.
     public pure function request-content-width() -> length {
@@ -676,7 +682,7 @@ export component MainWindow inherits Window {
     }
     public pure function help-card-visible(index: int) -> bool {
         if (index == 0) {
-            return root.help-match("快捷键 Ctrl+1…5 Ctrl+R Ctrl+F Alt+F F1 Esc 切换总览 请求诊断 运行日志 设置 帮助 刷新当前页数据 聚焦请求或日志搜索框 只看失败 查看全部 打开帮助 关闭当前页的详情、账号表单或维护菜单");
+            return root.help-match("快捷键 Ctrl+1…5 Ctrl+R Ctrl+F Alt+F F1 Esc 切换总览 请求诊断 运行日志 设置 帮助 刷新当前页数据 聚焦当前页搜索框（请求、日志或帮助） 只看失败 查看全部 打开帮助 关闭当前页的详情、账号表单或维护菜单");
         }
         if (index == 1) {
             return root.help-match("术语 本机网关 chat2api UM 服务 本实例网关 上游模型来源 凭据 账号密码 缓存命中率 首字耗时 输入 Token 输出");
@@ -1050,6 +1056,10 @@ export component MainWindow inherits Window {
     out property <length> maintenance-toggle-width: maintenance-toggle.width;
     out property <length> maintenance-toggle-height: maintenance-toggle.height;
     out property <string> maintenance-toggle-icon: maintenance-toggle.icon;
+    out property <length> maintenance-close-x: maintenance-close.absolute-position.x;
+    out property <length> maintenance-close-y: maintenance-close.absolute-position.y;
+    out property <length> maintenance-close-width: maintenance-close.width;
+    out property <length> maintenance-close-height: maintenance-close.height;
     // While the overlay is open the trigger keeps the selected fill and edge,
     // so the panel has a visible anchor in the title row.
     out property <bool> maintenance-toggle-active: maintenance-toggle.active;
@@ -1860,6 +1870,8 @@ export component MainWindow inherits Window {
     out property <length> instance-data-value-width: instance-data-value.width;
     out property <length> settings-content-height: settings-content.preferred-height;
     out property <length> settings-viewport-height: settings-scroll.visible-height;
+    // Test seam: the settings directory jumps the scroll view to a card.
+    out property <length> settings-scroll-y: settings-scroll.content-y;
     out property <length> port-input-x: port-input.absolute-position.x;
     out property <length> port-input-y: port-input.absolute-position.y;
     out property <length> port-input-width: port-input.width;
@@ -1928,6 +1940,9 @@ export component MainWindow inherits Window {
         root.requests.length == 0 && !root.request-filters-active;
     out property <bool> request-empty-refresh-visible:
         request-empty-refresh.visible;
+    out property <string> request-row-label-sample:
+        root.requests.length > 0
+        ? root.request-row-label(root.requests[0]) : "";
     out property <length> request-empty-clear-x:
         request-empty-clear.absolute-position.x;
     out property <length> request-empty-clear-y:
@@ -2040,6 +2055,9 @@ export component MainWindow inherits Window {
     out property <length> log-follow-y: log-follow.absolute-position.y;
     out property <length> log-follow-width: log-follow.width;
     out property <length> log-follow-height: log-follow.height;
+    out property <string> log-follow-accessible-label: log-follow.accessible-label;
+    out property <bool> log-paused-hint-visible: log-paused-hint.visible;
+    out property <string> log-paused-hint-text: log-paused-hint.text;
     out property <length> log-settings-x: log-settings-button.absolute-position.x;
     out property <length> log-settings-y: log-settings-button.absolute-position.y;
     out property <length> log-settings-width: log-settings-button.width;
@@ -2272,6 +2290,7 @@ export component MainWindow inherits Window {
     out property <color> console-surface-color: Theme.surface;
     out property <bool> help-no-result-visible: help-no-result.visible;
     out property <string> help-search-placeholder: help-search.placeholder;
+    out property <bool> help-search-focused: help-search.has-focus;
     out property <string> help-terminology-text: help-terminology.text;
     out property <string> help-credential-text: help-credential.text;
     out property <string> help-cache-hit-text: help-cache-hit.text;
@@ -2379,6 +2398,21 @@ export component MainWindow inherits Window {
     // Test seam: the headless backend does not focus the window's forward
     // focus automatically, so the shortcut tests focus the root handler first.
     public function focus-root() { root-focus.focus(); }
+    // Ctrl+F focuses the search field of the current page; the key handler and
+    // the headless test drive this one function.
+    public function focus-page-search() {
+        if (root.page == 1) { request-search.take-focus(); }
+        else if (root.page == 3) { log-search.take-focus(); }
+        else if (root.page == 4) { help-search.take-focus(); }
+    }
+    // The settings directory scrolls one card to the top of the viewport.
+    public function scroll-settings-to(card-y: length) {
+        // ScrollView content-y is the negative scroll offset, like the request
+        // page's content-y; a card is reached by moving the offset up.
+        settings-scroll.content-y = min(0px,
+            settings-scroll.content-y
+                - (card-y - settings-scroll.absolute-position.y - 12px));
+    }
     public function navigate-to(page: int) {
         // A page change is a modal exit: close the overlay and clear its
         // confirmation before the fade starts, even when the target page is the
@@ -2738,10 +2772,12 @@ export component MainWindow inherits Window {
                 // text field the platform keeps its own find behavior.
                 if ((event.text == "f" || event.text == "F")
                     && !request-search.has-focus && !log-search.has-focus
+                    && !help-search.has-focus
                     && !account-input.has-focus && !password-input.has-focus
                     && !port-input.has-focus) {
-                    if (root.page == 1) { request-search.take-focus(); return accept; }
-                    if (root.page == 3) { log-search.take-focus(); return accept; }
+                    if (root.page == 1) { root.focus-page-search(); return accept; }
+                    if (root.page == 3) { root.focus-page-search(); return accept; }
+                    if (root.page == 4) { root.focus-page-search(); return accept; }
                 }
             }
             // Alt+F is the request page's one-key 失败 filter; F1 and Ctrl+5
@@ -3144,11 +3180,11 @@ export component MainWindow inherits Window {
                     }
                     // The chart takes the leftover height instead of leaving a
                     // blank band above the status row, but it never grows past
-                    // 300 px and pushes 最近核验 / 近期问题 / 上游故障历史
+                    // 260 px and pushes 最近核验 / 近期问题 / 上游故障历史
                     // off the first screen.
                     usage-chart := UsageChart {
                         vertical-stretch: 1;
-                        max-height: 300px;
+                        max-height: 260px;
                         period <=> root.usage-period;
                         points: root.usage-points;
                         labels: root.usage-labels;
@@ -3667,7 +3703,7 @@ export component MainWindow inherits Window {
                                 vertical-stretch: 1;
                                 content-y <=> root.request-scroll-y;
                                 for item in root.requests : Selectable {
-                                    label: item.at + " " + item.model + " " + item.outcome;
+                                    label: root.request-row-label(item);
                                     height: 50px;
                                     selected: root.selected-request == item.id;
                                     activate => { root.open-request(item.id); }
@@ -3896,6 +3932,17 @@ export component MainWindow inherits Window {
                         overflow: elide;
                         wrap: no-wrap;
                     }
+                    // A paused live follow keeps the new-log count in the
+                    // status row, so the 30 px icon button never carries the
+                    // only copy of "N 条新日志".
+                    log-paused-hint := Hint {
+                        visible: root.log-mode == 0 && !root.log-follow;
+                        text: "已暂停 · " + root.new-log-count + " 条新日志";
+                        color: Theme.warn-text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
                     log-earlier := ActionButton {
                         visible: root.log-mode == 1;
                         width: self.visible
@@ -4034,6 +4081,43 @@ export component MainWindow inherits Window {
                     // Leave a gutter below the last card instead of letting
                     // the footer cut through the API address row.
                     padding-bottom: 8px;
+                    // The seven cards are a long scroll; one compact directory
+                    // row names every section and jumps straight to it.
+                    settings-toc := FlexboxLayout {
+                        width: 100%;
+                        flex-wrap: wrap;
+                        spacing: 6px;
+                        alignment: start;
+                        SectionLabel { text: "目录"; vertical-alignment: center; }
+                        ActionButton {
+                            label: "外观"; quiet: true;
+                            clicked => { root.scroll-settings-to(appearance-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "账号"; quiet: true;
+                            clicked => { root.scroll-settings-to(account-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "网关"; quiet: true;
+                            clicked => { root.scroll-settings-to(gateway-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "实例管理"; quiet: true;
+                            clicked => { root.scroll-settings-to(technical-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "导出用量"; quiet: true;
+                            clicked => { root.scroll-settings-to(export-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "UM 模型"; quiet: true;
+                            clicked => { root.scroll-settings-to(model-card.absolute-position.y); }
+                        }
+                        ActionButton {
+                            label: "登录轮次"; quiet: true;
+                            clicked => { root.scroll-settings-to(login-rounds-card.absolute-position.y); }
+                        }
+                    }
                     appearance-card := Card {
                         inset: 16px;
                         inset-y: 12px;
@@ -4603,6 +4687,7 @@ export component MainWindow inherits Window {
                                     width: root.compact ? 180px : 340px;
                                     placeholder: "CSV 保存路径";
                                     text <=> root.export-path;
+                                    tooltip: root.export-path;
                                 }
                                 export-button := ActionButton {
                                     label: root.export-button-label;
@@ -5114,7 +5199,7 @@ export component MainWindow inherits Window {
                             SectionLabel { text: "快捷键"; }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+1…5"; width: 96px; } Hint { text: "切换总览、请求诊断、运行日志、设置、帮助"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+R"; width: 96px; } Hint { text: "刷新当前页数据"; horizontal-stretch: 1; } }
-                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+F"; width: 96px; } Hint { text: "聚焦请求或日志搜索框"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+F"; width: 96px; } Hint { text: "聚焦当前页搜索框（请求、日志或帮助）"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Alt+F"; width: 96px; } Hint { text: "请求诊断：只看失败 / 查看全部"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "F1"; width: 96px; } Hint { text: "打开帮助"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Esc"; width: 96px; } Hint { text: "关闭当前页的详情、账号表单或维护菜单"; horizontal-stretch: 1; } }
@@ -5280,6 +5365,7 @@ export component MainWindow inherits Window {
                     clicked => {
                         root.maintenance-menu-open = false;
                         root.maintenance-confirm = -1;
+                        maintenance-toggle.take-focus();
                     }
                 }
             }
@@ -5363,10 +5449,16 @@ export component MainWindow inherits Window {
                             clicked => {
                                 root.maintenance-menu-open = false;
                                 root.maintenance-confirm = -1;
+                                maintenance-toggle.take-focus();
                             }
                         }
                     }
                     Hint { text: "每项动作先显示影响，二次确认后才执行。"; }
+                    // The records area is hidden for this instance; say why in
+                    // the menu instead of leaving the 不适用 state unexplained.
+                    if root.maintenance-records-not-applicable : Hint {
+                        text: "本机实例没有维护记录来源，因此菜单不显示维护记录区。";
+                    }
                     maintenance-verify := MaintenanceItem {
                         item: root.maintenance-items[0];
                         confirming: root.maintenance-confirm == 0;
@@ -5527,8 +5619,8 @@ export component RowStyleProbe inherits Window {
     height: 240px;
     background: Theme.background;
     in-out property <bool> probe-row-selected: false;
-    in property <bool> probe-system-dark <=> Theme.system-dark;
-    in property <int> probe-theme-mode <=> Theme.theme-mode;
+    in-out property <bool> probe-system-dark <=> Theme.system-dark;
+    in-out property <int> probe-theme-mode <=> Theme.theme-mode;
     row := Selectable {
         y: 0px;
         width: 300px;

@@ -457,6 +457,10 @@ export component RequestAnalytics inherits Panel {
             spacing: 4px;
             for metric[index] in root.metrics : Rectangle {
                 horizontal-stretch: 1;
+                // Equal stretch only divides the space equally when the card
+                // itself can shrink below its label's content width.
+                min-width: 0px;
+                preferred-width: 0px;
                 border-radius: 7px;
                 background: Theme.surface-2;
                 VerticalLayout {
@@ -980,10 +984,10 @@ export component UsageChart inherits Panel {
 
             Rectangle {
                 vertical-stretch: 1;
-                // The overview caps the chart card at 300 px; the plot keeps
-                // a 100 px floor so the bars stay readable while the card can
+                // The overview caps the chart card at 260 px; the plot keeps
+                // a 62 px floor so the bars stay readable while the card can
                 // actually shrink below its content preference.
-                min-height: 100px;
+                min-height: 62px;
 
                 VerticalLayout {
                     visible: !root.has-data;
@@ -1145,7 +1149,7 @@ export component UsageChart inherits Panel {
             Hint { text: "自动刷新"; }
             settings-auto-refresh := Segmented {
                 width: 100%;
-                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭刷新" }];
                 label: "总览自动刷新";
                 current-index <=> root.auto-refresh-index;
             }

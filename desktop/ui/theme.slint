@@ -364,7 +364,10 @@ export component FocusAction inherits Rectangle {
     }
     if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
     accessible-role: button;
-    accessible-label: root.label;
+    // A badge is visible inside a 30 px icon button, so the count must also
+    // reach assistive technology instead of living only in the glyph.
+    accessible-label: root.badge.is-empty
+        ? root.label : root.label + "，" + root.badge + " 条新日志";
     accessible-description: root.tooltip;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 }
@@ -609,6 +612,9 @@ export component Field inherits VerticalLayout {
     in property <bool> clearable: false;
     in property <bool> enabled: true;
     in property <bool> invalid: false;
+    // Long values such as the export path elide at rest; the tooltip keeps the
+    // full value readable without changing the field's one-line layout.
+    in property <string> tooltip: "";
     out property <bool> has-focus: input.has-focus;
     out property <bool> input-selected: input.has-selection;
     // Test seam: the clear control is only visible while the field has text.
@@ -651,6 +657,7 @@ export component Field inherits VerticalLayout {
             kind: root.icon;
             tint: Theme.muted;
         }
+        if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
         // The input fills the box below the border and centers its single line,
         // so the text sits in the middle at any font metric or DPI.
         input := TextInput {

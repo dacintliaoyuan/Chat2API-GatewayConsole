@@ -617,6 +617,29 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
 }
 
 #[test]
+fn the_close_button_returns_focus_to_the_maintenance_trigger() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    assert!(!window.get_maintenance_toggle_focused());
+
+    click(
+        &window,
+        window.get_maintenance_close_x() + window.get_maintenance_close_width() / 2.0,
+        window.get_maintenance_close_y() + window.get_maintenance_close_height() / 2.0,
+    );
+    assert!(
+        !window.get_maintenance_menu_visible(),
+        "the X closes the menu"
+    );
+    assert!(
+        window.get_maintenance_toggle_focused(),
+        "the X close returns focus to 维护"
+    );
+}
+
+#[test]
 fn the_maintenance_menu_right_edge_aligns_with_its_trigger() {
     let window = window();
     let menu = maintenance::menu(&running_state());

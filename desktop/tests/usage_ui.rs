@@ -350,7 +350,7 @@ fn the_plot_fills_the_chart_card_without_a_blank_band() {
         selection_y + selection_height,
     );
     assert!(
-        plot_height > chart_height * 0.30,
+        plot_height > chart_height * 0.20,
         "the plot must take the chart card's remaining height"
     );
     assert!(
