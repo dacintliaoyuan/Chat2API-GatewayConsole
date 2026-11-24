@@ -617,6 +617,26 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
 }
 
 #[test]
+fn the_maintenance_menu_right_edge_aligns_with_its_trigger() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+
+    let menu_right = window.get_maintenance_menu_x() + window.get_maintenance_menu_width();
+    let toggle_right = window.get_maintenance_toggle_x() + window.get_maintenance_toggle_width();
+    assert!(
+        (menu_right - toggle_right).abs() < 1.0,
+        "the menu right edge {menu_right} must align with the 维护 trigger {toggle_right}"
+    );
+    assert!(
+        menu_right <= window.get_page_refresh_x(),
+        "the menu must not cover the refresh action at {}",
+        window.get_page_refresh_x()
+    );
+}
+
+#[test]
 fn the_small_maintenance_menu_scrolls_below_the_state_band_and_hides_the_records_area() {
     let window = window_at(540.0, 420.0);
     let menu = maintenance::menu(&running_state());

@@ -903,6 +903,8 @@ export component MainWindow inherits Window {
     out property <bool> maintenance-restart-enabled: root.maintenance-items[4].enabled;
     out property <bool> maintenance-menu-visible: maintenance-menu.visible;
     out property <length> maintenance-menu-height: maintenance-menu.height;
+    out property <length> maintenance-menu-x: maintenance-menu.x;
+    out property <length> maintenance-menu-width: maintenance-menu.width;
     out property <length> maintenance-menu-y: maintenance-menu.y;
     out property <length> overview-state-card-y: state-card.absolute-position.y;
     out property <length> overview-state-card-bottom:
@@ -2911,6 +2913,9 @@ export component MainWindow inherits Window {
                     // Leave a gutter on the right so the scrollbar thumb lands on
                     // the page, never inside a card.
                     padding-right: 8px;
+                    // A bottom gutter keeps the last card (最近核验) clear of the
+                    // footer instead of being cut by it at 1060×720.
+                    padding-bottom: 8px;
                     state-card := Card {
                         // Three equal stretches divide the card content in a
                         // row, so no blank strip sits on the right. The compact
@@ -3538,9 +3543,12 @@ export component MainWindow inherits Window {
                                     height: self.visible ? self.preferred-height : 0px;
                                 }
                                 Hint {
-                                    text: root.request-filters-active
-                                        ? "调整筛选条件，或清除筛选后重试"
-                                        : "本实例收到请求后会列在这里";
+                                    // The status row already names the empty
+                                    // window; the list adds a next step only
+                                    // when a filter is what emptied it.
+                                    visible: root.request-filters-active;
+                                    height: self.visible ? self.preferred-height : 0px;
+                                    text: "调整筛选条件，或清除筛选后重试";
                                     horizontal-alignment: center;
                                 }
                                 request-empty-clear-row := HorizontalLayout {
@@ -3657,6 +3665,7 @@ export component MainWindow inherits Window {
                     // The five history windows only exist in the history layer.
                     log-range-control := Segmented {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         width: root.compact ? 200px : 252px;
                         options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
                         current-index <=> root.log-range;
@@ -3670,24 +3679,28 @@ export component MainWindow inherits Window {
                     // every level, including the ungraded rows.
                     log-level-error := Toggle {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         label: "错误";
                         checked <=> root.log-level-error;
                         toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-warn := Toggle {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         label: "警告";
                         checked <=> root.log-level-warn;
                         toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-info := Toggle {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         label: "信息";
                         checked <=> root.log-level-info;
                         toggled => { log-search-timer.stop(); root.query-log-history(); }
                     }
                     log-level-debug := Toggle {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         label: "调试";
                         checked <=> root.log-level-debug;
                         toggled => { log-search-timer.stop(); root.query-log-history(); }
@@ -3696,6 +3709,7 @@ export component MainWindow inherits Window {
                     // selection keeps every level instead of hiding rows.
                     log-level-hint := Hint {
                         visible: root.log-mode == 1;
+                        height: self.visible ? 17px : 0px;
                         // The compact filter row wraps instead of hiding the
                         // rule; the hint elides rather than dropping the
                         // "no level selected means all" signal.
@@ -3710,6 +3724,7 @@ export component MainWindow inherits Window {
                     // source instead of inventing the web console's categories.
                     log-source-control := Dropdown {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         width: root.compact ? 120px : 150px;
                         options: root.log-source-options;
                         current-index <=> root.log-source-index;
@@ -3727,6 +3742,7 @@ export component MainWindow inherits Window {
                     // mode instead of floating on their own toolbar line.
                     log-search := MaterialField {
                         visible: root.log-mode == 1;
+                        height: self.visible ? self.preferred-height : 0px;
                         width: root.compact ? 140px : 160px;
                         icon: "search";
                         placeholder: "关键词";
@@ -3885,14 +3901,14 @@ export component MainWindow inherits Window {
                         }
                     }
                     // The live tail scrolls the viewport to the newest line, so
-                    // its top edge can land mid-row. One pixel of surface over
-                    // the first list pixel hides that cut edge without changing
-                    // the list height or its scroll position.
+                    // its top edge can land mid-row. An 8 px surface-to-clear
+                    // fade over the first list pixels hides that cut edge without
+                    // changing the list height or its scroll position.
                     log-list-top-fade := Rectangle {
                         x: 6px;
                         y: 6px;
                         width: parent.width - 20px;
-                        height: 1px;
+                        height: 8px;
                         background: @linear-gradient(180deg, Theme.surface 0%, transparent 100%);
                     }
                 }
@@ -4491,7 +4507,7 @@ export component MainWindow inherits Window {
                                 }
                                 export-button := ActionButton {
                                     label: root.export-button-label;
-                                    icon: "arrow-right";
+                                    icon: "download";
                                     primary: true;
                                     enabled: root.export-button-enabled;
                                     clicked => { root.export-usage(root.export-path); }
@@ -4542,13 +4558,18 @@ export component MainWindow inherits Window {
                             // instead of a blank band.
                             um-model-body := VerticalLayout {
                             spacing: 12px;
-                            height: (root.um-model-empty || root.um-models.length > 0
+                            // A layout's min-height defaults to its preferred
+                            // height; pin it to zero so the unread body can
+                            // collapse instead of keeping a blank band.
+                            min-height: 0px;
+                            max-height: (root.um-model-empty || root.um-models.length > 0
                                 || !root.selected-model.is-empty
                                 || !root.um-model-unread)
-                                ? self.preferred-height : 0px;
+                                ? 10000px : 0px;
                             um-model-empty := VerticalLayout {
                                 visible: root.um-model-empty;
-                                height: self.visible ? self.preferred-height : 0px;
+                                min-height: 0px;
+                                max-height: self.visible ? 10000px : 0px;
                                 alignment: center;
                                 spacing: 4px;
                                 Hint { text: "无模型"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
@@ -4556,7 +4577,8 @@ export component MainWindow inherits Window {
                             }
                             um-model-table := VerticalLayout {
                                 visible: root.um-models.length > 0;
-                                height: self.visible ? self.preferred-height : 0px;
+                                min-height: 0px;
+                                max-height: self.visible ? 10000px : 0px;
                                 spacing: 12px;
                                 um-model-header := HorizontalLayout {
                                     height: 20px;
@@ -4598,8 +4620,8 @@ export component MainWindow inherits Window {
                                 }
                                 um-model-detail := TextDetails {
                                     visible: !root.selected-model.is-empty;
-                                    height: self.visible ? 190px : 0px;
-                                    animate height { duration: Theme.settle; easing: ease-out; }
+                                    min-height: 0px;
+                                    max-height: self.visible ? 10000px : 0px;
                                     title: root.um-model-detail-title;
                                     body: root.um-model-detail;
                                     closed => { root.selected-model = ""; }
@@ -4610,7 +4632,8 @@ export component MainWindow inherits Window {
                             // entry above, not three probe-empty sentences.
                             probe-section := VerticalLayout {
                             visible: !root.um-model-unread;
-                            height: self.visible ? self.preferred-height : 0px;
+                            min-height: 0px;
+                            max-height: self.visible ? 10000px : 0px;
                             spacing: 12px;
                             // Context probes (#154): pick a batch, run it, stop the
                             // rest and read the collapsible history. The gateway keeps
@@ -4655,6 +4678,10 @@ export component MainWindow inherits Window {
                                     enabled: root.probe-selected.length > 0;
                                     clicked => { root.clear-probe-selection(); }
                                 }
+                                // The batch controls read as one group instead
+                                // of three disabled buttons spread across
+                                // the whole card.
+                                Rectangle { horizontal-stretch: 1; }
                             }
                             probe-status-hint := Hint {
                                 text: root.probe-status;
@@ -5169,13 +5196,17 @@ export component MainWindow inherits Window {
                 accessible-role: groupbox;
                 accessible-label: "维护菜单";
                 accessible-description: "模态面板，Tab 在面板内循环，Esc 关闭";
-                x: page-host.absolute-position.x + page-host.width - self.width - 8px;
+                // The overlay's right edge lands on the 维护 button's right edge,
+                // so it never covers the refresh action beside it.
+                width: min(520px,
+                    maintenance-toggle.absolute-position.x + maintenance-toggle.width
+                        - page-host.absolute-position.x);
+                x: maintenance-toggle.absolute-position.x + maintenance-toggle.width - self.width;
                 // The overlay never covers the three-state band: it opens below
                 // the state card while that card is visible, and falls back to
                 // the 维护 button's row once the page has scrolled it away.
                 y: max(state-card.absolute-position.y + state-card.height + 8px,
                     maintenance-toggle.absolute-position.y + maintenance-toggle.height + 8px);
-                width: min(520px, page-host.width - 16px);
                 height: min(maintenance-menu-content.preferred-height,
                     root.height - self.y - 56px);
                 z: 20;
