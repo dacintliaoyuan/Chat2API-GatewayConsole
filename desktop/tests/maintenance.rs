@@ -682,9 +682,20 @@ fn the_small_maintenance_menu_is_a_sheet_under_the_title_row_with_the_first_acti
         window.get_maintenance_menu_height()
     );
     assert!(
-        window.get_maintenance_menu_height() <= 420.0 - 56.0 + 1.0,
+        window.get_maintenance_menu_height() <= 420.0 + 1.0,
         "the menu never runs past the window bottom, actual {}",
         window.get_maintenance_menu_height()
+    );
+    assert!(
+        (window.get_maintenance_menu_y() + window.get_maintenance_menu_height() - 420.0).abs()
+            <= 1.0,
+        "the sheet reaches the bottom edge so the footer cannot show through: {}..{}",
+        window.get_maintenance_menu_y(),
+        window.get_maintenance_menu_y() + window.get_maintenance_menu_height()
+    );
+    assert!(
+        !window.get_status_row_visible(),
+        "the footer is hidden while the sheet covers it"
     );
     let verify_top = window.get_maintenance_verify_y();
     let verify_bottom = verify_top + window.get_maintenance_verify_height();

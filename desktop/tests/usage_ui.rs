@@ -332,6 +332,29 @@ fn auto_refresh_choices_live_in_one_chart_settings_popover() {
 }
 
 #[test]
+fn escape_closes_the_chart_settings_popover_and_returns_focus() {
+    let chart = chart();
+    click(
+        &chart,
+        chart.get_usage_settings_toggle_x() + chart.get_usage_settings_toggle_width() / 2.0,
+        chart.get_usage_settings_toggle_y() + chart.get_usage_settings_toggle_height() / 2.0,
+    );
+    assert!(
+        chart.get_usage_settings_open_value(),
+        "图表设置 opens the popover"
+    );
+    press(&chart, Key::Escape);
+    assert!(
+        !chart.get_usage_settings_open_value(),
+        "Esc closes the chart-settings popover like the maintenance menu"
+    );
+    assert!(
+        chart.get_usage_settings_toggle_focused(),
+        "closing returns focus to the gear that opened the popover"
+    );
+}
+
+#[test]
 fn the_plot_fills_the_chart_card_without_a_blank_band() {
     let chart = chart();
     let chart_y = chart.get_overview_chart_absolute_y();
@@ -904,6 +927,11 @@ fn an_unfiltered_empty_request_list_keeps_the_reason_inside_the_table() {
         window.get_request_status_text().as_str(),
         "所选时间没有请求记录。",
         "the status row still explains the empty time window"
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 0 条",
+        "the status row keeps the page count instead of repeating the table reason"
     );
     assert_eq!(
         window.get_request_empty_title().as_str(),

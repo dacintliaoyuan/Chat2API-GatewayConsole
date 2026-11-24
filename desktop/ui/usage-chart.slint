@@ -270,6 +270,11 @@ export component RequestAnalytics inherits Panel {
             : header.preferred-height + 8px
                 + (root.compact ? 302px : 148px)
                 + (root.has-data ? 36px + 8px : 0px));
+    // The height the card takes at the current disclosure state, computed from
+    // its content instead of the height the page layout assigns it. The request
+    // page's list-height budget reads this value so the list height can never
+    // feed back into the page's preferred height.
+    out property <length> current-height: content.preferred-height;
     // Test seams: the actual stack the request card lays out at this width. The
     // 800 px window uses the compact stack, so the speed table sits under the
     // chart and both span the card instead of the 420 px side table squeezing
@@ -451,9 +456,9 @@ export component RequestAnalytics inherits Panel {
         compact-cards := HorizontalLayout {
             visible: !root.empty && root.compact;
             // Layouts default min-height to preferred-height; pin both so the
-            // 48 px summary actually shrinks instead of keeping its content box.
-            min-height: root.empty || !root.compact ? 0px : 48px;
-            max-height: root.empty || !root.compact ? 0px : 48px;
+            // 52 px summary actually shrinks instead of keeping its content box.
+            min-height: root.empty || !root.compact ? 0px : 52px;
+            max-height: root.empty || !root.compact ? 0px : 52px;
             spacing: 4px;
             for metric[index] in root.metrics : Rectangle {
                 horizontal-stretch: 1;
@@ -493,10 +498,14 @@ export component RequestAnalytics inherits Panel {
                     }
                     DataText {
                         text: metric.value;
-                        font-size: 14px;
+                        font-size: 12px;
                         font-weight: 650;
-                        overflow: elide;
-                        wrap: no-wrap;
+                        // 38.6 Token/秒 wraps onto a second line inside the
+                        // 66 px compact card instead of eliding to 38.6 To…
+                        // The explicit height gives the wrap its second line.
+                        height: 30px;
+                        overflow: clip;
+                        wrap: word-wrap;
                     }
                 }
                 // The compact value may elide; the tooltip keeps the label,
@@ -669,6 +678,15 @@ export component UsageChart inherits Panel {
         settings-auto-refresh.absolute-position.y;
     out property <length> settings-auto-refresh-width: settings-auto-refresh.width;
     out property <int> settings-auto-refresh-index: root.auto-refresh-index;
+    // Esc closes the popover and returns focus to the gear, so the test reads
+    // the same focus the keyboard user gets back.
+    out property <bool> settings-toggle-focused: settings-toggle.has-focus;
+    // One close path for the popover: the backdrop, the X and Esc all return
+    // focus to the gear that opened it, like the maintenance menu.
+    public function close-settings() {
+        root.settings-open = false;
+        settings-toggle.take-focus();
+    }
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
@@ -868,8 +886,17 @@ export component UsageChart inherits Panel {
                     VerticalLayout {
                         spacing: 3px;
                         Heading { text: "用量趋势"; }
-                        Hint { text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
-                        + (root.show-requests ? " · 单位：次" : " · 单位：亿"); }
+                        // The read status shares the subtitle line instead of a
+                        // separate 17 px row below the plot; the plot keeps the
+                        // height for its bars.
+                        Hint {
+                            text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
+                                + (root.show-requests ? " · 单位：次" : " · 单位：亿")
+                                + (root.status-text.is-empty ? "" : " · " + root.status-text);
+                            color: root.status-text.is-empty ? Theme.muted : root.status-tone;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     right-header := HorizontalLayout {
@@ -1045,20 +1072,26 @@ export component UsageChart inherits Panel {
 
             selection := Rectangle {
                 visible: root.has-data;
-                height: root.has-data ? 58px : 0px;
+                // One 28 px readout row: the hint, the selected value and
+                // 取消固定 share it, so the plot keeps the vertical budget.
+                height: root.has-data ? 28px : 0px;
 
                 HorizontalLayout {
                     x: 0px;
                     y: 0px;
                     width: parent.width;
-                    height: 40px;
+                    height: parent.height;
                     spacing: 8px;
-                    Hint {
-                        text: root.has-selection ? root.selection-label : "悬停查看数值";
+                    selection-hint := Hint {
+                        text: root.has-selection ? root.selection-label
+                            : "悬停查看数值 · ← → 切换时段";
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
                         wrap: no-wrap;
+                        accessible-role: text;
+                        accessible-live-region: polite;
+                        Tooltip { text: @markdown("← → 切换时段 · Enter 固定 · Esc 取消固定"); }
                     }
                     DataText {
                         text: root.selection-value;
@@ -1077,20 +1110,6 @@ export component UsageChart inherits Panel {
                         clicked => { root.pinned = -1; }
                     }
                 }
-
-                Hint {
-                    y: 40px;
-                    width: parent.width;
-                    height: 18px;
-                    text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
-                    vertical-alignment: center;
-                    wrap: no-wrap;
-                }
-            }
-
-            if root.has-data && !root.status-text.is-empty : Hint {
-                text: root.status-text;
-                color: root.status-tone;
             }
         }
     }
@@ -1105,7 +1124,7 @@ export component UsageChart inherits Panel {
         height: root.height;
         z: 40;
         background: transparent;
-        TouchArea { clicked => { root.settings-open = false; } }
+        TouchArea { clicked => { root.close-settings(); } }
     }
     settings-panel := Rectangle {
         visible: root.settings-open;
@@ -1143,7 +1162,7 @@ export component UsageChart inherits Panel {
                     icon-only: true;
                     quiet: true;
                     tooltip: "关闭图表设置";
-                    clicked => { root.settings-open = false; }
+                    clicked => { root.close-settings(); }
                 }
             }
             Hint { text: "自动刷新"; }

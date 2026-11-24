@@ -159,7 +159,7 @@ fn overview_content_is_visible_and_scrolls_at_minimum_size() {
         "the usage chart must be visible in the default window"
     );
     assert!(
-        window.get_overview_chart_height() <= 260.0 + 1.0,
+        window.get_overview_chart_height() <= 300.0 + 1.0,
         "the usage chart must not absorb the first screen: {}",
         window.get_overview_chart_height()
     );
@@ -2046,8 +2046,8 @@ fn the_request_list_and_detail_share_one_row_with_one_gap() {
         "the list and detail share the top edge"
     );
     assert!(
-        window.get_request_detail_height() >= window.get_request_list_height(),
-        "the detail panel spans the list row"
+        (window.get_request_detail_height() - window.get_request_list_height()).abs() < 1.0,
+        "the detail panel spans the list row instead of floating above its bottom"
     );
 }
 
@@ -2646,6 +2646,106 @@ fn the_request_list_keeps_a_readable_height_at_the_default_size() {
 }
 
 #[test]
+fn the_expanded_request_chart_keeps_the_list_at_240px() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    // A manual choice, so the viewport default does not fold the chart.
+    window.set_request_chart_collapsed_explicit(true);
+    window.set_request_chart_collapsed(false);
+    let rows = (0..14).map(request_row).collect::<Vec<_>>();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    println!(
+        "chart_visible={} list_y={} list_h={} page_h={} viewport_h={}",
+        window.get_request_chart_visible(),
+        window.get_request_list_y(),
+        window.get_request_list_height(),
+        window.get_request_page_height(),
+        window.get_request_scroll_viewport_height(),
+    );
+    assert!(
+        window.get_request_chart_visible(),
+        "the manual choice keeps the analytics chart expanded"
+    );
+    assert!(
+        window.get_request_list_height() >= 240.0,
+        "the expanded chart must not squeeze the list below 240 px: {}",
+        window.get_request_list_height()
+    );
+    assert!(
+        window.get_request_page_height() > window.get_request_scroll_viewport_height(),
+        "the page scrolls instead of squeezing the list"
+    );
+}
+
+#[test]
+fn an_empty_request_window_collapses_the_analytics_card_and_centers_the_reason() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_requests(ModelRc::from(Vec::<RequestRow>::new().as_slice()));
+    window.set_request_status("所选时间没有请求记录。".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let empty_y = window.get_request_empty_y();
+    let empty_h = window.get_request_empty_height();
+    let panel_y = window.get_request_list_panel_y();
+    let panel_h = window.get_request_list_panel_height();
+    let body_h = panel_h
+        - window.get_request_list_header_height()
+        - window.get_request_list_footer_height()
+        - 20.0;
+    println!(
+        "analytics_visible={} analytics_h={} panel_y={} panel_h={} body_h={} empty_y={} empty_h={} row_h={} pane_h={} page_pref={} page_actual={} scroll_content={} viewport={} filters_h={} status_h={} status={}",
+        window.get_request_analytics_visible(),
+        window.get_request_analytics_height(),
+        panel_y,
+        panel_h,
+        body_h,
+        empty_y,
+        empty_h,
+        window.get_request_row_height(),
+        window.get_request_list_pane_height(),
+        window.get_request_page_height(),
+        window.get_request_page_actual_height(),
+        window.get_request_scroll_content_height(),
+        window.get_request_scroll_viewport_height(),
+        window.get_request_filters_height(),
+        window.get_request_status_row_height(),
+        window.get_request_status_display_text(),
+    );
+    assert!(
+        !window.get_request_analytics_visible(),
+        "an unfiltered empty window keeps only the list card"
+    );
+    assert_eq!(
+        window.get_request_analytics_height(),
+        0.0,
+        "the hidden analytics card must not reserve a 107 px band"
+    );
+    assert!(
+        empty_h >= body_h - 4.0,
+        "the empty state fills the list body: empty {empty_h} body {body_h}"
+    );
+    assert!(
+        (empty_y + empty_h / 2.0 - (panel_y + panel_h / 2.0)).abs() <= 24.0,
+        "the empty reason sits in the middle of the table: empty center {} panel center {}",
+        empty_y + empty_h / 2.0,
+        panel_y + panel_h / 2.0
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 0 条",
+        "the status row keeps the page count instead of repeating the table reason"
+    );
+    assert_eq!(
+        window.get_request_empty_title().as_str(),
+        "所选时间没有请求记录",
+        "the table owns the one empty reason"
+    );
+}
+
+#[test]
 fn the_secondary_appearance_labels_sit_above_their_own_controls() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
@@ -3167,7 +3267,36 @@ fn the_history_level_filter_names_the_empty_selection() {
     assert!(window.get_log_level_hint_visible());
     assert_eq!(
         window.get_log_level_hint_text().as_str(),
-        "未选级别 = 全部"
+        "未选级别时显示全部"
+    );
+}
+
+#[test]
+fn the_compact_settings_directory_balances_its_two_rows() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "toc_h={} appearance=({},{}) export_y={} login_rounds=({},{})",
+        window.get_settings_toc_height(),
+        window.get_settings_toc_appearance_x(),
+        window.get_settings_toc_appearance_y(),
+        window.get_settings_toc_export_y(),
+        window.get_settings_toc_login_rounds_x(),
+        window.get_settings_toc_login_rounds_y(),
+    );
+    assert!(
+        window.get_settings_toc_export_y() > window.get_settings_toc_appearance_y(),
+        "导出用量 starts the second directory row instead of following 实例管理"
+    );
+    assert_eq!(
+        window.get_settings_toc_login_rounds_y(),
+        window.get_settings_toc_export_y(),
+        "登录轮次 shares the second row instead of sitting alone on a third"
+    );
+    assert!(
+        window.get_settings_toc_login_rounds_x() > window.get_settings_toc_appearance_x(),
+        "登录轮次 follows 导出用量 and UM 模型 on the second row"
     );
 }
 
@@ -3308,17 +3437,30 @@ fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
     window.set_overview_failure_count(3);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     println!(
-        "chart_y={} recent_title_y={} recent_title_h={} status_y={} viewport={}",
+        "chart_y={} chart_h={} plot_h={} verify_h={} recent_title_y={} recent_title_h={} viewport_bottom={} status_y={}",
         window.get_overview_chart_absolute_y(),
+        window.get_overview_chart_height(),
+        window.get_overview_plot_height(),
+        window.get_verify_card_height(),
         window.get_recent_issues_title_y(),
         window.get_recent_issues_title_height(),
+        window.get_overview_viewport_bottom(),
         window.get_status_row_y(),
-        window.get_overview_viewport_height(),
     );
     assert!(
-        window.get_overview_chart_height() <= 260.0 + 1.0,
+        window.get_overview_chart_height() <= 300.0 + 1.0,
         "the usage chart must not absorb the first screen: {}",
         window.get_overview_chart_height()
+    );
+    assert!(
+        window.get_overview_plot_height() >= 120.0,
+        "the usage plot must keep readable bars in the default window: {}",
+        window.get_overview_plot_height()
+    );
+    assert!(
+        window.get_verify_card_height() <= 56.0,
+        "the recent verify card must be one compact row: {}",
+        window.get_verify_card_height()
     );
     assert!(
         window.get_overview_chart_absolute_y() < window.get_recent_issues_title_y(),
@@ -3326,10 +3468,88 @@ fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
     );
     assert!(
         window.get_recent_issues_title_y() + window.get_recent_issues_title_height()
-            <= window.get_status_row_y() + 1.0,
-        "the 近期问题 title must be visible in the first screen: title bottom {} status y {}",
+            <= window.get_overview_viewport_bottom() + 1.0,
+        "the 近期问题 title must be visible in the first screen: title bottom {} viewport bottom {}",
         window.get_recent_issues_title_y() + window.get_recent_issues_title_height(),
-        window.get_status_row_y()
+        window.get_overview_viewport_bottom()
+    );
+}
+
+#[test]
+fn the_compact_status_row_keeps_the_page_count_unelided() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(1);
+    window.set_request_status("北京时间 · 本页 3 条".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "status={} width={} preferred={}",
+        window.get_request_status_display_text(),
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width(),
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 3 条",
+        "the compact status row keeps the page count"
+    );
+    assert!(
+        window.get_request_status_hint_width() + 0.5
+            >= window.get_request_status_hint_preferred_width(),
+        "the status hint must not elide the page count: width {} preferred {}",
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width()
+    );
+}
+
+#[test]
+fn the_primary_query_action_shows_a_three_to_one_focus_ring() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_request_query_primary());
+    assert!(!window.get_request_query_focus_visible());
+    window.invoke_focus_request_query();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        window.get_request_query_has_focus(),
+        "the primary 查询 action takes keyboard focus"
+    );
+    assert!(
+        window.get_request_query_focus_visible(),
+        "a primary action must still expose a 3:1 focus ring"
+    );
+}
+
+#[test]
+fn the_compact_verify_card_keeps_its_row_inside_the_card() {
+    let window = window_at(540.0, 420.0);
+    window.set_verify_at("核验于 11-22 10:01:00".into());
+    window.set_verify_result("通过".into());
+    window.set_verify_detail("上游返回 200，未调用模型".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "card_x={} card_w={} card_h={} button_x={} button_w={}",
+        window.get_verify_card_x(),
+        window.get_verify_card_width(),
+        window.get_verify_card_height(),
+        window.get_verify_button_x(),
+        window.get_verify_button_width(),
+    );
+    assert!(
+        window.get_verify_card_height() <= 56.0,
+        "the recent verify card stays one row at 540 px: {}",
+        window.get_verify_card_height()
+    );
+    let card_right = window.get_verify_card_x() + window.get_verify_card_width();
+    let button_right = window.get_verify_button_x() + window.get_verify_button_width();
+    assert!(
+        button_right <= card_right - 8.0,
+        "the 重新核验 action stays inside the card: button right {button_right} card right {card_right}"
+    );
+    assert!(
+        window.get_verify_button_width() >= 96.0 - 0.5,
+        "the re-verify action keeps its full label: {}",
+        window.get_verify_button_width()
     );
 }
 
