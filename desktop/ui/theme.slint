@@ -222,6 +222,9 @@ export component FocusAction inherits Rectangle {
     in property <bool> quiet: false;
     in property <bool> danger: false;
     in property <bool> link: false;
+    // A trigger that owns an open overlay keeps the selected fill and edge
+    // instead of the quiet resting surface, so the overlay has a visible anchor.
+    in property <bool> active: false;
     in property <bool> enabled: true;
     in property <string> icon: "";
     // Manual refresh buttons rotate their glyph for 600 ms; the reset to zero
@@ -244,6 +247,7 @@ export component FocusAction inherits Rectangle {
     // label. Dimming the accent button to 55 % left a pale blue frame that
     // still read as a focused primary action and dropped the label under 4.5:1.
     out property <color> label-tint: !root.enabled ? Theme.muted
+        : root.active ? Theme.accent
         : root.primary ? Theme.on-accent
         : root.danger ? Theme.bad-text
         : root.link ? Theme.accent : Theme.ink;
@@ -264,6 +268,7 @@ export component FocusAction inherits Rectangle {
     // Keyboard focus darkens the fill or steps the neutral edge up; it never
     // draws a blue outline.
     background: !root.enabled ? Theme.field
+        : root.active ? Theme.accent-soft
         : root.primary ? (pointer.pressed || pointer.has-hover || focus.has-focus ? Theme.accent-strong : Theme.accent)
         : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
         : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
@@ -275,6 +280,7 @@ export component FocusAction inherits Rectangle {
     // red identity survives keyboard focus.
     border-width: 1px;
     border-color: !root.enabled ? Theme.edge-control
+        : root.active ? Theme.accent
         : root.quiet || root.link
         ? (focus.has-focus ? Theme.edge-control-strong : transparent)
         : root.danger ? (focus.has-focus ? Theme.bad-text : Theme.bad)

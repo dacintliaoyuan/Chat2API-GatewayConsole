@@ -303,6 +303,10 @@ fn open_maintenance_menu(window: &MainWindow) {
         window.get_maintenance_menu_visible(),
         "the maintenance button opens the menu"
     );
+    assert!(
+        window.get_maintenance_toggle_active(),
+        "the open menu keeps its trigger in the selected state"
+    );
 }
 
 #[test]
@@ -578,6 +582,10 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
     assert!(
         !window.get_maintenance_menu_visible(),
         "Escape closes the only way out of the menu"
+    );
+    assert!(
+        !window.get_maintenance_toggle_active(),
+        "the closed menu retires the selected trigger state"
     );
 
     open_maintenance_menu(&window);

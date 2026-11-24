@@ -2670,6 +2670,11 @@ fn the_secondary_appearance_labels_sit_above_their_own_controls() {
         transparency_label_bottom <= window.get_appearance_transparency_control_y() + 0.5,
         "降低透明度 label must sit directly above its control"
     );
+    assert!(
+        (window.get_transparency_toggle_x() - window.get_appearance_transparency_label_x()).abs()
+            < 1.0,
+        "the 开启 checkbox must share the group label's left edge"
+    );
     assert_eq!(
         window.get_appearance_transparency_label_text(),
         "降低透明度",

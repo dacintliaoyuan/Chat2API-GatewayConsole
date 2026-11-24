@@ -1003,6 +1003,9 @@ export component MainWindow inherits Window {
     out property <length> maintenance-toggle-width: maintenance-toggle.width;
     out property <length> maintenance-toggle-height: maintenance-toggle.height;
     out property <string> maintenance-toggle-icon: maintenance-toggle.icon;
+    // While the overlay is open the trigger keeps the selected fill and edge,
+    // so the panel has a visible anchor in the title row.
+    out property <bool> maintenance-toggle-active: maintenance-toggle.active;
     out property <length> maintenance-verify-x: maintenance-verify.button-x;
     out property <length> maintenance-verify-y: maintenance-verify.button-y;
     out property <length> maintenance-verify-width: maintenance-verify.button-width;
@@ -1244,6 +1247,12 @@ export component MainWindow inherits Window {
     in property <[RequestRow]> requests: [];
     in property <string> request-status: "等待从本实例读取请求记录…";
     in property <int> request-tone: 3;
+    // A pending keyword search has not landed yet, so the row keeps the old
+    // page count only as a previous result instead of presenting it as current.
+    private property <string> request-status-label:
+        root.request-search-pending
+            ? "上次结果 · " + root.request-status
+            : root.request-status;
     // 较新/较早 page navigation.
     in property <bool> older-requests;
     in property <bool> newer-requests;
@@ -1330,7 +1339,7 @@ export component MainWindow inherits Window {
     // matched nothing keeps the KPI cards and explains the filter instead.
     out property <bool> request-empty:
         root.requests.length == 0 && !root.request-filters-active;
-    out property <string> request-status-text: root.request-status;
+    out property <string> request-status-text: root.request-status-label;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
     out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
@@ -1715,6 +1724,8 @@ export component MainWindow inherits Window {
         motion-mode-control.absolute-position.y;
     out property <string> appearance-transparency-label-text:
         appearance-transparency-label.text;
+    out property <length> appearance-transparency-label-x:
+        appearance-transparency-label.absolute-position.x;
     out property <length> appearance-transparency-label-y:
         appearance-transparency-label.absolute-position.y;
     out property <length> appearance-transparency-label-height:
@@ -2822,6 +2833,7 @@ export component MainWindow inherits Window {
                     visible: root.page == 0;
                     cross-axis-self-alignment: center;
                     opacity: root.page-opacity;
+                    active: root.maintenance-menu-open;
                     clicked => {
                         root.maintenance-menu-open = !root.maintenance-menu-open;
                         if (!root.maintenance-menu-open) { root.maintenance-confirm = -1; }
@@ -3362,7 +3374,7 @@ export component MainWindow inherits Window {
                     // label clear of the ScrollView thumb and the window edge.
                     padding-right: root.compact ? 0px : 8px;
                     Hint {
-                        text: root.request-status;
+                        text: root.request-status-label;
                         color: Theme.status_ink(root.request-tone);
                         horizontal-stretch: 1;
                         vertical-alignment: center;
@@ -3833,6 +3845,17 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    // The live tail scrolls the viewport to the newest line, so
+                    // its top edge can land mid-row. One pixel of surface over
+                    // the first list pixel hides that cut edge without changing
+                    // the list height or its scroll position.
+                    log-list-top-fade := Rectangle {
+                        x: 6px;
+                        y: 6px;
+                        width: parent.width - 20px;
+                        height: 1px;
+                        background: @linear-gradient(180deg, Theme.surface 0%, transparent 100%);
+                    }
                 }
                 log-details := TextDetails {
                     visible: !root.open-log-id.is-empty || self.height > 0px;
@@ -3956,7 +3979,9 @@ export component MainWindow inherits Window {
                                     }
                                     transparency-toggle := Toggle {
                                         label: "开启";
-                                        cross-axis-self-alignment: center;
+                                        // The checkbox sits on the same left edge as
+                                        // the group label above; centering it in the
+                                        // third column read as a floating control.
                                         checked <=> root.reduce-transparency;
                                         toggled => { root.transparency-changed(root.reduce-transparency); }
                                     }
