@@ -239,6 +239,9 @@ export component FocusAction inherits Rectangle {
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <string> icon: "";
+    // A trailing glyph points at the destination a navigation action opens;
+    // the leading icon stays empty so the arrow never reads as a bullet.
+    in property <string> icon-after: "";
     // Manual refresh buttons rotate their glyph for 600 ms; the reset to zero
     // is static so the completed turn never animates backwards.
     in property <angle> icon-rotation: 0deg;
@@ -269,9 +272,12 @@ export component FocusAction inherits Rectangle {
     out property <length> focus-ring-width: root.border-width;
     // A disabled action never counts as a visible focus target: it cannot be
     // tabbed to (the FocusScope is disabled too) and its edge is the resting
-    // control edge, not the focus step.
+    // control edge, not the focus step. A primary action draws its focus as a
+    // 2 px outer ring instead of stepping the accent border, so the 3:1 neutral
+    // ring is visible against the page around the blue fill.
     out property <bool> focus-visible:
-        root.enabled && focus.has-focus && (root.border-color == Theme.edge-control-strong
+        root.enabled && focus.has-focus && (root.primary
+            || root.border-color == Theme.edge-control-strong
             || (root.danger && root.border-color == Theme.bad-text));
     callback clicked();
     public function take-focus() { focus.focus(); }
@@ -327,6 +333,12 @@ export component FocusAction inherits Rectangle {
             vertical-alignment: center;
             animate color { duration: Theme.quick; easing: ease-in-out; }
         }
+        if !root.icon-after.is-empty && !root.icon-only : AppIcon {
+            size: 13px;
+            kind: root.icon-after;
+            tint: root.icon-tint;
+            vertical-alignment: center;
+        }
         if !root.badge.is-empty : Rectangle {
             height: 17px;
             border-radius: 4px;
@@ -361,6 +373,19 @@ export component FocusAction inherits Rectangle {
         enabled: root.enabled;
         mouse-cursor: MouseCursor.pointer;
         clicked => { focus.focus(); root.clicked(); }
+    }
+    // A primary action fills with the accent, so its own 1 px border cannot
+    // carry a 3:1 focus step. Draw a 2 px control-strength ring just outside
+    // the button instead; it reads against the page like every other focus ring.
+    if root.enabled && root.primary && focus.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 9px;
+        border-width: 2px;
+        border-color: Theme.edge-control-strong;
+        background: transparent;
     }
     if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
     accessible-role: button;
@@ -741,8 +766,10 @@ export component Toggle inherits Rectangle {
             background: root.checked ? Theme.accent : focus.has-focus ? Theme.field-strong : Theme.field;
             border-width: 1px;
             // Keyboard focus uses the control-strength edge (3:1); the old
-            // edge-strong sat at about 2.1:1 on the page.
-            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-control-strong : pointer.has-hover ? Theme.edge-control-strong : Theme.edge;
+            // edge-strong sat at about 2.1:1 on the page. The unchecked box
+            // keeps the same 3:1 boundary at rest so the level filter is
+            // visible before it is selected.
+            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-control-strong : pointer.has-hover ? Theme.edge-control-strong : Theme.edge-control;
             animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
             AppIcon {
                 x: (parent.width - self.width) / 2;

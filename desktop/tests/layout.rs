@@ -3267,7 +3267,36 @@ fn the_history_level_filter_names_the_empty_selection() {
     assert!(window.get_log_level_hint_visible());
     assert_eq!(
         window.get_log_level_hint_text().as_str(),
-        "未选级别 = 全部"
+        "未选级别时显示全部"
+    );
+}
+
+#[test]
+fn the_compact_settings_directory_balances_its_two_rows() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "toc_h={} appearance=({},{}) export_y={} login_rounds=({},{})",
+        window.get_settings_toc_height(),
+        window.get_settings_toc_appearance_x(),
+        window.get_settings_toc_appearance_y(),
+        window.get_settings_toc_export_y(),
+        window.get_settings_toc_login_rounds_x(),
+        window.get_settings_toc_login_rounds_y(),
+    );
+    assert!(
+        window.get_settings_toc_export_y() > window.get_settings_toc_appearance_y(),
+        "导出用量 starts the second directory row instead of following 实例管理"
+    );
+    assert_eq!(
+        window.get_settings_toc_login_rounds_y(),
+        window.get_settings_toc_export_y(),
+        "登录轮次 shares the second row instead of sitting alone on a third"
+    );
+    assert!(
+        window.get_settings_toc_login_rounds_x() > window.get_settings_toc_appearance_x(),
+        "登录轮次 follows 导出用量 and UM 模型 on the second row"
     );
 }
 
@@ -3443,6 +3472,51 @@ fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
         "the 近期问题 title must be visible in the first screen: title bottom {} viewport bottom {}",
         window.get_recent_issues_title_y() + window.get_recent_issues_title_height(),
         window.get_overview_viewport_bottom()
+    );
+}
+
+#[test]
+fn the_compact_status_row_keeps_the_page_count_unelided() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(1);
+    window.set_request_status("北京时间 · 本页 3 条".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "status={} width={} preferred={}",
+        window.get_request_status_display_text(),
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width(),
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 3 条",
+        "the compact status row keeps the page count"
+    );
+    assert!(
+        window.get_request_status_hint_width() + 0.5
+            >= window.get_request_status_hint_preferred_width(),
+        "the status hint must not elide the page count: width {} preferred {}",
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width()
+    );
+}
+
+#[test]
+fn the_primary_query_action_shows_a_three_to_one_focus_ring() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_request_query_primary());
+    assert!(!window.get_request_query_focus_visible());
+    window.invoke_focus_request_query();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        window.get_request_query_has_focus(),
+        "the primary 查询 action takes keyboard focus"
+    );
+    assert!(
+        window.get_request_query_focus_visible(),
+        "a primary action must still expose a 3:1 focus ring"
     );
 }
 

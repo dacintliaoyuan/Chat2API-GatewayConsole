@@ -193,7 +193,7 @@ component ProbeCheck inherits Rectangle {
         border-radius: 4px;
         background: root.checked ? Theme.accent : Theme.field;
         border-width: 1px;
-        border-color: root.checked ? Theme.accent : Theme.edge;
+        border-color: root.checked ? Theme.accent : Theme.edge-control;
     }
     AppIcon {
         x: (parent.width - self.width) / 2;
@@ -728,15 +728,13 @@ export component MainWindow inherits Window {
     changed request-list-available-height => {
         if (!root.request-chart-collapsed-explicit) {
             root.request-chart-collapsed =
-                root.request-list-available-height < 240px
-                || root.request-result == 2;
+                root.request-list-available-height < 240px;
         }
     }
     changed height => {
         if (!root.request-chart-collapsed-explicit) {
             root.request-chart-collapsed =
-                root.request-list-available-height < 240px
-                || root.request-result == 2;
+                root.request-list-available-height < 240px;
         }
     }
     changed allow-motion => {
@@ -1382,8 +1380,7 @@ export component MainWindow inherits Window {
     public function apply-auto-chart-collapse() {
         root.request-chart-collapsed-explicit = false;
         root.request-chart-collapsed =
-            root.request-list-available-height < 240px
-            || root.request-result == 2;
+            root.request-list-available-height < 240px;
     }
     out property <bool> request-chart-visible:
         request-analytics.expanded && !root.request-empty;
@@ -1424,6 +1421,11 @@ export component MainWindow inherits Window {
         root.request-status-label == "所选时间没有请求记录。"
         ? "北京时间 · 本页 0 条" : root.request-status-label;
     out property <string> request-status-display-text: root.request-status-display;
+    // Test seams: the compact status row keeps 北京时间 · 本页 N 条
+    // at full width instead of eliding it behind the scope caption.
+    out property <length> request-status-hint-width: request-status-hint.width;
+    out property <length> request-status-hint-preferred-width:
+        request-status-hint.preferred-width;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
     out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
@@ -1455,6 +1457,12 @@ export component MainWindow inherits Window {
         request-fail-toggle.has-focus;
     out property <bool> request-fail-toggle-visible: request-fail-toggle.visible;
     public function focus-request-fail-toggle() { request-fail-toggle.take-focus(); }
+    // Test seams: the primary 查询 action draws a 2 px outer focus ring
+    // instead of stepping its accent border.
+    out property <bool> request-query-has-focus: request-query.has-focus;
+    out property <bool> request-query-focus-visible: request-query.focus-visible;
+    out property <bool> request-query-primary: request-query.primary;
+    public function focus-request-query() { request-query.take-focus(); }
 
     in-out property <string> port-input: "7999";
     in-out property <bool> port-input-invalid;
@@ -1705,6 +1713,8 @@ export component MainWindow inherits Window {
     // popover, not in the default control row.
     in-out property <bool> usage-settings-open: false;
     out property <bool> usage-settings-open-value: usage-chart.settings-open;
+    out property <bool> usage-settings-toggle-focused:
+        usage-chart.settings-toggle-focused;
     out property <length> usage-settings-toggle-x: usage-chart.settings-toggle-x;
     out property <length> usage-settings-toggle-y: usage-chart.settings-toggle-y;
     out property <length> usage-settings-toggle-width: usage-chart.settings-toggle-width;
@@ -1906,6 +1916,14 @@ export component MainWindow inherits Window {
     out property <length> settings-viewport-height: settings-scroll.visible-height;
     // Test seam: the settings directory jumps the scroll view to a card.
     out property <length> settings-scroll-y: settings-scroll.content-y;
+    // Test seams: the compact directory balances four entries per row instead
+    // of leaving 登录轮次 alone on the second line.
+    out property <length> settings-toc-height: settings-toc.height;
+    out property <length> settings-toc-appearance-y: toc-appearance.absolute-position.y;
+    out property <length> settings-toc-appearance-x: toc-appearance.absolute-position.x;
+    out property <length> settings-toc-export-y: toc-export.absolute-position.y;
+    out property <length> settings-toc-login-rounds-y: toc-login-rounds.absolute-position.y;
+    out property <length> settings-toc-login-rounds-x: toc-login-rounds.absolute-position.x;
     out property <length> port-input-x: port-input.absolute-position.x;
     out property <length> port-input-y: port-input.absolute-position.y;
     out property <length> port-input-width: port-input.width;
@@ -2631,11 +2649,10 @@ export component MainWindow inherits Window {
     changed request-period => { root.settings-changed(); }
     changed request-result => {
         root.settings-changed();
-        // Selecting 失败 is an evidence-first view: fold the chart so the
-        // request rows take the first screen. The KPI cards stay visible.
-        if (root.request-result == 2) {
-            root.request-chart-collapsed = true;
-        } else if (!root.request-chart-collapsed-explicit) {
+        // 只看失败 no longer folds the chart by itself: the fold follows the
+        // measured list height, so a wide page keeps its trend and a page that
+        // cannot hold 240 px still folds it.
+        if (!root.request-chart-collapsed-explicit) {
             root.request-chart-collapsed =
                 root.request-list-available-height < 240px;
         }
@@ -2778,6 +2795,10 @@ export component MainWindow inherits Window {
             if (event.text == Key.Escape) {
                 // Escape closes only the detail that belongs to the current page;
                 // a hidden detail on another page must survive a page switch.
+                if (root.usage-settings-open) {
+                    usage-chart.close-settings();
+                    return accept;
+                }
                 if (root.maintenance-menu-open) {
                     root.maintenance-menu-open = false;
                     root.maintenance-confirm = -1;
@@ -3169,7 +3190,10 @@ export component MainWindow inherits Window {
                                 failure-evidence := ActionButton {
                                     label: "请求失败 " + root.overview-failure-count
                                         + " · 查看证据";
-                                    icon: "arrow-right";
+                                    // The arrow follows the label: a leading arrow
+                                    // reads like a bullet, a trailing chevron
+                                    // points at the evidence destination.
+                                    icon-after: "chevron-right";
                                     quiet: true;
                                     tooltip: "跳到请求诊断并只看失败";
                                     clicked => { root.show-request-failures(); }
@@ -3553,7 +3577,7 @@ export component MainWindow inherits Window {
                     // The wide page has no scrollbar gutter; keep the time
                     // label clear of the ScrollView thumb and the window edge.
                     padding-right: root.request-compact ? 0px : 8px;
-                    Hint {
+                    request-status-hint := Hint {
                         text: root.request-status-display;
                         color: Theme.status_ink(root.request-tone);
                         horizontal-stretch: 1;
@@ -3563,16 +3587,11 @@ export component MainWindow inherits Window {
                         accessible-role: text;
                         accessible-live-region: polite;
                     }
+                    // The compact status row keeps 北京时间 · 本页 N 条 at full
+                    // width: the five KPI cards name their own scope, so the
+                    // separate 指标按所选范围 cell is not repeated here.
                     // The paused keyword is still pending; name it instead of
                     // showing a stale status as if the query had landed.
-                    // The compact KPI summary keeps its five cards at full width;
-                    // the scope caption moves into this row instead of a sixth
-                    // cell that would elide every value.
-                    request-kpi-scope-hint := Hint {
-                        visible: root.request-compact && !root.request-empty;
-                        text: "指标按所选范围";
-                        vertical-alignment: center;
-                    }
                     request-pending-hint := Hint {
                         visible: root.request-search-pending;
                         height: self.visible ? self.preferred-height : 0px;
@@ -3753,7 +3772,12 @@ export component MainWindow inherits Window {
                                     icon: "download";
                                     quiet: true;
                                     enabled: root.request-export-enabled;
-                                    tooltip: "导出当前请求列表";
+                                    // An empty list has nothing to export; the
+                                    // disabled action names why instead of
+                                    // leaving a dead button.
+                                    tooltip: root.request-export-enabled
+                                        ? "导出当前请求列表"
+                                        : "当前列表没有可导出的请求";
                                     clicked => { root.export-requests(); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
@@ -3919,7 +3943,7 @@ export component MainWindow inherits Window {
                         // The compact filter row wraps instead of hiding the
                         // rule; the hint elides rather than dropping the
                         // "no level selected means all" signal.
-                        text: "未选级别 = 全部";
+                        text: "未选级别时显示全部";
                         vertical-alignment: center;
                         overflow: elide;
                         wrap: no-wrap;
@@ -4160,7 +4184,7 @@ export component MainWindow inherits Window {
                         spacing: 6px;
                         alignment: start;
                         SectionLabel { text: "目录"; vertical-alignment: center; }
-                        ActionButton {
+                        toc-appearance := ActionButton {
                             label: "外观"; quiet: true;
                             clicked => { root.scroll-settings-to(appearance-card.absolute-position.y); }
                         }
@@ -4176,7 +4200,14 @@ export component MainWindow inherits Window {
                             label: "实例管理"; quiet: true;
                             clicked => { root.scroll-settings-to(technical-card.absolute-position.y); }
                         }
-                        ActionButton {
+                        // Four entries per row at 540 px: the full-width zero-height
+                        // break keeps 登录轮次 off a line of its own. The 1060 px
+                        // page keeps one row even when the rail is icon-only.
+                        if root.width < 800px : Rectangle {
+                            width: 100%;
+                            height: 0px;
+                        }
+                        toc-export := ActionButton {
                             label: "导出用量"; quiet: true;
                             clicked => { root.scroll-settings-to(export-card.absolute-position.y); }
                         }
@@ -4184,7 +4215,7 @@ export component MainWindow inherits Window {
                             label: "UM 模型"; quiet: true;
                             clicked => { root.scroll-settings-to(model-card.absolute-position.y); }
                         }
-                        ActionButton {
+                        toc-login-rounds := ActionButton {
                             label: "登录轮次"; quiet: true;
                             clicked => { root.scroll-settings-to(login-rounds-card.absolute-position.y); }
                         }
@@ -5249,7 +5280,7 @@ export component MainWindow inherits Window {
                             text <=> root.help-keyword;
                         }
                         help-count := Hint {
-                            text: root.help-visible-count + " 条帮助";
+                            text: root.help-visible-count + " 个主题";
                             vertical-alignment: center;
                             visible: root.help-visible-count > 0;
                         }
