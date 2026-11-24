@@ -25,7 +25,7 @@ use crate::ledger::{estimate_tokens, merge_usage_snapshots, message_tokens, Usag
 use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::{valid_chat_request, AppState};
-use crate::upstream::{NextItem, StreamReader, UpstreamBody, UpstreamFailure, UpstreamResponse};
+use crate::upstream::{PostError, NextItem, StreamReader, UpstreamBody, UpstreamFailure, UpstreamResponse};
 
 /// SSE content type used after the 200 commit.
 pub const SSE_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8";
@@ -88,6 +88,17 @@ pub fn handle_chat(
     stream: &mut TcpStream,
     admission: Option<Admission>,
 ) -> ChatResult {
+    let dispatch = crate::server::ModelDispatch::new(state, request, stream);
+    handle_chat_with_dispatch(state, request, stream, admission, &dispatch)
+}
+
+pub(crate) fn handle_chat_with_dispatch(
+    state: &AppState,
+    request: &Request,
+    stream: &mut TcpStream,
+    admission: Option<Admission>,
+    dispatch: &crate::server::ModelDispatch<'_>,
+) -> ChatResult {
     let key_id = admission.as_ref().map(|value| value.key_id.clone());
     let request_id = key_id.as_ref().map(|_| random_request_id());
     let attribution = if key_id.is_some() {
@@ -149,6 +160,7 @@ pub fn handle_chat(
         .map(str::to_string);
     let context = ChatContext {
         state,
+        dispatch,
         model: &model,
         started_at,
         deadline,
@@ -167,8 +179,9 @@ pub fn handle_chat(
     }
 }
 
-struct ChatContext<'a> {
+struct ChatContext<'a, 'dispatch> {
     state: &'a AppState,
+    dispatch: &'a crate::server::ModelDispatch<'dispatch>,
     model: &'a str,
     started_at: Instant,
     deadline: Instant,
@@ -182,24 +195,24 @@ struct ChatContext<'a> {
 }
 
 fn post_chat_attempt(
-    context: &ChatContext<'_>,
-    credential: &str,
+    context: &ChatContext<'_, '_>,
     body: &Map<String, Value>,
     streaming: bool,
     compat_retry_used: bool,
     attempt: u32,
     attempt_started: Instant,
-) -> (Result<(UpstreamResponse, bool), UpstreamFailure>, Duration) {
-    let mut result = crate::upstream::post_chat(
-        &context.state.config,
-        credential,
+) -> (Result<(UpstreamResponse, crate::readonly::UpstreamCredential, bool), PostError>, Duration) {
+    let mut result = crate::upstream::post_compat(
+        context.dispatch,
+        "/api/chat/completions",
         &serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default(),
         streaming,
         context.deadline,
+        &[],
     );
-    let elapsed = attempt_started.elapsed();
+    let elapsed = context.dispatch.attempt_elapsed(attempt_started);
     let sent_stream_options = body.contains_key("stream_options");
-    let status = result.as_ref().ok().map(|response| response.status);
+    let status = result.as_ref().ok().map(|(response, _)| response.status);
     let retry_without_stream_options = status == Some(400) && sent_stream_options && !compat_retry_used;
 
     let log = &context.state.event_log;
@@ -208,7 +221,7 @@ fn post_chat_attempt(
         && (status == Some(400) || compat_retry_used)
     {
         let (reason, error_body) = match &mut result {
-            Ok(response) if retry_without_stream_options => {
+            Ok((response, _)) if retry_without_stream_options => {
                 let text = response.read_discarded_error_text();
                 if text == Err(UpstreamFailure::Timeout) {
                     (Some("unknown"), Some("not_ready"))
@@ -216,7 +229,7 @@ fn post_chat_attempt(
                     chat_error_evidence(text.as_deref().map_err(|error| *error))
                 }
             }
-            Ok(response) if response.status == 400 => {
+            Ok((response, _)) if response.status == 400 => {
                 chat_error_evidence(response.capture_error_text())
             }
             _ => (None, None),
@@ -225,8 +238,11 @@ fn post_chat_attempt(
             request_id: context.http_request_id,
             attempt,
             upstream_status: status,
-            upstream_request_id: result.as_ref().ok().and_then(upstream_request_id),
-            transport_error: result.as_ref().err().map(|error| error.name()),
+            upstream_request_id: result.as_ref().ok().and_then(|(response, _)| upstream_request_id(response)),
+            transport_error: match &result {
+                Err(PostError::Transport(error)) => Some(error.name()),
+                _ => None,
+            },
             reason,
             error_body,
             stream_options: if compat_retry_used {
@@ -239,7 +255,7 @@ fn post_chat_attempt(
             retry_without_stream_options,
         });
     }
-    (result.map(|response| (response, retry_without_stream_options)), elapsed)
+    (result.map(|(response, credential)| (response, credential, retry_without_stream_options)), elapsed)
 }
 
 fn upstream_request_id(response: &UpstreamResponse) -> Option<&str> {
@@ -287,7 +303,7 @@ fn chat_error_evidence(
     (Some(reason), Some("present"))
 }
 
-fn forward_json(context: &ChatContext<'_>) -> ChatResult {
+fn forward_json(context: &ChatContext<'_, '_>) -> ChatResult {
     let mut stats = AttemptStats::default();
     let result = forward_json_inner(context, &mut stats);
     record_desktop_failure(context, false, &result);
@@ -295,7 +311,7 @@ fn forward_json(context: &ChatContext<'_>) -> ChatResult {
     result
 }
 
-fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> ChatResult {
+fn forward_json_inner(context: &ChatContext<'_, '_>, stats: &mut AttemptStats) -> ChatResult {
     let mut body = context.upstream_body.clone();
     let mut compat_retry_used = false;
     let mut retry_state = RetryState::default();
@@ -312,19 +328,23 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let credential = context.state.proxy.upstream_credential();
         let (attempt, attempt_elapsed) = post_chat_attempt(
             context,
-            &credential.value,
             &body,
             false,
             compat_retry_used,
             stats.physical_attempts,
             attempt_started,
         );
-        let (mut response, retry_without_stream_options) = match attempt {
+        let (mut response, credential, retry_without_stream_options) = match attempt {
             Ok(attempt) => attempt,
-            Err(failure) => {
+            Err(PostError::Admission(result)) => {
+                stats.tries -= 1;
+                stats.physical_attempts -= 1;
+                return result;
+            }
+            Err(PostError::Transport(failure)) => {
+                context.state.proxy.observe_business_failure(None);
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
@@ -441,7 +461,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
             context
                 .state
                 .proxy
-                .record_business_success("chat_completion", Some(200));
+                .record_business_success(context.http_request_id, "chat_completion", Some(200));
         }
         let mut response = Response::new(200, raw);
         response = response.with_header("Content-Type", "application/json; charset=utf-8");
@@ -449,7 +469,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
     }
 }
 
-fn log_final_failure(context: &ChatContext<'_>, stats: &AttemptStats, result: &ChatResult) {
+fn log_final_failure(context: &ChatContext<'_, '_>, stats: &AttemptStats, result: &ChatResult) {
     let Some(final_status) = result.final_failure_status() else {
         return;
     };
@@ -462,7 +482,7 @@ fn log_final_failure(context: &ChatContext<'_>, stats: &AttemptStats, result: &C
     });
 }
 
-fn record_desktop_failure(context: &ChatContext<'_>, stream: bool, result: &ChatResult) {
+fn record_desktop_failure(context: &ChatContext<'_, '_>, stream: bool, result: &ChatResult) {
     if !context.state.config.desktop_instance {
         return;
     }
@@ -485,7 +505,7 @@ fn record_desktop_failure(context: &ChatContext<'_>, stream: bool, result: &Chat
     });
 }
 
-fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResult {
+fn forward_stream(context: &ChatContext<'_, '_>, stream: &mut TcpStream) -> ChatResult {
     let mut stats = AttemptStats::default();
     let mut recorded_final = false;
     let result = forward_stream_inner(context, stream, &mut stats, &mut recorded_final);
@@ -497,7 +517,7 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
 }
 
 fn forward_stream_inner(
-    context: &ChatContext<'_>,
+    context: &ChatContext<'_, '_>,
     stream: &mut TcpStream,
     stats: &mut AttemptStats,
     recorded_final: &mut bool,
@@ -518,19 +538,23 @@ fn forward_stream_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let credential = context.state.proxy.upstream_credential();
         let (attempt, attempt_elapsed) = post_chat_attempt(
             context,
-            &credential.value,
             &upstream_body,
             true,
             compat_retry_used,
             stats.physical_attempts,
             attempt_started,
         );
-        let (response, retry_without_stream_options) = match attempt {
+        let (response, credential, retry_without_stream_options) = match attempt {
             Ok(attempt) => attempt,
-            Err(failure) => {
+            Err(PostError::Admission(result)) => {
+                stats.tries -= 1;
+                stats.physical_attempts -= 1;
+                return result;
+            }
+            Err(PostError::Transport(failure)) => {
+                context.state.proxy.observe_business_failure(None);
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
@@ -596,6 +620,7 @@ fn forward_stream_inner(
                 context.deadline,
                 outcome.elapsed,
             ) {
+                context.state.proxy.observe_business_failure(None);
                 if outcome.reasoning_chars > 0 {
                     context.state.ledger.record(UsageRecord {
                         model: context.model,
@@ -744,7 +769,7 @@ enum EventAction {
 }
 
 fn consume_stream(
-    context: &ChatContext<'_>,
+    context: &ChatContext<'_, '_>,
     stream: &mut TcpStream,
     body: UpstreamBody,
 ) -> StreamOutcome {
@@ -831,7 +856,7 @@ fn consume_stream(
 
 fn process_event(
     stream: &mut TcpStream,
-    context: &ChatContext<'_>,
+    context: &ChatContext<'_, '_>,
     state: &mut SseState,
     had_separator: bool,
 ) -> EventAction {
@@ -852,6 +877,7 @@ fn process_event(
     };
     if let Some(chunk) = chunk.as_ref() {
         if let Some(reason) = explicit_error_reason(chunk) {
+            context.state.proxy.observe_explicit_outage(&payload);
             state.data_lines += data_lines.len() as u64;
             state.explicit_reason = Some(reason);
             return EventAction::Stop(StreamStatus::UpstreamStreamError);
@@ -924,8 +950,8 @@ fn process_event(
             return EventAction::Stop(StreamStatus::UpstreamMissingFinishReason);
         }
         state.done_seen = true;
-        if state.committed {
-            let _ = write_chunk(stream, &raw);
+        if state.committed && write_chunk(stream, &raw).is_err() {
+            return EventAction::Stop(StreamStatus::ClientDisconnected);
         }
         return EventAction::Stop(StreamStatus::Ok);
     }
@@ -933,13 +959,18 @@ fn process_event(
         if !state.committed && !commit(stream, context, state) {
             return EventAction::Stop(StreamStatus::ClientDisconnected);
         }
-        if write_chunk(stream, &raw).is_ok() && has_output {
+        if write_chunk(stream, &raw).is_err() {
+            return EventAction::Stop(StreamStatus::ClientDisconnected);
+        }
+        if has_output {
             crate::ledger::mark_first_token(context.started_at, &mut state.first_token_ms);
         }
         return EventAction::Continue;
     }
     if state.committed {
-        let _ = write_chunk(stream, &raw);
+        if write_chunk(stream, &raw).is_err() {
+            return EventAction::Stop(StreamStatus::ClientDisconnected);
+        }
     } else {
         state.staged.extend_from_slice(&raw);
         if state.staged.len() > PRELUDE_MAX_BYTES {
@@ -949,7 +980,7 @@ fn process_event(
     EventAction::Continue
 }
 
-fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseState) -> bool {
+fn commit(stream: &mut TcpStream, context: &ChatContext<'_, '_>, state: &mut SseState) -> bool {
     state.committed = true;
     let mut headers = vec![
         ("Content-Type".to_string(), SSE_CONTENT_TYPE.to_string()),
@@ -973,12 +1004,12 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
     true
 }
 
-fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
+fn record_stream_usage(context: &ChatContext<'_, '_>, outcome: &StreamOutcome) {
     if outcome.status.is_success() {
         context
             .state
             .proxy
-            .record_business_success("chat_stream", Some(200));
+            .record_business_success(context.http_request_id, "chat_stream", Some(200));
     } else if outcome.status != StreamStatus::ClientDisconnected {
         let class = match outcome.status {
             StreamStatus::UpstreamFirstByteTimeout

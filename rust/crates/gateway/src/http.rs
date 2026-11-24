@@ -21,6 +21,27 @@ pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Upper bound read into memory; a larger declared body is refused by policy.
 pub const HARD_BODY_CAP: u64 = 1024 * 1024 * 1024;
 
+/// Test for EOF without consuming any pipelined bytes.
+pub(crate) fn peer_disconnected(stream: &TcpStream, restore_timeout: Duration) -> bool {
+    if stream.set_read_timeout(Some(Duration::from_millis(1))).is_err() {
+        return false;
+    }
+    let disconnected = match stream.peek(&mut [0; 1]) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.kind(),
+            io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::NotConnected
+        ),
+    };
+    let _ = stream.set_read_timeout(Some(restore_timeout));
+    disconnected
+}
+
 pub(crate) fn accept_connections(
     shutdown: &AtomicBool,
     mut accept: impl FnMut() -> io::Result<(TcpStream, SocketAddr)>,

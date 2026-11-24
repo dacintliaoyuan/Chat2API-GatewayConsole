@@ -23,7 +23,7 @@ use crate::login::{CredentialEvidence, CredentialSink};
 use crate::tls::{self, UpstreamStream};
 use crate::upstream_fault::{
     fault_class_of_status, summarize_error_text, FaultClass, FaultObservation, FaultSource,
-    UpstreamFaultLog,
+    UpstreamFaultLog, NO_HEALTHY_UPSTREAM,
 };
 
 pub const CHAT2API_VERSION: &str = "1.0.0";
@@ -420,6 +420,7 @@ pub struct ProxyState {
     effort_models: Vec<String>,
     upstream: UpstreamClient,
     faults: UpstreamFaultLog,
+    pub(crate) recovery: Option<crate::upstream_recovery::Recovery>,
 }
 
 impl ProxyState {
@@ -461,6 +462,10 @@ impl ProxyState {
             effort_models: config.effort_models.clone(),
             upstream: UpstreamClient::from_config(config)?,
             faults: UpstreamFaultLog::open(config.effective_upstream_fault_log()),
+            recovery: (config.role == Role::Local
+                && config.run_mode == crate::config::RunMode::Worker
+                && !config.desktop_instance)
+                .then(crate::upstream_recovery::Recovery::new),
         })
     }
 
@@ -685,6 +690,9 @@ impl ProxyState {
             _ => "unknown",
         };
         self.record_reachability(reachability, reason, upstream_status);
+        if verdict == "unknown" && observation.summary.as_deref() == Some(NO_HEALTHY_UPSTREAM) {
+            self.observe_business_failure(observation.summary.as_deref());
+        }
         self.faults.record_probe(
             source,
             observation.result_label(),
@@ -717,8 +725,8 @@ impl ProxyState {
             });
         }
         let mut observation = self.probe_credential(&credential.value);
-        let mut bearer_used = (!credential.api_key).then_some(credential.value.clone());
-        if credential.api_key && observation.verdict == "rejected" {
+        let mut used_credential = credential;
+        if used_credential.api_key && observation.verdict == "rejected" {
             // An operator-saved API key may be stale. It must never wedge the
             // gateway: mark it rejected for evidence, then let the JWT bearer
             // try the same probe once.
@@ -729,30 +737,37 @@ impl ProxyState {
             let bearer = self.bearer();
             if !bearer.is_empty() {
                 observation = self.probe_credential(&bearer);
-                bearer_used = Some(bearer);
+                used_credential = UpstreamCredential { value: bearer, api_key: false };
             }
         }
-        if let (Some(bearer), Some(status)) = (bearer_used, observation.upstream_status) {
-            if remember_rejection
-                && observation.verdict == "rejected"
-                && !self.record_bearer_rejection(&bearer, status)
-            {
-                return CredentialObservation {
-                    verdict: "unknown",
-                    reason: Some("credential_changed"),
-                    upstream_status: None,
-                    summary: None,
-                };
-            }
+        let stale_success = self.recovery.is_some()
+            && observation.verdict == "valid"
+            && self.upstream_credential() != used_credential;
+        let stale_rejection = remember_rejection
+            && !used_credential.api_key
+            && observation.verdict == "rejected"
+            && observation.upstream_status.is_some_and(|status| {
+                !self.record_bearer_rejection(&used_credential.value, status)
+            });
+        if stale_success || stale_rejection {
+            return CredentialObservation {
+                verdict: "unknown",
+                reason: Some("credential_changed"),
+                upstream_status: None,
+                summary: None,
+            };
         }
         self.record_credential_observation(observation)
     }
 
     fn probe_credential(&self, credential: &str) -> CredentialObservation {
-        match self
-            .upstream
-            .get_json_probe("/api/models", Some(credential))
-        {
+        match self.upstream.request(
+            "GET",
+            "/api/models",
+            Some(credential),
+            None,
+            PROBE_TIMEOUT,
+        ) {
             Err(UpstreamFailure::Timeout) => CredentialObservation {
                 verdict: "unknown",
                 reason: Some("timeout"),
@@ -765,7 +780,9 @@ impl ProxyState {
                 upstream_status: None,
                 summary: None,
             },
-            Ok((status, payload)) => {
+            Ok(response) => {
+                let status = response.status;
+                let payload = serde_json::from_slice(&response.body).ok();
                 if status == 401 || status == 403 {
                     CredentialObservation {
                         verdict: "rejected",
@@ -774,11 +791,15 @@ impl ProxyState {
                         summary: summarize_payload(&payload),
                     }
                 } else if (500..=599).contains(&status) {
+                    let summary = summarize_payload(&payload).or_else(|| {
+                        self.recovery.as_ref()?;
+                        explicit_outage_summary(&String::from_utf8_lossy(&response.body))
+                    });
                     CredentialObservation {
                         verdict: "unknown",
                         reason: Some("upstream_5xx"),
                         upstream_status: Some(status),
-                        summary: summarize_payload(&payload),
+                        summary,
                     }
                 } else if status != 200 {
                     CredentialObservation {
@@ -1027,7 +1048,15 @@ impl ProxyState {
     }
 
     /// Record contract-valid business success as recovery evidence.
-    pub fn record_business_success(&self, detail: &str, upstream_status: Option<u16>) {
+    pub fn record_business_success(
+        &self,
+        request_id: &str,
+        detail: &str,
+        upstream_status: Option<u16>,
+    ) {
+        if let Some(recovery) = &self.recovery {
+            recovery.business_succeeded(request_id);
+        }
         self.faults.record_recovery(
             FaultSource::BusinessRequest,
             upstream_status,
@@ -1042,12 +1071,27 @@ impl ProxyState {
         upstream_status: Option<u16>,
         summary: Option<String>,
     ) {
+        self.observe_business_failure(summary.as_deref());
         self.faults.record_failure(FaultObservation {
             class,
             upstream_status,
             summary,
             source: FaultSource::BusinessRequest,
         });
+    }
+
+    pub(crate) fn observe_business_failure(&self, summary: Option<&str>) {
+        if let Some(recovery) = &self.recovery {
+            recovery.observe_failure(summary == Some(NO_HEALTHY_UPSTREAM));
+        }
+    }
+
+    pub(crate) fn observe_explicit_outage(&self, text: &str) {
+        if let Some(recovery) = &self.recovery {
+            if explicit_outage_summary(text).is_some() {
+                recovery.observe_failure(true);
+            }
+        }
     }
 
     /// Record one final transport failure of a business request.
@@ -1243,6 +1287,10 @@ fn summarize_payload(payload: &Option<Value>) -> Option<String> {
     payload
         .as_ref()
         .and_then(|payload| summarize_error_text(&payload.to_string()))
+}
+
+fn explicit_outage_summary(text: &str) -> Option<String> {
+    summarize_error_text(text).filter(|summary| summary == NO_HEALTHY_UPSTREAM)
 }
 
 impl CredentialSink for ProxyState {

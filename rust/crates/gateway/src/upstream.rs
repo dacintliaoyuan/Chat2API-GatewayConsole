@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::config::{
-    parse_upstream_base_url, upstream_host_header, upstream_uses_tls, GatewayConfig,
+    parse_upstream_base_url, upstream_host_header, upstream_uses_tls,
 };
 use crate::tls::{self, UpstreamStream};
 
@@ -306,92 +306,119 @@ fn connect_first(
     Err(last)
 }
 
-/// Open one `POST /api/chat/completions` request.
-pub fn post_chat(
-    config: &GatewayConfig,
-    bearer: &str,
-    body: &[u8],
-    streaming: bool,
-    deadline: Instant,
-) -> Result<UpstreamResponse, UpstreamFailure> {
-    post_compat(
-        config,
-        bearer,
-        "/api/chat/completions",
-        body,
-        streaming,
-        deadline,
-        &[],
-    )
+pub(crate) enum PostError {
+    Transport(UpstreamFailure),
+    Admission(crate::chat::ChatResult),
 }
 
-/// Open one compatibility `POST` request with the stored upstream bearer.
-///
-/// Python `Proxy.call` forwards the selected compatibility path and the optional
-/// Anthropic headers; the client's local credential never leaves this process.
-pub fn post_compat(
-    config: &GatewayConfig,
-    bearer: &str,
+impl From<UpstreamFailure> for PostError {
+    fn from(failure: UpstreamFailure) -> Self {
+        Self::Transport(failure)
+    }
+}
+
+/// Forward one attempt using the current configured upstream credential.
+pub(crate) fn post_compat(
+    dispatch: &crate::server::ModelDispatch<'_>,
     path: &str,
     body: &[u8],
     streaming: bool,
     deadline: Instant,
     extra_headers: &[(String, String)],
-) -> Result<UpstreamResponse, UpstreamFailure> {
+) -> Result<(UpstreamResponse, crate::readonly::UpstreamCredential), PostError> {
+    let config = dispatch.config();
     let (host, port) = parse_upstream_base_url(&config.upstream_base_url)
         .map_err(|_| UpstreamFailure::ConnectionError)?;
     let host_header = upstream_host_header(&config.upstream_base_url)
         .map_err(|_| UpstreamFailure::ConnectionError)?;
-    let addresses: Vec<std::net::SocketAddr> = format!("{host}:{port}")
-        .to_socket_addrs()
-        .map_err(|_| UpstreamFailure::ConnectionError)?
-        .collect();
-    if addresses.is_empty() {
-        return Err(UpstreamFailure::ConnectionError);
-    }
-    let remaining = remaining(deadline);
-    if remaining.is_zero() {
-        return Err(UpstreamFailure::Timeout);
-    }
-    let setup_timeout = remaining.min(UPSTREAM_SETUP_TIMEOUT);
-    let upstream = connect_first(addresses, setup_timeout)?;
-    let read_timeout = if streaming {
-        remaining.min(config.socket_silence_timeout)
-    } else {
-        remaining.min(NONSTREAM_READ_TIMEOUT)
-    };
-    let _ = upstream.set_read_timeout(Some(read_timeout.max(Duration::from_millis(1))));
-    let _ = upstream.set_write_timeout(Some(setup_timeout.max(Duration::from_millis(1))));
-    let mut upstream: UpstreamStream = if upstream_uses_tls(&config.upstream_base_url) {
-        Box::new(tls::wrap(upstream, &host).map_err(|_| UpstreamFailure::ConnectionError)?)
-    } else {
-        Box::new(upstream)
-    };
-    let mut request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host_header}\r\n\
+    let (mut upstream, credential) = loop {
+        dispatch.wait(deadline).map_err(PostError::Admission)?;
+        let credential = dispatch.upstream_credential();
+        let addresses: Vec<std::net::SocketAddr> = format!("{host}:{port}")
+            .to_socket_addrs()
+            .map_err(|_| UpstreamFailure::ConnectionError)?
+            .collect();
+        if addresses.is_empty() {
+            return Err(UpstreamFailure::ConnectionError.into());
+        }
+        let remaining = remaining(deadline);
+        if remaining.is_zero() {
+            return Err(UpstreamFailure::Timeout.into());
+        }
+        let setup_timeout = remaining.min(UPSTREAM_SETUP_TIMEOUT);
+        let socket = connect_first(addresses, setup_timeout)?;
+        let read_timeout = if streaming {
+            remaining.min(config.socket_silence_timeout)
+        } else {
+            remaining.min(NONSTREAM_READ_TIMEOUT)
+        };
+        let _ = socket.set_read_timeout(Some(read_timeout.max(Duration::from_millis(1))));
+        let _ = socket.set_write_timeout(Some(setup_timeout.max(Duration::from_millis(1))));
+        let mut upstream: UpstreamStream = if upstream_uses_tls(&config.upstream_base_url) {
+            let mut tls =
+                tls::wrap(socket, &host).map_err(|_| UpstreamFailure::ConnectionError)?;
+            if dispatch.first_gated_send() {
+                // rustls normally handshakes in write(). Finish setup first,
+                // so a fault or cancellation during the handshake is still
+                // observed before any model request bytes go to UM.
+                let setup_deadline = deadline.min(Instant::now() + setup_timeout);
+                while tls.conn.is_handshaking() {
+                    let left = setup_deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(UpstreamFailure::ConnectionError.into());
+                    }
+                    let slice = Some(left.max(Duration::from_millis(1)));
+                    let _ = tls.sock.set_read_timeout(slice);
+                    let _ = tls.sock.set_write_timeout(slice);
+                    tls.conn
+                        .complete_io(&mut tls.sock)
+                        .map_err(|_| UpstreamFailure::ConnectionError)?;
+                }
+                let left = deadline.saturating_duration_since(Instant::now());
+                let _ = tls.sock.set_read_timeout(Some(
+                    read_timeout.min(left).max(Duration::from_millis(1)),
+                ));
+                let _ = tls.sock.set_write_timeout(Some(
+                    setup_timeout.min(left).max(Duration::from_millis(1)),
+                ));
+            }
+            Box::new(tls)
+        } else {
+            Box::new(socket)
+        };
+        let mut head = format!(
+            "POST {path} HTTP/1.1\r\nHost: {host_header}\r\n\
              Authorization: Bearer {}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n",
-        bearer,
-        body.len()
-    )
-    .into_bytes();
-    for (name, value) in extra_headers {
-        request.extend_from_slice(name.as_bytes());
-        request.extend_from_slice(b": ");
-        request.extend_from_slice(value.as_bytes());
-        request.extend_from_slice(b"\r\n");
-    }
-    request.extend_from_slice(b"\r\n");
-    request.extend_from_slice(body);
-    upstream
-        .write_all(&request)
-        .map_err(|_| UpstreamFailure::ConnectionError)?;
-    upstream
-        .flush()
-        .map_err(|_| UpstreamFailure::ConnectionError)?;
+            credential.value,
+            body.len()
+        )
+        .into_bytes();
+        for (name, value) in extra_headers {
+            head.extend_from_slice(name.as_bytes());
+            head.extend_from_slice(b": ");
+            head.extend_from_slice(value.as_bytes());
+            head.extend_from_slice(b"\r\n");
+        }
+        head.extend_from_slice(b"\r\n");
+        if Instant::now() >= deadline {
+            return Err(UpstreamFailure::Timeout.into());
+        }
+        if !dispatch.authorize_send().map_err(PostError::Admission)? {
+            // A confirmed outage intervened while the socket was being set
+            // up. Drop the unsent connection and keep the original deadline.
+            continue;
+        }
+        upstream
+            .write_all(&head)
+            .and_then(|_| upstream.write_all(body))
+            .and_then(|_| upstream.flush())
+            .map_err(|_| UpstreamFailure::ConnectionError)?;
+        break (upstream, credential);
+    };
     let (status, headers, leftover) = read_head(&mut upstream)?;
     let framing = framing_from_headers(&headers);
-    Ok(UpstreamResponse {
+    Ok((UpstreamResponse {
         status,
         headers,
         error_text: None,
@@ -401,7 +428,7 @@ pub fn post_compat(
             buffered_index: 0,
             framing,
         },
-    })
+    }, credential))
 }
 
 fn framing_from_headers(headers: &HashMap<String, String>) -> Framing {

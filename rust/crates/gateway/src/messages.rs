@@ -27,7 +27,7 @@ use crate::ledger::{
 use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
-use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
+use crate::upstream::{post_compat, PostError, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
 
 /// The frozen Anthropic Messages field whitelist.
 ///
@@ -99,8 +99,9 @@ impl Drop for AdmissionGuard<'_> {
     }
 }
 
-struct MessagesContext<'a> {
+struct MessagesContext<'a, 'dispatch> {
     state: &'a AppState,
+    dispatch: &'a crate::server::ModelDispatch<'dispatch>,
     model: &'a str,
     started_at: Instant,
     deadline: Instant,
@@ -121,6 +122,17 @@ pub fn handle_messages(
     request: &Request,
     stream: &mut TcpStream,
     admission: Option<Admission>,
+) -> ChatResult {
+    let dispatch = crate::server::ModelDispatch::new(state, request, stream);
+    handle_messages_with_dispatch(state, request, stream, admission, &dispatch)
+}
+
+pub(crate) fn handle_messages_with_dispatch(
+    state: &AppState,
+    request: &Request,
+    stream: &mut TcpStream,
+    admission: Option<Admission>,
+    dispatch: &crate::server::ModelDispatch<'_>,
 ) -> ChatResult {
     let key_id = admission.as_ref().map(|value| value.key_id.clone());
     let request_id = key_id.as_ref().map(|_| random_request_id());
@@ -156,11 +168,13 @@ pub fn handle_messages(
         .unwrap_or_default()
         .to_string();
     let started_at = Instant::now();
+    let deadline = started_at + state.config.request_total;
     let context = MessagesContext {
         state,
+        dispatch,
         model: &model,
         started_at,
-        deadline: started_at + state.config.request_total,
+        deadline,
         client_stream,
         input_estimate: message_tokens(body.get("messages")),
         key_id: key_id.as_deref(),
@@ -191,7 +205,7 @@ fn compat_ledger_status(status: u16) -> String {
 }
 
 fn record_usage(
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     status: &str,
     usage: Option<&Value>,
     output_estimate: u64,
@@ -200,7 +214,7 @@ fn record_usage(
 }
 
 fn record_usage_with_first_token(
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     status: &str,
     usage: Option<&Value>,
     output_estimate: u64,
@@ -226,7 +240,7 @@ fn record_usage_with_first_token(
     });
 }
 
-fn log_final_failure(context: &MessagesContext<'_>, stats: &AttemptStats, result: &ChatResult) {
+fn log_final_failure(context: &MessagesContext<'_, '_>, stats: &AttemptStats, result: &ChatResult) {
     let Some(final_status) = result.final_failure_status() else {
         return;
     };
@@ -239,14 +253,14 @@ fn log_final_failure(context: &MessagesContext<'_>, stats: &AttemptStats, result
     });
 }
 
-fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
+fn forward_json(context: &MessagesContext<'_, '_>) -> ChatResult {
     let mut stats = AttemptStats::default();
     let result = forward_json_inner(context, &mut stats);
     log_final_failure(context, &stats, &result);
     result
 }
 
-fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -> ChatResult {
+fn forward_json_inner(context: &MessagesContext<'_, '_>, stats: &mut AttemptStats) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
     let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
@@ -265,24 +279,30 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let credential = context.state.proxy.upstream_credential();
-        let mut response = match post_compat(
-            &context.state.config,
-            &credential.value,
+        let attempt = post_compat(
+            context.dispatch,
             "/api/v1/messages",
             &serde_json::to_vec(&Value::Object(context.upstream_body.clone())).unwrap_or_default(),
             false,
             context.deadline,
             &context.anthropic_headers,
-        ) {
+        );
+        let attempt_elapsed = context.dispatch.attempt_elapsed(attempt_started);
+        let (mut response, credential) = match attempt {
             Ok(response) => response,
-            Err(failure) => {
+            Err(PostError::Admission(result)) => {
+                stats.tries -= 1;
+                stats.physical_attempts -= 1;
+                return result;
+            }
+            Err(PostError::Transport(failure)) => {
+                context.state.proxy.observe_business_failure(None);
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
                     &limits,
                     context.deadline,
-                    attempt_started.elapsed(),
+                    attempt_elapsed,
                 ) {
                     if retry::sleep_with_deadline(plan.delay, context.deadline) {
                         continue;
@@ -305,7 +325,7 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
                 &mut retry_state,
                 &mut last,
                 response,
-                attempt_started.elapsed(),
+                attempt_elapsed,
                 context.deadline,
                 &mut auth_wait_budget,
                 &credential,
@@ -354,14 +374,14 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
             context
                 .state
                 .proxy
-                .record_business_success("messages_completion", Some(200));
+                .record_business_success(context.http_request_id, "messages_completion", Some(200));
         }
         record_usage(context, "ok", usage_value.as_ref(), output_estimate);
         return ChatResult::Response(passthrough_response(status, &response, raw));
     }
 }
 
-fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> ChatResult {
+fn forward_stream(context: &MessagesContext<'_, '_>, stream: &mut TcpStream) -> ChatResult {
     let mut stats = AttemptStats::default();
     let result = forward_stream_inner(context, stream, &mut stats);
     log_final_failure(context, &stats, &result);
@@ -369,7 +389,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
 }
 
 fn forward_stream_inner(
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     stream: &mut TcpStream,
     stats: &mut AttemptStats,
 ) -> ChatResult {
@@ -391,24 +411,30 @@ fn forward_stream_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let credential = context.state.proxy.upstream_credential();
-        let response = match post_compat(
-            &context.state.config,
-            &credential.value,
+        let attempt = post_compat(
+            context.dispatch,
             "/api/v1/messages",
             &serde_json::to_vec(&Value::Object(context.upstream_body.clone())).unwrap_or_default(),
             true,
             context.deadline,
             &context.anthropic_headers,
-        ) {
+        );
+        let attempt_elapsed = context.dispatch.attempt_elapsed(attempt_started);
+        let (response, credential) = match attempt {
             Ok(response) => response,
-            Err(failure) => {
+            Err(PostError::Admission(result)) => {
+                stats.tries -= 1;
+                stats.physical_attempts -= 1;
+                return result;
+            }
+            Err(PostError::Transport(failure)) => {
+                context.state.proxy.observe_business_failure(None);
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
                     &limits,
                     context.deadline,
-                    attempt_started.elapsed(),
+                    attempt_elapsed,
                 ) {
                     if retry::sleep_with_deadline(plan.delay, context.deadline) {
                         continue;
@@ -431,7 +457,7 @@ fn forward_stream_inner(
                 &mut retry_state,
                 &mut last,
                 response,
-                attempt_started.elapsed(),
+                attempt_elapsed,
                 context.deadline,
                 &mut auth_wait_budget,
                 &credential,
@@ -505,12 +531,12 @@ fn forward_stream_inner(
     }
 }
 
-fn record_stream_usage(context: &MessagesContext<'_>, outcome: &MessagesStreamOutcome) {
+fn record_stream_usage(context: &MessagesContext<'_, '_>, outcome: &MessagesStreamOutcome) {
     if outcome.status.is_success() {
         context
             .state
             .proxy
-            .record_business_success("messages_stream", Some(200));
+            .record_business_success(context.http_request_id, "messages_stream", Some(200));
     } else if outcome.status != MessagesStreamStatus::ClientDisconnected {
         let class = match outcome.status {
             MessagesStreamStatus::UpstreamFirstByteTimeout => {
@@ -665,7 +691,7 @@ enum EventAction {
 }
 
 fn consume_stream(
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     stream: &mut TcpStream,
     body: UpstreamBody,
     upstream_headers: &HashMap<String, String>,
@@ -735,7 +761,7 @@ fn consume_stream(
 
 fn process_event(
     stream: &mut TcpStream,
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     state: &mut MessagesSseState,
     upstream_headers: &HashMap<String, String>,
     had_separator: bool,
@@ -873,7 +899,7 @@ fn process_event(
 
 fn flush_prelude(
     stream: &mut TcpStream,
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     state: &mut MessagesSseState,
     upstream_headers: &HashMap<String, String>,
 ) -> bool {
@@ -890,7 +916,7 @@ fn flush_prelude(
 
 fn commit_headers(
     stream: &mut TcpStream,
-    context: &MessagesContext<'_>,
+    context: &MessagesContext<'_, '_>,
     upstream_headers: &HashMap<String, String>,
 ) -> bool {
     let mut headers = Vec::new();
