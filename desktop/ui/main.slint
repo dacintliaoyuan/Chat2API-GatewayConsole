@@ -438,6 +438,10 @@ component MaintenanceItem inherits VerticalLayout {
     out property <bool> activate-focused: activate-button.has-focus;
     out property <bool> confirm-focused: confirm-button.has-focus;
     out property <bool> cancel-focused: cancel-button.has-focus;
+    // Test seams: the one-step trigger carries the danger tone and a matching
+    // icon for the two destructive actions.
+    out property <bool> activate-danger: activate-button.danger;
+    out property <string> activate-icon: activate-button.icon;
     public function focus-activate() { activate-button.take-focus(); }
     public function focus-confirm() { confirm-button.take-focus(); }
     public function focus-cancel() { cancel-button.take-focus(); }
@@ -463,8 +467,14 @@ component MaintenanceItem inherits VerticalLayout {
         }
         activate-button := ActionButton {
             label: root.confirming ? "已选择" : "执行";
-            icon: root.confirming ? "check" : "play";
+            // 停止 and 重启 interrupt in-flight requests; their one-step
+            // trigger keeps the red identity and a matching icon instead of
+            // reading like the neutral 核验/登录/启动 actions.
+            icon: root.confirming ? "check"
+                : root.item.action == 3 ? "power"
+                : root.item.action == 4 ? "refresh" : "play";
             quiet: true;
+            danger: root.item.danger;
             enabled: root.item.enabled && !root.busy;
             clicked => { root.activate(); }
         }
@@ -907,6 +917,10 @@ export component MainWindow inherits Window {
     out property <bool> maintenance-login-focused: maintenance-login.activate-focused;
     out property <bool> maintenance-stop-focused: maintenance-stop.activate-focused;
     out property <bool> maintenance-restart-focused: maintenance-restart.activate-focused;
+    out property <bool> maintenance-stop-danger: maintenance-stop.activate-danger;
+    out property <string> maintenance-stop-icon: maintenance-stop.activate-icon;
+    out property <bool> maintenance-restart-danger: maintenance-restart.activate-danger;
+    out property <string> maintenance-restart-icon: maintenance-restart.activate-icon;
     out property <string> maintenance-announcement-text:
         root.maintenance-menu-open ? "维护菜单已打开，Tab 在面板内循环，Esc 关闭" : "";
     public function focus-maintenance-first() {
@@ -1350,6 +1364,7 @@ export component MainWindow inherits Window {
     public function focus-usage-chart() { usage-chart.focus-chart(); }
     out property <string> request-fail-toggle-text:
         root.request-result == 2 ? "查看全部" : "只看失败";
+    out property <string> request-fail-toggle-icon: request-fail-toggle.icon;
     out property <bool> request-search-pending: request-search-timer.running;
     out property <bool> request-search-pending-visible: request-pending-hint.visible;
     out property <length> request-chart-toggle-x: request-chart-toggle.absolute-position.x;
@@ -1420,6 +1435,10 @@ export component MainWindow inherits Window {
     in property <bool> um-model-stale;
     in property <bool> um-model-loading;
     in property <bool> um-model-empty;
+    // True until the first catalog read lands. The card then shows only the
+    // one reason and the refresh entry instead of the probe section's three
+    // empty sentences.
+    in property <bool> um-model-unread: true;
     in-out property <string> selected-model;
     in property <string> um-model-detail-title;
     in property <string> um-model-detail;
@@ -1906,7 +1925,7 @@ export component MainWindow inherits Window {
     out property <length> log-range-y: log-range-control.absolute-position.y;
     out property <length> log-range-width: log-range-control.width;
     out property <length> log-range-height: log-range-control.height;
-    out property <bool> log-range-visible: log-range-control.visible;
+    out property <bool> log-range-visible: root.log-mode == 1;
     out property <length> log-level-error-x: log-level-error.absolute-position.x;
     out property <length> log-level-error-y: log-level-error.absolute-position.y;
     out property <length> log-level-error-width: log-level-error.width;
@@ -1945,7 +1964,7 @@ export component MainWindow inherits Window {
     out property <bool> log-earlier-enabled: log-earlier.enabled;
     out property <bool> log-history-note-visible: !root.log-history-note.is-empty;
     out property <string> log-history-note-text: root.log-history-note;
-    out property <bool> log-follow-visible: log-follow.visible;
+    out property <bool> log-follow-visible: root.log-mode == 0;
     out property <length> log-search-x: log-search.absolute-position.x;
     out property <length> log-search-y: log-search.absolute-position.y;
     out property <length> log-search-width: log-search.width;
@@ -1963,6 +1982,13 @@ export component MainWindow inherits Window {
     out property <length> log-status-row-y: log-status-row.absolute-position.y;
     out property <length> log-status-row-width: log-status-row.width;
     out property <length> log-status-row-height: log-status-row.height;
+    // Test seams: the status text and the page actions share one fixed row,
+    // so their top edges must agree instead of one riding above the other.
+    out property <length> log-status-text-y: log-status-text.absolute-position.y;
+    out property <length> log-status-text-height: log-status-text.height;
+    out property <length> log-status-text-width: log-status-text.width;
+    out property <bool> log-status-text-visible: log-status-text.visible;
+    out property <string> log-status-text: log-status-text.text;
     out property <length> status-row-y: status-row.y;
     out property <length> status-row-height: status-row.height;
     out property <length> window-width: root.width;
@@ -2057,8 +2083,8 @@ export component MainWindow inherits Window {
     out property <bool> settings-refresh-enabled: page-refresh.enabled;
     // Test seams: the settings catalog's table, empty state, stale mark and detail.
     out property <int> um-model-row-count: root.um-models.length;
-    out property <bool> um-model-table-visible: um-model-list.visible;
-    out property <bool> um-model-empty-visible: um-model-empty.visible;
+    out property <bool> um-model-table-visible: root.um-models.length > 0;
+    out property <bool> um-model-empty-visible: root.um-model-empty;
     out property <bool> um-model-stale-visible: um-model-stale-tag.visible;
     out property <bool> um-model-refresh-enabled: um-model-refresh.enabled;
     out property <length> um-model-refresh-x: um-model-refresh.absolute-position.x;
@@ -2069,17 +2095,18 @@ export component MainWindow inherits Window {
     out property <length> um-model-list-y: um-model-list.absolute-position.y;
     out property <length> um-model-list-width: um-model-list.width;
     out property <length> um-model-list-height: um-model-list.height;
-    out property <bool> um-model-detail-visible: um-model-detail.visible;
+    out property <bool> um-model-detail-visible: !root.selected-model.is-empty;
     out property <string> um-model-detail-title-text: um-model-detail.title;
     out property <string> um-model-detail-body: um-model-detail.body;
-    // Test seams: the hidden catalog slots must collapse to zero height so an
-    // unread or empty catalog leaves no blank band above the probe section.
-    out property <length> um-model-empty-height: um-model-empty.height;
-    out property <length> um-model-header-height: um-model-header.height;
+    // Test seams: an unread catalog instantiates no optional catalog block, so
+    // the card's height is exactly its content height (no blank band), and the
+    // probe section does not exist yet.
+    out property <bool> um-model-unread-visible: root.um-model-unread;
+    out property <length> um-model-card-height: model-card.height;
+    out property <length> um-model-card-content-height: model-card.content-height;
     out property <length> um-model-status-bottom:
         um-model-status-hint.absolute-position.y + um-model-status-hint.height;
-    out property <length> um-model-divider-y: model-probe-divider.absolute-position.y;
-    out property <string> probe-section-title: probe-section-label.text;
+    out property <bool> probe-section-visible: !root.um-model-unread;
     // Test seams: the context-probe batch list, selection, run/stop controls and
     // the collapsible history. The visible properties are the user-facing facts.
     out property <int> probe-row-count: root.probe-models.length;
@@ -3611,7 +3638,10 @@ export component MainWindow inherits Window {
                 visible: root.page == 3; vertical-stretch: 1; spacing: 6px;
                 FlexboxLayout {
                     flex-wrap: wrap;
-                    spacing: 8px;
+                    // The live layer hides the history controls; zero spacing
+                    // removes their 57 px reserved band without changing the
+                    // history layer's two-row layout.
+                    spacing: root.log-mode == 1 ? 8px : 0px;
                     // Two layers, one control: 实时 keeps the file tail; 历史
                     // switches to the gateway's bounded server-side history.
                     log-mode-control := Segmented {
@@ -3665,9 +3695,14 @@ export component MainWindow inherits Window {
                     // The four levels are independent toggles: an empty
                     // selection keeps every level instead of hiding rows.
                     log-level-hint := Hint {
-                        visible: root.log-mode == 1 && !root.compact;
+                        visible: root.log-mode == 1;
+                        // The compact filter row wraps instead of hiding the
+                        // rule; the hint elides rather than dropping the
+                        // "no level selected means all" signal.
                         text: "未选级别 = 全部";
                         vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
                     }
                     // The source list is the gateway's closed set; the first entry
                     // is "all sources". The app instance owns one run log
@@ -3715,37 +3750,42 @@ export component MainWindow inherits Window {
                 // second toolbar line of their own.
                 log-status-row := HorizontalLayout {
                     horizontal-stretch: 1;
+                    // One fixed 34 px row: the status text and the page
+                    // actions share the same top edge instead of the text
+                    // floating in a taller row or wrapping onto a second line.
+                    height: Theme.control-height;
                     spacing: 8px;
-                    alignment: stretch;
+                    cross-axis-alignment: center;
                     // The segmented control above already names the layer; the
                     // status row keeps only the connection state and count.
-                    StatusDot { tone: root.log-tone; y: (parent.height - self.height) / 2; }
-                    Hint {
-                        visible: !root.compact;
+                    StatusDot { tone: root.log-tone; }
+                    log-status-text := Hint {
                         text: root.log-status;
                         color: Theme.status_ink(root.log-tone);
+                        horizontal-stretch: 1;
+                        height: Theme.control-height;
                         vertical-alignment: center;
                         overflow: elide;
                         wrap: no-wrap;
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                    Hint {
-                        visible: root.log-mode == 1 && root.log-search-pending;
-                        width: self.visible ? self.preferred-width : 0px;
+                    if root.log-mode == 1 : Hint {
+                        visible: root.log-search-pending;
                         text: "查询中…";
                         color: Theme.warn-text;
                         vertical-alignment: center;
                     }
-                    Hint {
-                        visible: root.log-mode == 1 && !root.log-history-note.is-empty && !root.compact;
-                        width: self.visible ? self.preferred-width : 0px;
+                    if root.log-mode == 1 : Hint {
+                        visible: !root.log-history-note.is-empty;
                         text: root.log-history-note;
                         vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
                     }
                     log-earlier := ActionButton {
                         visible: root.log-mode == 1;
-                        width: self.visible ? (root.compact ? Theme.icon-button : self.preferred-width) : 0px;
-                        height: Theme.icon-button;
+                        width: self.visible
+                            ? (root.compact ? Theme.icon-button : self.preferred-width) : 0px;
+                        height: self.visible ? Theme.control-height : 0px;
                         quiet: true;
                         label: root.compact ? "" : "加载更早";
                         icon: "chevron-down";
@@ -3758,8 +3798,8 @@ export component MainWindow inherits Window {
                     // the list from jumping, never the read.
                     log-follow := ActionButton {
                         visible: root.log-mode == 0;
-                        width: Theme.icon-button;
-                        height: Theme.icon-button;
+                        width: self.visible ? Theme.icon-button : 0px;
+                        height: self.visible ? Theme.control-height : 0px;
                         quiet: true;
                         label: root.log-follow ? "暂停跟随" : "恢复跟随";
                         icon: root.log-follow ? "pause" : "play";
@@ -3778,11 +3818,10 @@ export component MainWindow inherits Window {
                     // bin; the settings entry is the one jump out of this page.
                     log-settings-button := ActionButton {
                         width: Theme.icon-button;
-                        height: Theme.icon-button;
+                        quiet: true;
                         label: "设置";
                         icon: "settings";
                         icon-only: true;
-                        quiet: true;
                         tooltip: "打开设置";
                         clicked => { root.navigate-to(2); }
                     }
@@ -4496,65 +4535,83 @@ export component MainWindow inherits Window {
                                 text: root.um-model-status;
                                 color: Theme.status_ink(root.um-model-tone);
                             }
+                            // One body holds every optional catalog block and the
+                            // probe section. A false `if` cannot be read from
+                            // the test seams, so the body collapses to zero
+                            // height while unread and leaves one 12 px gap
+                            // instead of a blank band.
+                            um-model-body := VerticalLayout {
+                            spacing: 12px;
+                            height: (root.um-model-empty || root.um-models.length > 0
+                                || !root.selected-model.is-empty
+                                || !root.um-model-unread)
+                                ? self.preferred-height : 0px;
                             um-model-empty := VerticalLayout {
                                 visible: root.um-model-empty;
-                                // A hidden empty state must not reserve its
-                                // preferred height: that blank band pushed the
-                                // probe section away from the status line.
                                 height: self.visible ? self.preferred-height : 0px;
                                 alignment: center;
                                 spacing: 4px;
                                 Hint { text: "无模型"; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
                                 Hint { text: "后端合法地返回了 0 个模型"; horizontal-alignment: center; }
                             }
-                            um-model-header := HorizontalLayout {
+                            um-model-table := VerticalLayout {
                                 visible: root.um-models.length > 0;
-                                height: self.visible ? 20px : 0px;
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 8px;
-                                Hint { text: "模型名称 / ID"; horizontal-stretch: 1; vertical-alignment: center; }
-                                Hint { text: "上下文信息"; width: root.compact ? 90px : 120px; vertical-alignment: center; }
-                                Hint { text: "思考档位"; width: root.compact ? 100px : 150px; vertical-alignment: center; }
-                                Hint { text: "最近测试"; horizontal-stretch: 1; vertical-alignment: center; }
-                            }
-                            um-model-list := ListView {
-                                visible: root.um-models.length > 0;
-                                height: min(240px, root.um-models.length * 56px);
-                                for item in root.um-models : Selectable {
-                                    label: item.name + " " + item.id + " " + item.context + " " + item.efforts + " " + item.last-test;
-                                    height: 56px;
-                                    selected: root.selected-model == item.id;
-                                    activate => { root.open-model(item.id); }
-                                    VerticalLayout {
-                                        padding-left: 10px;
-                                        padding-right: 10px;
-                                        padding-top: 5px;
-                                        padding-bottom: 5px;
-                                        spacing: 2px;
-                                        HorizontalLayout {
-                                            spacing: 8px;
-                                            VerticalLayout {
-                                                horizontal-stretch: 1;
-                                                spacing: 1px;
-                                                Text { text: item.name; color: Theme.ink; font-weight: 600; overflow: elide; vertical-alignment: center; }
-                                                DataText { text: item.id; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                                height: self.visible ? self.preferred-height : 0px;
+                                spacing: 12px;
+                                um-model-header := HorizontalLayout {
+                                    height: 20px;
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 8px;
+                                    Hint { text: "模型名称 / ID"; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Hint { text: "上下文信息"; width: root.compact ? 90px : 120px; vertical-alignment: center; }
+                                    Hint { text: "思考档位"; width: root.compact ? 100px : 150px; vertical-alignment: center; }
+                                    Hint { text: "最近测试"; horizontal-stretch: 1; vertical-alignment: center; }
+                                }
+                                um-model-list := ListView {
+                                    height: min(240px, root.um-models.length * 56px);
+                                    for item in root.um-models : Selectable {
+                                        label: item.name + " " + item.id + " " + item.context + " " + item.efforts + " " + item.last-test;
+                                        height: 56px;
+                                        selected: root.selected-model == item.id;
+                                        activate => { root.open-model(item.id); }
+                                        VerticalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            padding-top: 5px;
+                                            padding-bottom: 5px;
+                                            spacing: 2px;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                VerticalLayout {
+                                                    horizontal-stretch: 1;
+                                                    spacing: 1px;
+                                                    Text { text: item.name; color: Theme.ink; font-weight: 600; overflow: elide; vertical-alignment: center; }
+                                                    DataText { text: item.id; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                                                }
+                                                Hint { text: item.context; width: root.compact ? 90px : 120px; vertical-alignment: center; }
+                                                Hint { text: item.efforts; width: root.compact ? 100px : 150px; vertical-alignment: center; }
+                                                Hint { text: item.last-test; horizontal-stretch: 1; vertical-alignment: center; }
                                             }
-                                            Hint { text: item.context; width: root.compact ? 90px : 120px; vertical-alignment: center; }
-                                            Hint { text: item.efforts; width: root.compact ? 100px : 150px; vertical-alignment: center; }
-                                            Hint { text: item.last-test; horizontal-stretch: 1; vertical-alignment: center; }
                                         }
                                     }
                                 }
+                                um-model-detail := TextDetails {
+                                    visible: !root.selected-model.is-empty;
+                                    height: self.visible ? 190px : 0px;
+                                    animate height { duration: Theme.settle; easing: ease-out; }
+                                    title: root.um-model-detail-title;
+                                    body: root.um-model-detail;
+                                    closed => { root.selected-model = ""; }
+                                }
                             }
-                            um-model-detail := TextDetails {
-                                visible: !root.selected-model.is-empty;
-                                height: self.visible ? 190px : 0px;
-                                animate height { duration: Theme.settle; easing: ease-out; }
-                                title: root.um-model-detail-title;
-                                body: root.um-model-detail;
-                                closed => { root.selected-model = ""; }
-                            }
+                            // Context probes only exist after a catalog read. An
+                            // unread catalog leaves the one reason and the refresh
+                            // entry above, not three probe-empty sentences.
+                            probe-section := VerticalLayout {
+                            visible: !root.um-model-unread;
+                            height: self.visible ? self.preferred-height : 0px;
+                            spacing: 12px;
                             // Context probes (#154): pick a batch, run it, stop the
                             // rest and read the collapsible history. The gateway keeps
                             // the queue and the per-model results, so this card only
@@ -4575,7 +4632,6 @@ export component MainWindow inherits Window {
                                     text: root.probe-selection-text;
                                     vertical-alignment: center;
                                 }
-                                Rectangle { horizontal-stretch: 1; }
                                 probe-run := ActionButton {
                                     label: root.probe-loading ? "正在提交…" : "开始探测";
                                     icon: "play";
@@ -4609,6 +4665,10 @@ export component MainWindow inherits Window {
                                 text: root.probe-progress;
                             }
                             probe-budget-hint := Hint {
+                                // No budget copy is a legal state, not an
+                                // empty line above the batch list.
+                                visible: !root.probe-budget.is-empty;
+                                height: self.visible ? self.preferred-height : 0px;
                                 text: root.probe-budget;
                             }
                             probe-empty := Hint {
@@ -4723,7 +4783,9 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                            }
                         }
+                    }
                     }
                     login-rounds-card := Card {
                         inset: 16px;

@@ -250,6 +250,9 @@ fn probe_window() -> MainWindow {
     init_ui();
     let window = MainWindow::new().expect("create MainWindow");
     slintplot::register!(window);
+    // These tests drive the probe controls without a catalog read; the product
+    // hides the probe section only while the catalog is unread.
+    window.set_um_model_unread(false);
     window.set_page(2);
     window.window().set_size(LogicalSize::new(1060.0, 2200.0));
     window.show().expect("show MainWindow");

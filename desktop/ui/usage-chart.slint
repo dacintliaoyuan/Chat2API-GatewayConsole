@@ -450,14 +450,27 @@ export component RequestAnalytics inherits Panel {
                     padding-top: 4px;
                     padding-bottom: 4px;
                     spacing: 1px;
-                    Hint {
-                        // The 请求 card keeps the failure detail that its
-                        // second line would show at wide width.
-                        text: index == 1 && metric.detail != "失败 0"
-                            ? metric.label + " · " + metric.detail : metric.label;
-                        font-size: 10px;
-                        overflow: elide;
-                        wrap: no-wrap;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        Hint {
+                            // The 请求 card keeps the failure detail that its
+                            // second line would show at wide width. The detail
+                            // is its own fragment so the bad tone survives
+                            // instead of flattening into one muted label.
+                            text: metric.label;
+                            font-size: 10px;
+                            overflow: elide;
+                            wrap: no-wrap;
+                            min-width: 0px;
+                        }
+                        if index == 1 && metric.detail != "失败 0" : Hint {
+                            text: metric.detail;
+                            font-size: 10px;
+                            color: Theme.status_ink(metric.detail-tone);
+                            overflow: elide;
+                            wrap: no-wrap;
+                            min-width: 0px;
+                        }
                     }
                     DataText {
                         text: metric.value;

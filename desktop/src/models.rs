@@ -246,6 +246,7 @@ pub trait CatalogSurface {
     fn set_stale(&self, stale: bool);
     fn set_empty(&self, empty: bool);
     fn set_loading(&self, loading: bool);
+    fn set_unread(&self, unread: bool);
     fn selected_model(&self) -> String;
     fn set_selected_model(&self, id: &str);
     fn set_detail(&self, title: &str, body: &str);
@@ -262,6 +263,9 @@ pub fn apply_catalog<S: CatalogSurface>(surface: &S, view: &CatalogView) {
     surface.set_stale(view.stale);
     surface.set_empty(view.empty);
     surface.set_loading(false);
+    // Any applied read, including a failed or legal empty one, ends the
+    // unread state; only the first reason remains before that.
+    surface.set_unread(false);
     let selected = surface.selected_model();
     if !selected.is_empty() && !view.models.iter().any(|model| model.id == selected) {
         surface.set_selected_model("");
