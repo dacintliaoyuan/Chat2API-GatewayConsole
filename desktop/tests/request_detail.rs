@@ -179,6 +179,22 @@ fn detail_shows_http_status_and_keeps_error_code_separate_from_the_message() {
 }
 
 #[test]
+fn a_result_note_that_repeats_the_error_message_is_drawn_once() {
+    let tmp = common::TempDir::new("request-detail-duplicate-note");
+    let ledger = tmp.path().join("usage.jsonl");
+    let detail = detail_for(&ledger, "upstream_unavailable", Some(REQUEST));
+    assert!(
+        !detail.contains("结果说明  上游不可用"),
+        "the result note repeats the 错误 message: {detail}"
+    );
+    assert_eq!(
+        detail.matches("上游不可用").count(),
+        1,
+        "the failure reason must appear once: {detail}"
+    );
+}
+
+#[test]
 fn missing_readings_say_unavailable_instead_of_zero() {
     let tmp = common::TempDir::new("request-detail-missing");
     let ledger = tmp.path().join("usage.jsonl");

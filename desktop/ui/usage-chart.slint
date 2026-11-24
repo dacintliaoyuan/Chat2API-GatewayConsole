@@ -270,6 +270,21 @@ export component RequestAnalytics inherits Panel {
             : header.preferred-height + 8px
                 + (root.compact ? 302px : 148px)
                 + (root.has-data ? 36px + 8px : 0px));
+    // Test seams: the actual stack the request card lays out at this width. The
+    // 800 px window uses the compact stack, so the speed table sits under the
+    // chart and both span the card instead of the 420 px side table squeezing
+    // the chart to ~108 px.
+    out property <bool> compact-layout: root.compact;
+    out property <length> chart-y: root.compact
+        ? compact-plot.absolute-position.y : wide-plot.absolute-position.y;
+    out property <length> chart-height: root.compact
+        ? compact-plot.height : wide-plot.height;
+    out property <length> chart-width: root.compact
+        ? compact-plot.width : wide-plot.width;
+    out property <length> speed-table-y: root.compact
+        ? compact-table.absolute-position.y : wide-table.absolute-position.y;
+    out property <length> speed-table-width: root.compact
+        ? compact-table.width : wide-table.width;
     // The chart selection reads the visible plot only; a hidden plot reports -1.
     private property <int> pinned: -1;
     // The keyboard cursor starts on the first bucket, so gaining focus shows a
@@ -442,6 +457,10 @@ export component RequestAnalytics inherits Panel {
             spacing: 4px;
             for metric[index] in root.metrics : Rectangle {
                 horizontal-stretch: 1;
+                // Equal stretch only divides the space equally when the card
+                // itself can shrink below its label's content width.
+                min-width: 0px;
+                preferred-width: 0px;
                 border-radius: 7px;
                 background: Theme.surface-2;
                 VerticalLayout {
@@ -965,7 +984,10 @@ export component UsageChart inherits Panel {
 
             Rectangle {
                 vertical-stretch: 1;
-                min-height: 142px;
+                // The overview caps the chart card at 260 px; the plot keeps
+                // a 62 px floor so the bars stay readable while the card can
+                // actually shrink below its content preference.
+                min-height: 62px;
 
                 VerticalLayout {
                     visible: !root.has-data;
@@ -1127,7 +1149,7 @@ export component UsageChart inherits Panel {
             Hint { text: "自动刷新"; }
             settings-auto-refresh := Segmented {
                 width: 100%;
-                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭刷新" }];
                 label: "总览自动刷新";
                 current-index <=> root.auto-refresh-index;
             }

@@ -617,6 +617,29 @@ fn escape_and_an_outside_click_close_the_maintenance_menu() {
 }
 
 #[test]
+fn the_close_button_returns_focus_to_the_maintenance_trigger() {
+    let window = window();
+    let menu = maintenance::menu(&running_state());
+    maintenance::apply_menu(&window, &menu);
+    open_maintenance_menu(&window);
+    assert!(!window.get_maintenance_toggle_focused());
+
+    click(
+        &window,
+        window.get_maintenance_close_x() + window.get_maintenance_close_width() / 2.0,
+        window.get_maintenance_close_y() + window.get_maintenance_close_height() / 2.0,
+    );
+    assert!(
+        !window.get_maintenance_menu_visible(),
+        "the X closes the menu"
+    );
+    assert!(
+        window.get_maintenance_toggle_focused(),
+        "the X close returns focus to 维护"
+    );
+}
+
+#[test]
 fn the_maintenance_menu_right_edge_aligns_with_its_trigger() {
     let window = window();
     let menu = maintenance::menu(&running_state());
@@ -637,27 +660,46 @@ fn the_maintenance_menu_right_edge_aligns_with_its_trigger() {
 }
 
 #[test]
-fn the_small_maintenance_menu_scrolls_below_the_state_band_and_hides_the_records_area() {
+fn the_small_maintenance_menu_is_a_sheet_under_the_title_row_with_the_first_action_visible() {
     let window = window_at(540.0, 420.0);
     let menu = maintenance::menu(&running_state());
     maintenance::apply_menu(&window, &menu);
     open_maintenance_menu(&window);
 
     assert!(
-        window.get_maintenance_menu_y()
-            >= window.get_overview_state_card_bottom() + 7.0,
-        "the overlay opens below the three-state band, menu y={} band bottom={}",
+        window.get_maintenance_menu_sheet(),
+        "540×420 must open the maintenance menu as a sheet"
+    );
+    assert!(
+        window.get_maintenance_menu_y() <= window.get_overview_state_card_y() + 0.5,
+        "the sheet starts at the page top under the title row, menu y={} state card y={}",
         window.get_maintenance_menu_y(),
-        window.get_overview_state_card_bottom()
+        window.get_overview_state_card_y()
+    );
+    assert!(
+        window.get_maintenance_menu_height() > 240.0,
+        "the sheet must leave room for the first actions, actual {}",
+        window.get_maintenance_menu_height()
     );
     assert!(
         window.get_maintenance_menu_height() <= 420.0 - 56.0 + 1.0,
         "the menu never runs past the window bottom, actual {}",
         window.get_maintenance_menu_height()
     );
+    let verify_top = window.get_maintenance_verify_y();
+    let verify_bottom = verify_top + window.get_maintenance_verify_height();
+    assert!(
+        verify_top >= window.get_maintenance_menu_y() - 0.5
+            && verify_bottom
+                <= window.get_maintenance_menu_y() + window.get_maintenance_menu_height() + 0.5,
+        "the first 核验 action must stay inside the visible sheet, \
+         action {verify_top}..{verify_bottom} menu {}..{}",
+        window.get_maintenance_menu_y(),
+        window.get_maintenance_menu_y() + window.get_maintenance_menu_height()
+    );
     assert!(
         window.get_maintenance_menu_scrollable(),
-        "a short window scrolls the actions instead of covering the state band"
+        "the sheet still scrolls the remaining actions instead of clipping them"
     );
     assert!(
         !window.get_maintenance_records_area_visible(),

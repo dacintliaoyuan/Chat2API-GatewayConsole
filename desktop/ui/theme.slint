@@ -69,7 +69,9 @@ export global Theme {
     out property <color> grid: dark ? #2c2c2e : #e4e4e7;
     out property <color> data: dark ? #f5f5f7 : #1d1d1f;
     out property <color> hover: dark ? #2c2c2e : #f0f0f2;
-    out property <color> selected: dark ? #2c2c2e : #e8f2ff;
+    // A selected row keeps the accent-soft blue in both themes; the dark value
+    // is not the hover fill, so selected and hover never look identical.
+    out property <color> selected: dark ? #0b2946 : #e8f2ff;
     out property <color> card-shadow: reduce-transparency ? transparent
         : dark ? #00000066 : #00000012;
     out property <string> font-display: "Segoe UI";
@@ -178,23 +180,33 @@ export component Tag inherits Rectangle {
 }
 
 // A list row. The hover and selected fills sit inside the row so adjacent rows
-// stay separate instead of forming one solid block.
+// stay separate instead of forming one solid block. Keyboard focus adds a 1 px
+// control-strength inset edge, so Tab into a list is visible instead of only the
+// ~1.1:1 hover fill.
 export component Selectable inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     callback activate();
     min-height: 36px;
     background: transparent;
+    // Test seams: the actual fill and the focus ring the row draws.
+    out property <bool> focus-visible: keyboard.has-focus;
+    out property <color> fill-tint: row-fill.background;
+    out property <color> focus-edge: row-fill.border-color;
+    out property <length> focus-edge-width: row-fill.border-width;
+    public function take-focus() { keyboard.focus(); }
     row-fill := Rectangle {
         x: 2px;
         y: 2px;
         width: parent.width - 4px;
         height: parent.height - 4px;
         border-radius: 5px;
+        border-width: keyboard.has-focus ? 1px : 0px;
+        border-color: Theme.edge-control-strong;
         background: root.selected ? Theme.selected
             : keyboard.has-focus ? Theme.hover
             : pointer.has-hover ? Theme.hover : transparent;
-        animate background { duration: Theme.quick; easing: ease-in-out; }
+        animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     }
     @children
     keyboard := FocusScope {
@@ -352,7 +364,10 @@ export component FocusAction inherits Rectangle {
     }
     if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
     accessible-role: button;
-    accessible-label: root.label;
+    // A badge is visible inside a 30 px icon button, so the count must also
+    // reach assistive technology instead of living only in the glyph.
+    accessible-label: root.badge.is-empty
+        ? root.label : root.label + "，" + root.badge + " 条新日志";
     accessible-description: root.tooltip;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 }
@@ -597,6 +612,9 @@ export component Field inherits VerticalLayout {
     in property <bool> clearable: false;
     in property <bool> enabled: true;
     in property <bool> invalid: false;
+    // Long values such as the export path elide at rest; the tooltip keeps the
+    // full value readable without changing the field's one-line layout.
+    in property <string> tooltip: "";
     out property <bool> has-focus: input.has-focus;
     out property <bool> input-selected: input.has-selection;
     // Test seam: the clear control is only visible while the field has text.
@@ -639,6 +657,7 @@ export component Field inherits VerticalLayout {
             kind: root.icon;
             tint: Theme.muted;
         }
+        if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
         // The input fills the box below the border and centers its single line,
         // so the text sits in the middle at any font metric or DPI.
         input := TextInput {
