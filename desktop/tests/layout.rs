@@ -960,8 +960,10 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
     let height = window.get_log_list_height();
+    // The merged status row costs one row at the minimum width; three complete
+    // rows stay visible, and the list keeps its own scroll.
     assert!(
-        height >= 4.0 * 36.0,
+        height >= 3.0 * 36.0,
         "log list height at minimum size: {height}"
     );
 
@@ -2410,13 +2412,6 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
             window.get_log_search_width(),
             window.get_log_search_height(),
         ),
-        (
-            "settings",
-            window.get_log_settings_x(),
-            window.get_log_settings_y(),
-            window.get_log_settings_width(),
-            window.get_log_settings_height(),
-        ),
     ];
     for (label, x, y, width, height) in first_row.iter().chain(second_row.iter()) {
         assert!(
@@ -2450,7 +2445,7 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
     let second_order: Vec<f32> = second_row.iter().map(|(_, x, _, _, _)| *x).collect();
     assert!(
         second_order.windows(2).all(|pair| pair[0] < pair[1]),
-        "the source, search and settings must read left to right: {second_order:?}"
+        "the source and search must read left to right: {second_order:?}"
     );
     assert!(
         window.get_page_refresh_y() + window.get_page_refresh_height()
@@ -2675,6 +2670,11 @@ fn the_secondary_appearance_labels_sit_above_their_own_controls() {
         transparency_label_bottom <= window.get_appearance_transparency_control_y() + 0.5,
         "降低透明度 label must sit directly above its control"
     );
+    assert!(
+        (window.get_transparency_toggle_x() - window.get_appearance_transparency_label_x()).abs()
+            < 1.0,
+        "the 开启 checkbox must share the group label's left edge"
+    );
     assert_eq!(
         window.get_appearance_transparency_label_text(),
         "降低透明度",
@@ -2738,32 +2738,47 @@ fn cancelling_a_typed_account_form_asks_before_discarding() {
 }
 
 #[test]
-fn the_log_toolbar_fills_the_page_and_aligns_its_actions_right() {
+fn the_log_page_actions_share_the_status_row_and_align_right() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     let page_left = 196.0 + 20.0;
     let page_right = window.get_window_width() - 20.0;
     println!(
-        "toolbar x={} y={} w={} h={} settings x={} w={}",
-        window.get_log_toolbar_x(),
-        window.get_log_toolbar_y(),
-        window.get_log_toolbar_width(),
-        window.get_log_toolbar_height(),
+        "status row x={} y={} w={} h={} settings x={} w={} follow x={} w={}",
+        window.get_log_status_row_x(),
+        window.get_log_status_row_y(),
+        window.get_log_status_row_width(),
+        window.get_log_status_row_height(),
         window.get_log_settings_x(),
         window.get_log_settings_width(),
+        window.get_log_follow_x(),
+        window.get_log_follow_width(),
     );
     assert!(
-        (window.get_log_toolbar_x() - page_left).abs() < 1.0,
-        "the toolbar fills the page width"
+        (window.get_log_status_row_x() - page_left).abs() < 1.0,
+        "the status row fills the page width"
     );
     assert!(
-        (window.get_log_toolbar_width() - (page_right - page_left)).abs() < 1.0,
-        "the toolbar width is the page content width"
+        (window.get_log_status_row_width() - (page_right - page_left)).abs() < 1.0,
+        "the status row width is the page content width"
     );
     assert!(
         (window.get_log_settings_x() + window.get_log_settings_width() - page_right).abs() < 1.5,
         "the page actions end at the right edge instead of floating mid-page"
+    );
+    assert!(
+        (window.get_log_settings_y() - window.get_log_status_row_y()).abs() < 1.0,
+        "the settings action sits inside the status row, not on its own line"
+    );
+    assert!(
+        (window.get_log_follow_y() - window.get_log_status_row_y()).abs() < 1.0,
+        "the follow action sits inside the status row, not on its own line"
+    );
+    assert!(
+        window.get_log_follow_x() + window.get_log_follow_width()
+            < window.get_log_settings_x(),
+        "跟随 reads before 设置 in the status row"
     );
 }
 
@@ -2895,6 +2910,48 @@ fn the_request_detail_copies_the_request_id() {
         Some("f314e7d8c7526367baec95ac155b6406"),
         "复制请求 ID copies the selected request's stable ID"
     );
+}
+
+#[test]
+fn a_disabled_primary_action_keeps_readable_neutral_colors_instead_of_dimmed_blue() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_probe_run_enabled(),
+        "上下文探测 starts disabled until a model is selected"
+    );
+    for theme in [1, 2] {
+        window.set_theme_mode(theme);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        assert_eq!(
+            window.get_probe_run_fill(),
+            window.get_console_field_color(),
+            "a disabled action rests on the neutral field fill, not a dimmed accent"
+        );
+        assert_eq!(
+            window.get_probe_run_frame_tint(),
+            window.get_console_edge_control_color(),
+            "a disabled action keeps the control edge instead of the accent frame"
+        );
+        assert_eq!(
+            window.get_probe_run_label_tint(),
+            window.get_console_muted_color(),
+            "a disabled action uses the muted label"
+        );
+        let ratio = contrast_ratio(
+            window.get_probe_run_label_tint(),
+            window.get_probe_run_fill(),
+        );
+        assert!(
+            ratio >= 4.5,
+            "the disabled label must stay readable on its fill, got {ratio:.2} in theme {theme}"
+        );
+        assert!(
+            !window.get_probe_run_focus_visible(),
+            "a disabled action must not read as a visible focus target"
+        );
+    }
 }
 
 // WCAG relative luminance, so the danger-label check is a real contrast

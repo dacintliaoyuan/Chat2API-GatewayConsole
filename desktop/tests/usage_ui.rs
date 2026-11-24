@@ -941,6 +941,7 @@ fn typing_in_the_request_search_filters_after_a_short_pause() {
         let saves = saves.clone();
         move || saves.set(saves.get() + 1)
     });
+    window.set_request_status("北京时间 · 本页 14 条".into());
     window.set_request_keyword("fixture".into());
     // The changed handler runs on the next event-loop turn; process it before
     // advancing the timer so the debounce has actually started.
@@ -953,6 +954,11 @@ fn typing_in_the_request_search_filters_after_a_short_pause() {
         window.get_request_search_pending_visible(),
         "the status row says the keyword is still being queried"
     );
+    assert_eq!(
+        window.get_request_status_text().as_str(),
+        "上次结果 · 北京时间 · 本页 14 条",
+        "the old page count must read as a previous result while the query is pending"
+    );
     assert_eq!(saves.get(), 0, "typing must not save on every key");
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
     assert_eq!(queries.get(), 0, "the debounce waits for the pause");
@@ -960,6 +966,11 @@ fn typing_in_the_request_search_filters_after_a_short_pause() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
     assert_eq!(queries.get(), 1, "the paused search filters once");
     assert_eq!(saves.get(), 1, "one pause saves desktop.json once");
+    assert_eq!(
+        window.get_request_status_text().as_str(),
+        "北京时间 · 本页 14 条",
+        "the landed query drops the previous-result qualifier"
+    );
 }
 
 #[test]
