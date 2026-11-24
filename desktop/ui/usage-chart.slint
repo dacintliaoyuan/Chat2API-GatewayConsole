@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { BarChart, ChartDataset, ChartSeriesType } from "@slintplot";
+import { BarChart, ChartAxis, ChartDataset, ChartEngine, ChartKind, ChartSeriesType, ChartTheme } from "@slintplot";
 import { Theme, Panel, Heading, Hint, DataText, Segmented, ActionButton, SectionLabel } from "theme.slint";
 
 export struct UsagePoint {
@@ -32,12 +32,63 @@ export struct ModelSpeedRow {
 component RequestTrendChart inherits Rectangle {
     in property <[string]> labels;
     in property <[ChartDataset]> datasets;
+    in property <string> description;
     callback category-clicked(int);
     in property <bool> show-legend: false;
     in property <bool> integer-ticks: true;
     in property <int> value-decimals: 0;
     in property <bool> allow-motion: true;
+    // The pinned bucket gets a 2 px marker rule under its band. The engine
+    // doesn't expose the plot geometry, so the wrapper asks the same pure
+    // axis callback the chart uses and derives the band from its widest tick
+    // label; the marker then sits exactly on the category instead of using a
+    // guessed left gutter.
+    in property <int> pinned-index: -1;
+    in property <[float]> values;
     out property <int> hovered-index: chart.hovered-index;
+
+    private property <ChartAxis> marker-axis: ChartEngine.value-axis({
+        locale: ChartTheme.locale,
+        kind: ChartKind.bar,
+        datasets: root.datasets,
+        stacked: false,
+        percent: false,
+        height: root.height / 1px,
+        begin-at-zero: true,
+        font-size: ChartTheme.font-size / 1px,
+        labels: root.labels,
+        view-start: 0,
+        view-end: 1,
+        fixed: false,
+        fixed-min: 0,
+        fixed-max: 0,
+        logarithmic: false,
+        integer-ticks: root.integer-ticks,
+        format: { prefix: "", suffix: "", decimals: root.value-decimals },
+        side: 1,
+        ordered: false,
+    });
+    private property <length> marker-plot-x:
+        root.marker-axis.widest-label.character-count * ChartTheme.font-size * 0.62 + 8px;
+    private property <length> marker-plot-width:
+        max(0px, root.width - root.marker-plot-x - 12px);
+    private property <length> marker-step: root.labels.length > 0
+        ? root.marker-plot-width / root.labels.length : 0px;
+    pure function marker-value() -> float {
+        if (root.pinned-index < 0 || root.pinned-index >= root.values.length) {
+            return 0;
+        }
+        return root.values[root.pinned-index];
+    }
+    out property <bool> marker-visible: root.pinned-index >= 0
+        && root.pinned-index < root.labels.length
+        && root.marker-step > 0px
+        && root.marker-value() == root.marker-value();
+    out property <length> marker-x: root.marker-plot-x + root.pinned-index * root.marker-step;
+    out property <length> marker-width: root.marker-step;
+    // The plot's bottom edge: the chart reserves 2 em for its x labels below it.
+    out property <length> marker-y: root.height - ChartTheme.font-size * 2 - 2px;
+    out property <length> marker-height: 2px;
 
     chart := BarChart {
         width: parent.width;
@@ -54,7 +105,17 @@ component RequestTrendChart inherits Rectangle {
         bar-radius: 3px;
         fill-opacity: 0.78;
         accessible-label: "请求趋势图";
+        accessible-description: root.description;
         category-clicked(index) => { root.category-clicked(index); }
+    }
+    // A 2 px accent rule under the pinned bucket's band: the pinned bar keeps
+    // its readout in the selection row, and this marks which bar that is.
+    if root.marker-visible : Rectangle {
+        x: root.marker-x;
+        y: root.marker-y;
+        width: root.marker-width;
+        height: root.marker-height;
+        background: Theme.accent-strong;
     }
 }
 
@@ -119,11 +180,17 @@ export component RequestAnalytics inherits Panel {
     min-height: 0px;
     in property <bool> compact: false;
     in property <[RequestMetric]> metrics;
-    // The compact request page folds the cards into one summary line.
-    in property <string> summary-line: "";
+    // A time window with no requests at all is not the same as a filter that
+    // matched nothing: only the former replaces the KPI row with one reason.
+    in property <bool> empty: false;
+    // The five metric cards stay visible at every width and in both disclosure
+    // states; only the chart and the speed table fold.
     // At compact width the chart and the speed table start collapsed so the
     // request list stays in the first screen.
     in-out property <bool> details-open: false;
+    // At wide width the same chart can be folded from the page status row; the
+    // list then takes the height back without changing the page scroll.
+    in-out property <bool> wide-collapsed: false;
     in property <[string]> labels;
     in property <[float]> token-counts;
     in property <[float]> request-counts;
@@ -135,11 +202,35 @@ export component RequestAnalytics inherits Panel {
     in-out property <int> metric: 0;
     in-out property <bool> split-by-model: false;
     in property <bool> allow-motion: true;
+    // The wide page persists a manual disclosure choice; the compact card keeps
+    // its own in-card toggle and does not report through this callback.
+    callback chart-toggled(bool);
 
     out property <int> metric-index: root.metric;
+    // The chart, the metric cards and the speed table share one disclosure
+    // state: compact uses the in-card toggle, wide uses the page status row.
+    out property <bool> expanded: root.compact ? root.details-open : !root.wide-collapsed;
+    out property <bool> chart-collapsed: !root.expanded;
     out property <bool> split: root.split-by-model;
     out property <string> metric-label: root.metric == 1 ? "请求数"
         : root.metric == 2 ? "输出速度" : "Token";
+    // One dataset expression feeds both charts and the marker's value axis, so
+    // the marker can never disagree with the bars it marks.
+    private property <[ChartDataset]> plot-datasets: root.split-by-model
+        ? (root.metric == 1 ? root.request-series
+            : root.metric == 2 ? root.speed-series : root.token-series)
+        : [{
+            label: root.metric-label,
+            values: root.metric == 1 ? root.request-counts
+                : root.metric == 2 ? root.speed-counts : root.token-counts,
+            series-type: ChartSeriesType.bar,
+            color: root.metric == 1 ? Theme.series-b : Theme.accent,
+        }];
+    // The subtitle names the unit the selected metric plots, so switching the
+    // metric never leaves 亿 on a request-count or speed chart.
+    out property <string> metric-unit-text: root.metric == 1 ? "所选范围 · 单位：次"
+        : root.metric == 2 ? "所选范围 · 单位：Token/秒"
+        : "所选范围 · 单位：亿";
     out property <[float]> plotted-values: root.metric == 1 ? root.request-counts
         : root.metric == 2 ? root.speed-counts : root.token-counts;
     out property <int> series-count: !root.split-by-model ? 1
@@ -147,11 +238,66 @@ export component RequestAnalytics inherits Panel {
         : root.metric == 2 ? root.speed-series.length
         : root.token-series.length;
     out property <int> model-row-count: root.model-speeds.length;
+    // Test seam: the KPI row stays visible while the chart folds, except in the
+    // unfiltered empty window where one reason replaces the five dashes.
+    out property <bool> kpi-visible: !root.empty;
+    out property <int> kpi-count: root.metrics.length;
+    out property <bool> empty-visible: empty-hint.visible;
+    out property <string> empty-text: empty-hint.text;
+    // The KPI row and the chart title both say 所选范围; the status row keeps
+    // the 本页 count, so the two scopes never share one sentence.
+    out property <bool> kpi-scope-visible: !root.empty;
+    out property <string> kpi-scope-text: scope-caption-text.text;
+    out property <length> kpi-scope-y: scope-caption.absolute-position.y;
+    out property <length> kpi-scope-height: scope-caption.height;
+    out property <length> kpi-first-card-y: root.compact
+        ? compact-cards.absolute-position.y : cards.absolute-position.y;
+    // Test seams: the pinned bar's 2 px marker rule and the band it spans.
+    out property <bool> pinned-marker-visible: root.expanded && (root.compact
+        ? compact-plot.marker-visible : wide-plot.marker-visible);
+    out property <length> pinned-marker-x: root.compact
+        ? compact-plot.marker-x : wide-plot.marker-x;
+    out property <length> pinned-marker-width: root.compact
+        ? compact-plot.marker-width : wide-plot.marker-width;
+    out property <length> pinned-marker-y: root.compact
+        ? compact-plot.marker-y : wide-plot.marker-y;
+    out property <length> pinned-marker-height: root.compact
+        ? compact-plot.marker-height : wide-plot.marker-height;
+    // The height this card would take with the chart open. The page compares
+    // the list's remaining height against this value, not the window height.
+    out property <length> expanded-height: content.preferred-height
+        + (root.expanded || root.empty ? 0px
+            : header.preferred-height + 8px
+                + (root.compact ? 302px : 148px)
+                + (root.has-data ? 36px + 8px : 0px));
+    // The height the card takes at the current disclosure state, computed from
+    // its content instead of the height the page layout assigns it. The request
+    // page's list-height budget reads this value so the list height can never
+    // feed back into the page's preferred height.
+    out property <length> current-height: content.preferred-height;
+    // Test seams: the actual stack the request card lays out at this width. The
+    // 800 px window uses the compact stack, so the speed table sits under the
+    // chart and both span the card instead of the 420 px side table squeezing
+    // the chart to ~108 px.
+    out property <bool> compact-layout: root.compact;
+    out property <length> chart-y: root.compact
+        ? compact-plot.absolute-position.y : wide-plot.absolute-position.y;
+    out property <length> chart-height: root.compact
+        ? compact-plot.height : wide-plot.height;
+    out property <length> chart-width: root.compact
+        ? compact-plot.width : wide-plot.width;
+    out property <length> speed-table-y: root.compact
+        ? compact-table.absolute-position.y : wide-table.absolute-position.y;
+    out property <length> speed-table-width: root.compact
+        ? compact-table.width : wide-table.width;
     // The chart selection reads the visible plot only; a hidden plot reports -1.
     private property <int> pinned: -1;
-    private property <int> key-index: -1;
+    // The keyboard cursor starts on the first bucket, so gaining focus shows a
+    // concrete selection instead of an invisible one. It only drives `active`
+    // while the chart owns focus, so hovering still works without focus.
+    private property <int> key-index: 0;
     private property <int> active: root.pinned >= 0 ? root.pinned
-        : root.key-index >= 0 ? root.key-index
+        : chart-focus.has-focus ? root.key-index
         : root.compact ? compact-plot.hovered-index : wide-plot.hovered-index;
     private property <bool> has-data: root.labels.length > 0;
     private property <bool> has-selection: root.active >= 0 && root.active < root.labels.length;
@@ -172,6 +318,7 @@ export component RequestAnalytics inherits Panel {
         height: parent.height;
         accessible-role: groupbox;
         accessible-label: "请求趋势图";
+        accessible-description: root.chart-accessible-description;
         key-pressed(event) => {
             if (event.text == Key.Escape && root.pinned >= 0) {
                 root.pinned = -1;
@@ -204,31 +351,80 @@ export component RequestAnalytics inherits Panel {
             root.pinned = index;
         }
     }
+    // A range change replaces the buckets; an index past the new labels would
+    // mark a bucket that no longer exists, so drop the pin with the old data.
+    changed labels => {
+        if (root.pinned >= root.labels.length) { root.pinned = -1; }
+    }
+    // The compact summary and the wide 收起图表 control share one action; the
+    // wide page status row also toggles this from outside the card.
+    public function toggle-chart() {
+        if (root.compact) {
+            root.details-open = !root.details-open;
+        } else {
+            root.wide-collapsed = !root.wide-collapsed;
+            root.chart-toggled(root.wide-collapsed);
+        }
+    }
     // Reads the table that is actually laid out at the current width.
     out property <bool> empty-hint-fits: root.compact
         ? compact-table.empty-hint-fits : wide-table.empty-hint-fits;
-    // Test seam: the compact chart toggle.
-    out property <length> details-toggle-x: details-toggle.absolute-position.x;
-    out property <length> details-toggle-y: details-toggle.absolute-position.y;
-    out property <length> details-toggle-width: details-toggle.width;
-    out property <length> details-toggle-height: details-toggle.height;
+    // The request chart is a keyboard stop like the overview chart; focus uses
+    // the control-strength neutral edge so the 1 px step is visible on the card.
+    border-color: chart-focus.has-focus ? Theme.edge-control-strong : Theme.edge;
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
+    private property <string> keyboard-help:
+        "左右方向键切换时段 · Enter 固定 · Esc 取消固定";
+    out property <string> chart-accessible-description:
+        root.has-selection
+        ? root.selection-label + "，" + root.selection-value + "。" + root.keyboard-help
+        : root.keyboard-help;
+    // Test seam: the chart focus is visible through the control-strength edge
+    // step and starts the keyboard cursor on the first bucket.
+    out property <bool> chart-focus-visible:
+        root.border-color == Theme.edge-control-strong;
+    out property <int> chart-key-index: root.key-index;
+    public function focus-chart() { chart-focus.focus(); }
 
     content := VerticalLayout {
         padding: 12px;
         spacing: 8px;
 
-        // Equal flex-basis keeps the cards the same size; at compact width two
-        // per row and a full-width last card avoid clipped labels and a gap.
+        // An unfiltered empty window says why in one line instead of drawing
+        // five 76 px cards of dashes and an empty chart.
+        empty-hint := Hint {
+            visible: root.empty;
+            height: root.empty ? self.preferred-height : 0px;
+            text: "暂无请求，指标与趋势会在有请求后显示";
+            horizontal-alignment: center;
+        }
+
+        // 所选范围 names the KPI row's scope; the status row keeps 本页 for
+        // the page count. The caption is its own row at wide width and a
+        // leading cell in the one-row compact summary, so the compact first
+        // screen keeps its request row.
+        scope-caption := HorizontalLayout {
+            visible: !root.empty && !root.compact;
+            height: self.visible ? self.preferred-height : 0px;
+            spacing: 8px;
+            scope-caption-text := Hint {
+                text: "所选范围";
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        // Equal flex-basis keeps the cards the same size. At compact width the
+        // five cards collapse into one 56 px summary row: the KPI numbers stay
+        // visible, and the request list keeps the first screen.
         cards := FlexboxLayout {
-            visible: !root.compact;
-            // A hidden layout still feeds the parent's preferred height.
-            height: root.compact ? 0px : self.preferred-height;
+            visible: !root.empty && !root.compact;
+            height: root.empty || root.compact ? 0px : self.preferred-height;
             flex-wrap: wrap;
             spacing: 8px;
             for metric[index] in root.metrics : Rectangle {
-                width: root.compact
-                    ? (index == 4 ? root.width - 24px : (root.width - 24px - 8px) / 2)
-                    : (root.width - 24px - 32px) / 5;
+                width: (root.width - 24px - 32px) / 5;
                 // Tall enough for the label, value and detail line without
                 // clipping the detail at the card edge.
                 height: 76px;
@@ -257,38 +453,79 @@ export component RequestAnalytics inherits Panel {
                 Tooltip { text: @markdown("\{metric.detail}"); }
             }
         }
-
-        compact-summary := HorizontalLayout {
-            visible: root.compact;
-            // Clicking the summary row toggles the chart as well.
-            summary-pointer := TouchArea {
-                clicked => { root.details-open = !root.details-open; }
-            }
-            // A hidden row still feeds the parent's preferred height.
-            height: root.compact ? self.preferred-height : 0px;
-            spacing: 8px;
-            // The compact summary wraps instead of losing the last metrics.
-            Hint { text: root.summary-line; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
-            // A visible label says what the control does instead of a bare
-            // chevron; the whole summary row reads as one action.
-            details-toggle := ActionButton {
-                label: root.details-open ? "收起图表" : "查看图表";
-                icon: root.details-open ? "chevron-down" : "chevron-right";
-                quiet: true;
-                tooltip: root.details-open ? "收起图表" : "查看图表";
-                clicked => { root.details-open = !root.details-open; }
+        compact-cards := HorizontalLayout {
+            visible: !root.empty && root.compact;
+            // Layouts default min-height to preferred-height; pin both so the
+            // 52 px summary actually shrinks instead of keeping its content box.
+            min-height: root.empty || !root.compact ? 0px : 52px;
+            max-height: root.empty || !root.compact ? 0px : 52px;
+            spacing: 4px;
+            for metric[index] in root.metrics : Rectangle {
+                horizontal-stretch: 1;
+                // Equal stretch only divides the space equally when the card
+                // itself can shrink below its label's content width.
+                min-width: 0px;
+                preferred-width: 0px;
+                border-radius: 7px;
+                background: Theme.surface-2;
+                VerticalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 1px;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        Hint {
+                            // The 请求 card keeps the failure detail that its
+                            // second line would show at wide width. The detail
+                            // is its own fragment so the bad tone survives
+                            // instead of flattening into one muted label.
+                            text: metric.label;
+                            font-size: 10px;
+                            overflow: elide;
+                            wrap: no-wrap;
+                            min-width: 0px;
+                        }
+                        if index == 1 && metric.detail != "失败 0" : Hint {
+                            text: metric.detail;
+                            font-size: 10px;
+                            color: Theme.status_ink(metric.detail-tone);
+                            overflow: elide;
+                            wrap: no-wrap;
+                            min-width: 0px;
+                        }
+                    }
+                    DataText {
+                        text: metric.value;
+                        font-size: 12px;
+                        font-weight: 650;
+                        // 38.6 Token/秒 wraps onto a second line inside the
+                        // 66 px compact card instead of eliding to 38.6 To…
+                        // The explicit height gives the wrap its second line.
+                        height: 30px;
+                        overflow: clip;
+                        wrap: word-wrap;
+                    }
+                }
+                // The compact value may elide; the tooltip keeps the label,
+                // the full value and the detail readable.
+                Tooltip {
+                    text: @markdown("\{metric.label}：\{metric.value}\n\{metric.detail}");
+                }
             }
         }
+
         header := HorizontalLayout {
-            visible: !root.compact || root.details-open;
-            height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+            visible: root.expanded && !root.empty;
+            height: root.expanded && !root.empty ? self.preferred-height : 0px;
             spacing: 8px;
             Heading { text: "请求趋势"; vertical-alignment: center; }
-            Hint { text: root.metric == 2 ? "所选范围 · 单位：Token/秒" : "所选范围 · 单位：亿"; vertical-alignment: center; }
+            Hint { text: root.metric-unit-text; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             Segmented {
-                visible: !root.compact || root.details-open;
-                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 160px : 196px;
                 options: [{ text: "Token" }, { text: "请求数" }, { text: "速度" }];
                 label: "请求指标";
@@ -296,8 +533,8 @@ export component RequestAnalytics inherits Panel {
                 selected(index) => { root.metric = index; }
             }
             Segmented {
-                visible: !root.compact || root.details-open;
-                height: (!root.compact || root.details-open) ? self.preferred-height : 0px;
+                visible: root.expanded && !root.empty;
+                height: root.expanded && !root.empty ? self.preferred-height : 0px;
                 width: root.compact ? 120px : 148px;
                 options: [{ text: "合计" }, { text: "按模型" }];
                 label: "拆分维度";
@@ -309,27 +546,22 @@ export component RequestAnalytics inherits Panel {
         // Wide: the chart and the speed table share one row. Compact: the table
         // moves below the chart so neither is squeezed below its readable width.
         compact-stack := VerticalLayout {
-            visible: root.compact && root.details-open;
+            visible: root.compact && root.expanded && !root.empty;
             width: 100%;
             // Hidden layouts still feed the parent's preferred height, so the
             // inactive stack collapses to zero explicitly.
-            height: (root.compact && root.details-open) ? self.preferred-height : 0px;
+            height: (root.compact && root.expanded && !root.empty)
+                ? self.preferred-height : 0px;
             spacing: 8px;
             compact-plot := RequestTrendChart {
                 width: 100%;
                 height: 148px;
+                description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
-                datasets: root.split-by-model
-                    ? (root.metric == 1 ? root.request-series
-                        : root.metric == 2 ? root.speed-series : root.token-series)
-                    : [{
-                        label: root.metric-label,
-                        values: root.metric == 1 ? root.request-counts
-                            : root.metric == 2 ? root.speed-counts : root.token-counts,
-                        series-type: ChartSeriesType.bar,
-                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
-                    }];
+                datasets: root.plot-datasets;
+                pinned-index: root.pinned;
+                values: root.plotted-values;
                 show-legend: root.split-by-model;
                 integer-ticks: root.metric != 2;
                 value-decimals: root.metric == 2 ? 1 : 0;
@@ -342,24 +574,18 @@ export component RequestAnalytics inherits Panel {
             }
         }
         wide-row := HorizontalLayout {
-            visible: !root.compact || root.details-open;
+            visible: root.expanded && !root.empty;
             spacing: 12px;
-            height: (!root.compact || root.details-open) ? 148px : 0px;
+            height: root.expanded && !root.empty ? 148px : 0px;
             wide-plot := RequestTrendChart {
                 horizontal-stretch: 1;
                 height: parent.height;
+                description: root.chart-accessible-description;
                 category-clicked(index) => { root.toggle-pin(index); }
                 labels: root.labels;
-                datasets: root.split-by-model
-                    ? (root.metric == 1 ? root.request-series
-                        : root.metric == 2 ? root.speed-series : root.token-series)
-                    : [{
-                        label: root.metric-label,
-                        values: root.metric == 1 ? root.request-counts
-                            : root.metric == 2 ? root.speed-counts : root.token-counts,
-                        series-type: ChartSeriesType.bar,
-                        color: root.metric == 1 ? Theme.series-b : Theme.accent,
-                    }];
+                datasets: root.plot-datasets;
+                pinned-index: root.pinned;
+                values: root.plotted-values;
                 show-legend: root.split-by-model;
                 integer-ticks: root.metric != 2;
                 value-decimals: root.metric == 2 ? 1 : 0;
@@ -371,7 +597,7 @@ export component RequestAnalytics inherits Panel {
                 rows: root.model-speeds;
             }
         }
-        if root.has-data && (!root.compact || root.details-open) : VerticalLayout {
+        if root.has-data && root.expanded : VerticalLayout {
             spacing: 2px;
             HorizontalLayout {
                 spacing: 8px;
@@ -382,6 +608,8 @@ export component RequestAnalytics inherits Panel {
                     vertical-alignment: center;
                     overflow: elide;
                     wrap: no-wrap;
+                    accessible-role: text;
+                    accessible-live-region: polite;
                 }
                 DataText { text: root.selection-value; font-weight: 650; vertical-alignment: center; }
                 unpin := ActionButton {
@@ -415,20 +643,17 @@ export component UsageChart inherits Panel {
     in property <bool> allow-motion;
     in-out property <bool> show-requests;
     in-out property <bool> show-line;
-    // The overview owns the auto-refresh cadence; the chart only renders its
-    // four steps and the shared manual-refresh state.
+    // The overview owns the auto-refresh cadence; the chart renders its five
+    // steps inside one chart-settings popover so the default row stays at range,
+    // metric and chart type.
     in-out property <int> auto-refresh: 5;
-    in property <bool> refreshing: false;
-    in property <angle> refresh-rotation: 0deg;
+    in-out property <bool> settings-open: false;
     in property <string> updated-at: "—";
-    callback refresh();
+    // The page footer is the one visible read-time source; the chart keeps the
+    // read time as a data seam without drawing a second label.
+    out property <bool> updated-at-visible: false;
     callback period-changed(int);
     private property <int> auto-refresh-index: 0;
-    out property <length> refresh-x: refresh-button.absolute-position.x;
-    out property <length> refresh-y: refresh-button.absolute-position.y;
-    out property <length> refresh-width: refresh-button.width;
-    out property <length> refresh-height: refresh-button.height;
-    out property <bool> refresh-enabled: refresh-button.enabled;
     out property <length> content-height: content.preferred-height;
     out property <length> metric-x: metric-control.absolute-position.x;
     out property <length> metric-y: metric-control.absolute-position.y;
@@ -438,10 +663,36 @@ export component UsageChart inherits Panel {
     out property <length> controls-height: controls.height;
     out property <length> selection-y: selection.absolute-position.y;
     out property <length> selection-height: selection.height;
+    // Test seams: the chart-settings popover and the cadence control it owns.
+    out property <length> settings-toggle-x: settings-toggle.absolute-position.x;
+    out property <length> settings-toggle-y: settings-toggle.absolute-position.y;
+    out property <length> settings-toggle-width: settings-toggle.width;
+    out property <length> settings-toggle-height: settings-toggle.height;
+    out property <length> settings-panel-x: settings-panel.absolute-position.x;
+    out property <length> settings-panel-y: settings-panel.absolute-position.y;
+    out property <length> settings-panel-width: settings-panel.width;
+    out property <length> settings-panel-height: settings-panel.height;
+    out property <length> settings-auto-refresh-x:
+        settings-auto-refresh.absolute-position.x;
+    out property <length> settings-auto-refresh-y:
+        settings-auto-refresh.absolute-position.y;
+    out property <length> settings-auto-refresh-width: settings-auto-refresh.width;
+    out property <int> settings-auto-refresh-index: root.auto-refresh-index;
+    // Esc closes the popover and returns focus to the gear, so the test reads
+    // the same focus the keyboard user gets back.
+    out property <bool> settings-toggle-focused: settings-toggle.has-focus;
+    // One close path for the popover: the backdrop, the X and Esc all return
+    // focus to the gear that opened it, like the maintenance menu.
+    public function close-settings() {
+        root.settings-open = false;
+        settings-toggle.take-focus();
+    }
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
-    private property <int> key-index: -1;
+    // The keyboard cursor starts on the first bucket; it only drives `active`
+    // while the chart owns focus, so hover keeps working without focus.
+    private property <int> key-index: 0;
     // The header fits one row at the default width; below 650 px it splits
     // into two rows instead of overflowing the card.
     private property <bool> narrow: root.width < 650px;
@@ -460,7 +711,7 @@ export component UsageChart inherits Panel {
         }
     }
     private property <int> active: root.pinned >= 0 ? root.pinned
-        : root.key-index >= 0 ? root.key-index : plot.hovered-index;
+        : chart-focus.has-focus ? root.key-index : plot.hovered-index;
     private property <bool> has-data: root.points.length > 0;
     private property <bool> has-selection: root.active >= 0 && root.active < root.points.length;
     private property <string> metric: root.show-requests ? "请求数" : "Token";
@@ -482,21 +733,74 @@ export component UsageChart inherits Panel {
     out property <int> pinned-index: root.pinned;
     out property <int> active-index: root.active;
     out property <bool> can-unpin: root.pinned >= 0 && root.has-selection;
+    // The pinned bucket gets a 2 px marker rule at the plot's bottom edge. The
+    // chart engine doesn't expose the plot geometry, so the wrapper asks the
+    // same pure axis callback the chart uses and derives the band from its
+    // widest tick label; the rule then sits exactly on the category instead of
+    // on a guessed left gutter.
+    private property <[ChartDataset]> plot-datasets: [{
+        label: root.metric,
+        values: root.show-requests ? root.request-counts : root.token-counts,
+        series-type: root.show-line ? ChartSeriesType.line : ChartSeriesType.bar,
+        color: root.show-requests ? Theme.series-b : Theme.accent,
+        fill: root.show-line,
+    }];
+    private property <ChartAxis> marker-axis: ChartEngine.value-axis({
+        locale: ChartTheme.locale,
+        kind: ChartKind.bar,
+        datasets: root.plot-datasets,
+        stacked: false,
+        percent: false,
+        height: plot.height / 1px,
+        begin-at-zero: true,
+        font-size: ChartTheme.font-size / 1px,
+        labels: root.labels,
+        view-start: 0,
+        view-end: 1,
+        fixed: false,
+        fixed-min: 0,
+        fixed-max: 0,
+        logarithmic: false,
+        integer-ticks: true,
+        format: { prefix: "", suffix: "", decimals: 0 },
+        side: 1,
+        ordered: false,
+    });
+    private property <length> marker-plot-x:
+        root.marker-axis.widest-label.character-count * ChartTheme.font-size * 0.62 + 8px;
+    private property <length> marker-plot-width:
+        max(0px, plot.width - root.marker-plot-x - 12px);
+    private property <length> marker-step: root.labels.length > 0
+        ? root.marker-plot-width / root.labels.length : 0px;
+    out property <bool> marker-visible: root.pinned >= 0
+        && root.pinned < root.labels.length
+        && root.marker-step > 0px;
+    out property <length> marker-x: root.marker-plot-x + root.pinned * root.marker-step;
+    out property <length> marker-width: root.marker-step;
+    out property <bool> pinned-marker-visible: root.marker-visible;
+    out property <length> pinned-marker-x: root.marker-x;
+    out property <length> pinned-marker-width: root.marker-width;
+    // Test seam: the chart focus is visible through the control-strength edge
+    // step and starts the keyboard cursor on the first bucket.
+    out property <bool> chart-focus-visible:
+        root.border-color == Theme.edge-control-strong;
+    out property <int> chart-key-index: root.key-index;
+    public function focus-chart() { chart-focus.focus(); }
     out property <string> selection-label: root.has-selection ? root.points[root.active].detail-label : "";
     out property <string> selection-value: !root.has-selection ? ""
         : root.show-requests ? root.points[root.active].request-value : root.points[root.active].token-value;
 
     preferred-height: root.width < 670px ? 408px : 368px;
     vertical-stretch: 0;
-    // The chart card is a keyboard stop: Tab reaches it, the ring is the same
-    // neutral edge step as the other focusable surfaces.
-    border-color: chart-focus.has-focus ? Theme.edge-strong : Theme.edge;
+    // The chart card is a keyboard stop: Tab reaches it, the ring is the
+    // control-strength neutral edge step so the 1 px border is visible.
+    border-color: chart-focus.has-focus ? Theme.edge-control-strong : Theme.edge;
     animate preferred-height { duration: Theme.settle; easing: ease-out; }
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
 
-    changed period => { root.pinned = -1; root.key-index = -1; }
+    changed period => { root.pinned = -1; root.key-index = 0; }
     changed points => {
-        root.key-index = -1;
+        root.key-index = 0;
         if (root.pinned >= root.points.length
             || (root.pinned >= 0 && root.points[root.pinned].detail-label != root.pinned-label)) {
             root.pinned = -1;
@@ -582,36 +886,28 @@ export component UsageChart inherits Panel {
                     VerticalLayout {
                         spacing: 3px;
                         Heading { text: "用量趋势"; }
-                        Hint { text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
-                        + (root.show-requests ? " · 单位：次" : " · 单位：亿"); }
+                        // The read status shares the subtitle line instead of a
+                        // separate 17 px row below the plot; the plot keeps the
+                        // height for its bars.
+                        Hint {
+                            text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
+                                + (root.show-requests ? " · 单位：次" : " · 单位：亿")
+                                + (root.status-text.is-empty ? "" : " · " + root.status-text);
+                            color: root.status-text.is-empty ? Theme.muted : root.status-tone;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     right-header := HorizontalLayout {
                         spacing: 8px;
                         alignment: center;
-                        refresh-button := ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "刷新总览";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh(); }
-                        }
                         metric-control := Segmented {
                             width: 188px;
                             options: [{ text: "Token" }, { text: "请求数" }];
                             label: "用量指标";
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
-                        }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
                         }
                         VerticalLayout {
                             alignment: end;
@@ -651,29 +947,12 @@ export component UsageChart inherits Panel {
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: center;
-                        ActionButton {
-                            width: Theme.icon-button;
-                            height: Theme.icon-button;
-                            label: "刷新";
-                            icon: "refresh";
-                            icon-rotation: root.refresh-rotation;
-                            icon-only: true;
-                            quiet: true;
-                            tooltip: "刷新总览";
-                            enabled: !root.refreshing;
-                            clicked => { root.refresh(); }
-                        }
                         Segmented {
                             width: 188px;
                             options: [{ text: "Token" }, { text: "请求数" }];
                             label: "用量指标";
                             current-index: root.show-requests ? 1 : 0;
                             selected(index) => { root.show-requests = index == 1; }
-                        }
-                        DataText {
-                            text: "更新于 " + root.updated-at;
-                            font-size: 11px;
-                            vertical-alignment: center;
                         }
                     }
                 }
@@ -713,14 +992,18 @@ export component UsageChart inherits Panel {
                             current-index: root.show-line ? 1 : 0;
                             selected(index) => { root.show-line = index == 1; }
                         }
-                        // The cadence carries a visible label at the wide
-                        // layout; the compact row keeps only the a11y label.
-                        if !root.narrow : Hint { text: "自动刷新"; vertical-alignment: center; }
-                        auto-refresh-control := Segmented {
-                            width: root.narrow ? 180px : 220px;
-                            options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
-                            label: "总览自动刷新";
-                            current-index <=> root.auto-refresh-index;
+                        // The five cadence options leave the default row; they
+                        // live in one chart-settings popover so the card shows
+                        // only range, metric and chart type at rest.
+                        settings-toggle := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "图表设置";
+                            icon: "settings";
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "图表设置：自动刷新间隔";
+                            clicked => { root.settings-open = !root.settings-open; }
                         }
                     }
                 }
@@ -728,7 +1011,10 @@ export component UsageChart inherits Panel {
 
             Rectangle {
                 vertical-stretch: 1;
-                min-height: 142px;
+                // The overview caps the chart card at 260 px; the plot keeps
+                // a 62 px floor so the bars stay readable while the card can
+                // actually shrink below its content preference.
+                min-height: 62px;
 
                 VerticalLayout {
                     visible: !root.has-data;
@@ -750,13 +1036,7 @@ export component UsageChart inherits Panel {
                     width: parent.width;
                     height: parent.height;
                     labels: root.labels;
-                    datasets: [{
-                        label: root.metric,
-                        values: root.show-requests ? root.request-counts : root.token-counts,
-                        series-type: root.show-line ? ChartSeriesType.line : ChartSeriesType.bar,
-                        color: root.show-requests ? Theme.series-b : Theme.accent,
-                        fill: root.show-line,
-                    }];
+                    datasets: root.plot-datasets;
                     begin-at-zero: true;
                     integer-ticks: true;
                     value-decimals: 0;
@@ -779,24 +1059,39 @@ export component UsageChart inherits Panel {
                         }
                     }
                 }
+                // The pinned bucket keeps its readout and 取消固定; this 2 px
+                // accent rule marks which bucket that readout belongs to.
+                if root.marker-visible : Rectangle {
+                    x: root.marker-x;
+                    y: parent.height - 2px;
+                    width: root.marker-width;
+                    height: 2px;
+                    background: Theme.accent-strong;
+                }
             }
 
             selection := Rectangle {
                 visible: root.has-data;
-                height: root.has-data ? 58px : 0px;
+                // One 28 px readout row: the hint, the selected value and
+                // 取消固定 share it, so the plot keeps the vertical budget.
+                height: root.has-data ? 28px : 0px;
 
                 HorizontalLayout {
                     x: 0px;
                     y: 0px;
                     width: parent.width;
-                    height: 40px;
+                    height: parent.height;
                     spacing: 8px;
-                    Hint {
-                        text: root.has-selection ? root.selection-label : "悬停查看数值";
+                    selection-hint := Hint {
+                        text: root.has-selection ? root.selection-label
+                            : "悬停查看数值 · ← → 切换时段";
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
                         wrap: no-wrap;
+                        accessible-role: text;
+                        accessible-live-region: polite;
+                        Tooltip { text: @markdown("← → 切换时段 · Enter 固定 · Esc 取消固定"); }
                     }
                     DataText {
                         text: root.selection-value;
@@ -815,20 +1110,67 @@ export component UsageChart inherits Panel {
                         clicked => { root.pinned = -1; }
                     }
                 }
+            }
+        }
+    }
 
-                Hint {
-                    y: 40px;
-                    width: parent.width;
-                    height: 18px;
-                    text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
+    // The chart-settings popover floats over the plot; the backdrop closes it
+    // on any click outside the panel without changing the card height.
+    settings-backdrop := Rectangle {
+        visible: root.settings-open;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        z: 40;
+        background: transparent;
+        TouchArea { clicked => { root.close-settings(); } }
+    }
+    settings-panel := Rectangle {
+        visible: root.settings-open;
+        x: max(8px, root.width - 16px - 280px);
+        y: settings-toggle.absolute-position.y - root.absolute-position.y
+            + settings-toggle.height + 4px;
+        width: 280px;
+        height: 124px;
+        z: 50;
+        background: Theme.surface;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000022;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "图表设置";
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 650;
                     vertical-alignment: center;
-                    wrap: no-wrap;
+                    horizontal-stretch: 1;
+                }
+                ActionButton {
+                    width: 24px;
+                    height: 24px;
+                    label: "关闭图表设置";
+                    icon: "close";
+                    icon-only: true;
+                    quiet: true;
+                    tooltip: "关闭图表设置";
+                    clicked => { root.close-settings(); }
                 }
             }
-
-            if root.has-data && !root.status-text.is-empty : Hint {
-                text: root.status-text;
-                color: root.status-tone;
+            Hint { text: "自动刷新"; }
+            settings-auto-refresh := Segmented {
+                width: 100%;
+                options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭刷新" }];
+                label: "总览自动刷新";
+                current-index <=> root.auto-refresh-index;
             }
         }
     }

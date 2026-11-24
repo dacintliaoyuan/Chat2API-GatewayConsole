@@ -272,7 +272,7 @@ impl GatewayServer {
         let desktop_drain = config.desktop_instance.then(Mutex::<DesktopDrain>::default);
         let state = Arc::new(AppState {
             config: config.clone(),
-            proxy,
+            proxy: Arc::clone(&proxy),
             gate,
             control_token,
             local_api_key,
@@ -289,6 +289,7 @@ impl GatewayServer {
             .map_err(ServerError::Io)?;
         listener.set_nonblocking(true).map_err(ServerError::Io)?;
         let addr = listener.local_addr().map_err(ServerError::Io)?;
+        proxy.set_bound_addr(addr);
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
         let worker_state = Arc::clone(&state);
@@ -791,6 +792,14 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         | "/admin/auth/cancel"
         | "/admin/shutdown" => Some("POST"),
         "/admin/auth/status" | "/admin/auth/verify" => Some("GET"),
+        "/admin/models" => Some("GET"),
+        "/admin/model-context/probes" => Some("GET, POST, DELETE"),
+        "/admin/um/services" => Some("GET"),
+        "/admin/um/services/start" => Some("POST"),
+        "/admin/um/login-rounds" => Some("GET"),
+        "/admin/um/logs" => Some("GET"),
+        "/admin/um/maintenance" => Some("GET"),
+        "/admin/connection" => Some("GET"),
         _ => None,
     }
 }
@@ -982,6 +991,7 @@ fn dispatch_inner(
     let response = match request.method.as_str() {
         "GET" => handle_get(state, request),
         "POST" => handle_post(state, request),
+        "DELETE" => handle_delete(state, request),
         _ => GatewayError::unknown_path(path).response(),
     };
     (RouteOutcome::Response(response), admission)
@@ -1225,6 +1235,60 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
             }
             Response::json(200, &state.proxy.verify_snapshot())
         }
+        "/admin/models" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match crate::admin::model_catalog(&state.proxy, request.raw_target()) {
+                Ok(payload) => Response::json(200, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        "/admin/model-context/probes" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            Response::json(200, &state.proxy.admin_state().probes_snapshot())
+        }
+        "/admin/um/services" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            Response::json(200, &state.proxy.admin_state().services_payload())
+        }
+        "/admin/um/login-rounds" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match crate::admin::login_rounds(&state.config, request.raw_target()) {
+                Ok(payload) => Response::json(200, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        "/admin/um/logs" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match crate::admin::logs(&state.config, request.raw_target()) {
+                Ok(payload) => Response::json(200, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        "/admin/um/maintenance" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            Response::json(200, &crate::admin::maintenance())
+        }
+        "/admin/connection" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match crate::admin::connection(state.proxy.admin_state(), state.require_local_api_key) {
+                Ok(payload) => Response::json(200, &payload),
+                Err(error) => error.response(),
+            }
+        }
         "/admin/auth/login" | "/admin/auth/cancel" | "/admin/shutdown" => {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
@@ -1315,6 +1379,36 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 None => GatewayError::not_implemented("login_unassembled").response(),
             }
         }
+        "/admin/model-context/probes" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            let body = match read_json_body(request, body_policy_for(state, state.gate.is_some())) {
+                Ok(Some(body)) => body,
+                Ok(None) => {
+                    return GatewayError::invalid_request("Request body must be a JSON object")
+                        .response()
+                }
+                Err(error) => return error.response(),
+            };
+            match state
+                .proxy
+                .admin_state()
+                .start_probes_from_body(Arc::clone(&state.proxy), &body)
+            {
+                Ok(payload) => Response::json(202, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        "/admin/um/services/start" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match state.proxy.admin_state().start_service() {
+                Ok(payload) => Response::json(200, &payload),
+                Err(error) => error.response(),
+            }
+        }
         "/admin/auth/status" | "/admin/auth/verify" => {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
@@ -1351,6 +1445,18 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             }
         }
         _ => GatewayError::unknown_path(path).response(),
+    }
+}
+
+fn handle_delete(state: &AppState, request: &Request) -> Response {
+    match request.path() {
+        "/admin/model-context/probes" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            Response::json(200, &state.proxy.admin_state().stop_probes())
+        }
+        _ => GatewayError::unknown_path(request.path()).response(),
     }
 }
 

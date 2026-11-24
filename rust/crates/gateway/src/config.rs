@@ -360,6 +360,9 @@ pub struct GatewayConfig {
     /// Durable login-round history file (#115). `None` uses the local
     /// production default and stays memory-only in candidate mode.
     pub login_history_file: Option<PathBuf>,
+    /// Durable context-probe history (#146). `None` derives the file beside
+    /// `usage_log`; without a usage log the history stays process-local.
+    pub model_probe_state_file: Option<PathBuf>,
     /// The browser profile directory; `None` uses the role default.
     pub profile_dir: Option<PathBuf>,
     /// The on-demand manual display marker file.
@@ -443,6 +446,7 @@ impl Default for GatewayConfig {
             token_file: None,
             auth_state_file: None,
             login_history_file: None,
+            model_probe_state_file: None,
             profile_dir: None,
             login_display_file: None,
             login_timeout: Duration::from_secs(DEFAULT_LOGIN_TIMEOUT_SECONDS),
@@ -554,6 +558,11 @@ impl GatewayConfig {
         if let Ok(value) = std::env::var(crate::login::history::LOGIN_HISTORY_FILE_ENV) {
             if !value.trim().is_empty() {
                 config.login_history_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var("CHAT2API_MODEL_PROBE_STATE_FILE") {
+            if !value.trim().is_empty() {
+                config.model_probe_state_file = Some(PathBuf::from(value));
             }
         }
         if let Ok(value) = std::env::var("CHAT2API_PROFILE_DIR") {
@@ -722,6 +731,19 @@ impl GatewayConfig {
             self.role,
             self.candidate,
         )
+    }
+
+    /// The durable context-probe history path (#146).
+    ///
+    /// An explicit setting wins in every mode; otherwise it sits beside
+    /// `usage_log`. Without a usage log the probe history stays in memory.
+    pub fn effective_model_probe_state_file(&self) -> Option<PathBuf> {
+        self.model_probe_state_file.clone().or_else(|| {
+            self.usage_log
+                .as_ref()
+                .and_then(|path| path.parent())
+                .map(|parent| parent.join("model-context-probes.json"))
+        })
     }
 
     /// Fail closed before binding a socket.

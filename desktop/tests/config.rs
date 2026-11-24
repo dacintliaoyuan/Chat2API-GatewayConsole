@@ -1,12 +1,66 @@
 use std::path::Path;
+use std::sync::Once;
 
+use slint::ComponentHandle;
 use um_desktop::config::{
-    apply_theme, config_path, load_from, model_api_bind, parse_config, save_to, validate_port,
-    DesktopConfig, LoadOutcome, ThemeMode, DEFAULT_MODEL_API_PORT, MODEL_API_HOST,
+    apply_settings, apply_theme, config_path, load_from, load_from_with_warnings, model_api_bind,
+    parse_config, parse_config_with_warnings, save_to, save_window_settings, settings_from_window,
+    validate_port, AutoRefresh, DesktopConfig, LoadOutcome, LogLevels, LogRange, MotionPreference,
+    RequestResult, Settings, SidebarMode, ThemeMode, TimeRange, DEFAULT_MODEL_API_PORT,
+    MODEL_API_HOST,
 };
+use um_desktop::ui::*;
 
 mod common;
 use common::TempDir;
+
+thread_local! {
+    static INIT: Once = Once::new();
+}
+
+fn window() -> MainWindow {
+    INIT.with(|init| {
+        init.call_once(|| i_slint_backend_testing::init_no_event_loop());
+    });
+    let window = MainWindow::new().expect("create MainWindow");
+    slintplot::register!(window);
+    window.show().expect("show MainWindow");
+    window
+}
+
+fn assert_default_settings(settings: &Settings) {
+    assert_eq!(settings.auto_refresh, AutoRefresh::Five);
+    assert_eq!(settings.auto_refresh.seconds(), 5);
+    assert_eq!(settings.usage_range, TimeRange::Today);
+    assert_eq!(settings.request_range, TimeRange::Today);
+    assert_eq!(settings.request_result, RequestResult::All);
+    assert_eq!(settings.request_search, "");
+    assert_eq!(settings.log_range, LogRange::Live);
+    assert_eq!(settings.log_level, LogLevels::default());
+    assert!(settings.log_level.flags() == (false, false, false, false));
+    assert_eq!(settings.log_keyword, "");
+    assert_eq!(settings.sidebar, SidebarMode::Expanded);
+    assert_eq!(settings.reduced_motion, MotionPreference::System);
+    assert!(!settings.reduce_transparency);
+    assert_eq!(settings.request_chart_collapsed, None);
+}
+
+fn non_default_settings() -> Settings {
+    Settings {
+        auto_refresh: AutoRefresh::Fifteen,
+        usage_range: TimeRange::Month,
+        request_range: TimeRange::Week,
+        request_result: RequestResult::Failed,
+        request_search: "fixture".to_string(),
+        log_range: LogRange::Month,
+        log_level: LogLevels::from_flags(false, true, false, false),
+        log_keyword: "timeout".to_string(),
+        sidebar: SidebarMode::IconsOnly,
+        reduced_motion: MotionPreference::Reduced,
+        reduce_transparency: true,
+        request_chart_collapsed: Some(true),
+    }
+}
 
 #[test]
 fn default_model_api_port_is_7999_on_loopback() {
@@ -158,6 +212,299 @@ fn save_rejects_port_zero_without_writing() {
     let error = save_to(&path, &DesktopConfig { model_api_port: 0, ..DesktopConfig::default() }).expect_err("port zero");
     assert!(error.contains("1-65535"), "{error}");
     assert!(!path.exists());
+}
+
+#[test]
+fn defaults_cover_every_persisted_setting() {
+    let config = DesktopConfig::default();
+    assert_eq!(config.model_api_port, DEFAULT_MODEL_API_PORT);
+    assert_eq!(config.theme, ThemeMode::System);
+    assert!(!config.intro_dismissed);
+    assert_default_settings(&config.settings);
+}
+
+#[test]
+fn saving_writes_every_setting_to_desktop_json() {
+    let dir = TempDir::new("config-settings-save");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let config = DesktopConfig {
+        settings: non_default_settings(),
+        ..DesktopConfig::default()
+    };
+    save_to(&path, &config).expect("save settings");
+    let text = std::fs::read_to_string(&path).expect("read config");
+    let body: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(body["auto_refresh"], 15, "{text}");
+    assert_eq!(body["usage_range"], "30d", "{text}");
+    assert_eq!(body["request_range"], "7d", "{text}");
+    assert_eq!(body["request_result"], "failed", "{text}");
+    assert_eq!(body["request_search"], "fixture", "{text}");
+    assert_eq!(body["log_range"], "30d", "{text}");
+    assert_eq!(body["log_level"], serde_json::json!(["warn"]), "{text}");
+    assert_eq!(body["log_keyword"], "timeout", "{text}");
+    assert_eq!(body["sidebar"], "icons", "{text}");
+    assert_eq!(body["reduced_motion"], "reduced", "{text}");
+    assert_eq!(body["reduce_transparency"], true, "{text}");
+    assert_eq!(body["request_chart_collapsed"], true, "{text}");
+}
+
+#[test]
+fn older_config_without_settings_uses_defaults_without_warnings() {
+    let (config, warnings) = parse_config_with_warnings(r#"{"version":1,"model_api_port":7999}"#)
+        .expect("old config");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_default_settings(&config.settings);
+}
+
+#[test]
+fn log_level_accepts_the_legacy_single_value_and_the_multi_select_array() {
+    let legacy = parse_config(r#"{"version":2,"model_api_port":7999,"log_level":"warn"}"#)
+        .expect("legacy single level loads");
+    assert_eq!(
+        legacy.settings.log_level,
+        LogLevels::from_flags(false, true, false, false)
+    );
+
+    let multi =
+        parse_config(r#"{"version":2,"model_api_port":7999,"log_level":["error","info"]}"#)
+            .expect("level array loads");
+    assert_eq!(
+        multi.settings.log_level,
+        LogLevels::from_flags(true, false, true, false)
+    );
+
+    let (invalid, warnings) =
+        parse_config_with_warnings(r#"{"version":2,"model_api_port":7999,"log_level":["error","trace"]}"#)
+            .expect("unknown level names are warnings");
+    assert_eq!(invalid.settings.log_level, LogLevels::default());
+    assert!(
+        warnings.iter().any(|warning| warning.contains("log_level")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn an_invalid_log_range_lists_every_accepted_value() {
+    let (_, warnings) = parse_config_with_warnings(
+        r#"{"version":2,"model_api_port":7999,"log_range":"yesterday"}"#,
+    )
+    .expect("invalid log range is a warning");
+    let warning = warnings
+        .iter()
+        .find(|warning| warning.contains("log_range"))
+        .expect("log_range warning");
+    assert!(warning.contains("24h"), "{warning}");
+    assert!(warning.contains("all"), "{warning}");
+}
+
+#[test]
+fn invalid_setting_values_fall_back_with_reasons() {
+    let (config, warnings) = parse_config_with_warnings(
+        r#"{
+            "version":1,
+            "model_api_port":7999,
+            "auto_refresh":7,
+            "usage_range":"year",
+            "request_range":"tomorrow",
+            "request_result":"maybe",
+            "request_search":42,
+            "log_range":"yesterday",
+            "log_level":"trace",
+            "log_keyword":false,
+            "sidebar":"hidden",
+            "reduced_motion":"always",
+            "reduce_transparency":"yes",
+            "request_chart_collapsed":"auto"
+        }"#,
+    )
+    .expect("invalid settings are warnings, not load failures");
+    assert_default_settings(&config.settings);
+    for field in [
+        "auto_refresh",
+        "usage_range",
+        "request_range",
+        "request_result",
+        "request_search",
+        "log_range",
+        "log_level",
+        "log_keyword",
+        "sidebar",
+        "reduced_motion",
+        "reduce_transparency",
+        "request_chart_collapsed",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.contains(field)),
+            "{field} 非法时必须说明原因：{warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn save_then_load_keeps_every_setting() {
+    let dir = TempDir::new("config-settings-roundtrip");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let settings = non_default_settings();
+    save_to(
+        &path,
+        &DesktopConfig {
+            settings: settings.clone(),
+            ..DesktopConfig::default()
+        },
+    )
+    .expect("save settings");
+    let (outcome, warnings) = load_from_with_warnings(&path);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    match outcome {
+        LoadOutcome::Loaded(config) => assert_eq!(config.settings, settings),
+        other => panic!("saved settings must load, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_manual_request_chart_choice_round_trips_through_desktop_json() {
+    let dir = TempDir::new("config-request-chart");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let first = window();
+    first.set_request_chart_collapsed_explicit(true);
+    first.set_request_chart_collapsed(false);
+    let captured = settings_from_window(&first);
+    assert_eq!(captured.request_chart_collapsed, Some(false));
+
+    let mut config = DesktopConfig {
+        settings: captured,
+        ..DesktopConfig::default()
+    };
+    save_window_settings(Some(&path), &mut config, &first).expect("save chart choice");
+    let (outcome, warnings) = load_from_with_warnings(&path);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let saved = match outcome {
+        LoadOutcome::Loaded(config) => config,
+        other => panic!("saved settings must load, got {other:?}"),
+    };
+    assert_eq!(saved.settings.request_chart_collapsed, Some(false));
+
+    let restored = window();
+    apply_settings(&restored, &saved, true);
+    assert!(restored.get_request_chart_collapsed_explicit());
+    assert!(
+        !restored.get_request_chart_collapsed(),
+        "the saved manual expand must beat the short-viewport default"
+    );
+}
+
+#[test]
+fn failed_setting_save_keeps_the_new_setting_in_memory_and_reports_reason() {
+    let dir = TempDir::new("config-settings-save-fail");
+    let blocker = dir.path().join("blocked");
+    std::fs::write(&blocker, "not a directory").expect("write blocker");
+    let path = blocker.join("desktop.json");
+    let mut config = DesktopConfig::default();
+    let window = window();
+    window.set_auto_refresh(0);
+    window.set_usage_period(4);
+    let error = save_window_settings(Some(&path), &mut config, &window).expect_err("save must fail");
+    assert!(error.contains("保存失败"), "{error}");
+    assert_eq!(config.settings.auto_refresh, AutoRefresh::Off);
+    assert_eq!(config.settings.usage_range, TimeRange::All);
+    assert!(!path.exists());
+}
+
+#[test]
+fn saving_window_settings_keeps_appearance_choices_without_window_controls() {
+    let dir = TempDir::new("config-settings-appearance");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let mut config = DesktopConfig {
+        settings: non_default_settings(),
+        ..DesktopConfig::default()
+    };
+    let window = window();
+    window.set_auto_refresh(60);
+    save_window_settings(Some(&path), &mut config, &window).expect("save window settings");
+    assert_eq!(config.settings.auto_refresh, AutoRefresh::Sixty);
+    assert_eq!(config.settings.sidebar, SidebarMode::IconsOnly);
+    assert_eq!(config.settings.reduced_motion, MotionPreference::Reduced);
+    assert!(config.settings.reduce_transparency);
+    match load_from(&path) {
+        LoadOutcome::Loaded(loaded) => {
+            assert_eq!(loaded.settings.sidebar, SidebarMode::IconsOnly);
+            assert_eq!(loaded.settings.reduced_motion, MotionPreference::Reduced);
+            assert!(loaded.settings.reduce_transparency);
+        }
+        other => panic!("saved settings must load, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_motion_preference_follows_the_system_setting() {
+    let window = window();
+    let config = DesktopConfig::default();
+    apply_settings(&window, &config, false);
+    assert!(!window.get_allow_motion());
+    apply_settings(&window, &config, true);
+    assert!(window.get_allow_motion());
+}
+
+#[test]
+fn applying_a_saved_config_sets_the_window_properties() {
+    let window = window();
+    let config = DesktopConfig {
+        settings: non_default_settings(),
+        ..DesktopConfig::default()
+    };
+    apply_settings(&window, &config, true);
+    assert_eq!(window.get_auto_refresh(), 15);
+    assert_eq!(window.get_auto_refresh_index(), 1);
+    assert_eq!(window.get_usage_period(), 3);
+    assert_eq!(window.get_request_period(), 2);
+    assert_eq!(window.get_request_result(), 2);
+    assert_eq!(window.get_request_keyword().as_str(), "fixture");
+    assert_eq!(window.get_log_period(), 3);
+    assert!(!window.get_log_level_error());
+    assert!(window.get_log_level_warn());
+    assert!(!window.get_log_level_info());
+    assert!(!window.get_log_level_debug());
+    assert_eq!(window.get_log_filter_keyword().as_str(), "timeout");
+    assert!(!window.get_allow_motion(), "减少动效必须关闭界面动效");
+}
+
+#[test]
+fn window_settings_survive_a_restart() {
+    let dir = TempDir::new("config-settings-restart");
+    let path = dir.path().join("Chat2API").join("desktop.json");
+    let first = window();
+    first.set_auto_refresh(30);
+    first.set_usage_period(4);
+    first.set_request_period(2);
+    first.set_request_result(1);
+    first.set_request_keyword("fixture".into());
+    first.set_log_period(2);
+    first.set_log_level_error(true);
+    first.set_log_level_info(true);
+    first.set_log_filter_keyword("timeout".into());
+    let mut config = DesktopConfig::default();
+    save_window_settings(Some(&path), &mut config, &first).expect("save window settings");
+
+    // A restart builds a fresh window from the same desktop.json.
+    let second = window();
+    let (outcome, warnings) = load_from_with_warnings(&path);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    match outcome {
+        LoadOutcome::Loaded(loaded) => apply_settings(&second, &loaded, true),
+        other => panic!("saved settings must load, got {other:?}"),
+    }
+    assert_eq!(second.get_auto_refresh(), 30);
+    assert_eq!(second.get_auto_refresh_index(), 2);
+    assert_eq!(second.get_usage_period(), 4);
+    assert_eq!(second.get_request_period(), 2);
+    assert_eq!(second.get_request_result(), 1);
+    assert_eq!(second.get_request_keyword().as_str(), "fixture");
+    assert_eq!(second.get_log_period(), 2);
+    assert!(second.get_log_level_error());
+    assert!(!second.get_log_level_warn());
+    assert!(second.get_log_level_info());
+    assert!(!second.get_log_level_debug());
+    assert_eq!(second.get_log_filter_keyword().as_str(), "timeout");
 }
 
 #[cfg(windows)]

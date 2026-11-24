@@ -5,6 +5,7 @@
 //! "running", a missing model count never becomes 0. The supervision card comes
 //! from the process supervisor, not from the old 8001 console.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -123,15 +124,15 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             };
             if status == "ok" {
                 Card {
-                    label: "本实例网关",
+                    label: "本机网关",
                     value: "运行中".to_string(),
                     detail: format!("{gateway_base}{models}"),
                     tone: Tone::Good,
                 }
             } else {
-                failures.push(format!("本实例网关 status={status}"));
+                failures.push(format!("本机网关 status={status}"));
                 Card {
-                    label: "本实例网关",
+                    label: "本机网关",
                     value: "异常".to_string(),
                     detail: format!("{gateway_base} · status={status}{models}"),
                     tone: Tone::Bad,
@@ -139,9 +140,9 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             }
         }
         Err(error) => {
-            failures.push(format!("本实例网关 {error}"));
+            failures.push(format!("本机网关 {error}"));
             Card {
-                label: "本实例网关",
+                label: "本机网关",
                 value: "不可用".to_string(),
                 detail: error.clone(),
                 tone: Tone::Bad,
@@ -209,11 +210,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
                 Card {
                     label: "UM 认证",
                     value: "未知".to_string(),
-                    detail: "本实例网关未返回认证状态".to_string(),
+                    detail: "本机网关未返回认证状态".to_string(),
                     tone: Tone::Warn,
                 },
                 "未知".to_string(),
-                "本实例网关未返回认证状态".to_string(),
+                "本机网关未返回认证状态".to_string(),
                 Tone::Warn,
             ),
         },
@@ -221,11 +222,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
             Card {
                 label: "UM 认证",
                 value: "未知".to_string(),
-                detail: "本实例网关未返回认证状态".to_string(),
+                detail: "本机网关未返回认证状态".to_string(),
                 tone: Tone::Warn,
             },
             "未知".to_string(),
-            "本实例网关未返回认证状态".to_string(),
+            "本机网关未返回认证状态".to_string(),
             Tone::Warn,
         ),
     };
@@ -268,7 +269,7 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
                 None => Card {
                     label: "上游",
                     value: "未知".to_string(),
-                    detail: "本实例网关未返回上游状态".to_string(),
+                    detail: "本机网关未返回上游状态".to_string(),
                     tone: Tone::Warn,
                 },
             }
@@ -276,7 +277,7 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
         Err(_) => Card {
             label: "上游",
             value: "未知".to_string(),
-            detail: "本实例网关未返回上游状态".to_string(),
+            detail: "本机网关未返回上游状态".to_string(),
             tone: Tone::Warn,
         },
     };
@@ -295,8 +296,260 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -
 
 pub fn status_line(overview: &Overview) -> String {
     if overview.failures.is_empty() {
-        "本实例网关 · 状态正常".to_string()
+        "本机网关 · 状态正常".to_string()
     } else {
         format!("刷新失败：{}", overview.failures.join("；"))
     }
+}
+
+/// One row of the upstream fault history card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultRow {
+    pub title: String,
+    pub detail: String,
+    /// The recovery evidence; empty for an active fault.
+    pub evidence: String,
+}
+
+/// The upstream fault history the app instance's gateway persisted.
+///
+/// A missing record is the legal empty state. An unreadable or malformed record
+/// keeps its own reason and is never folded into 「当前无上游故障」.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultHistory {
+    pub status: String,
+    pub tone: Tone,
+    pub check: String,
+    pub active: Option<FaultRow>,
+    pub history: Vec<FaultRow>,
+}
+
+impl FaultHistory {
+    fn empty() -> Self {
+        Self {
+            status: "当前无上游故障".to_string(),
+            tone: Tone::Good,
+            check: "尚无上游核验".to_string(),
+            active: None,
+            history: Vec::new(),
+        }
+    }
+
+    fn failure(reason: String) -> Self {
+        Self {
+            status: format!("读取上游故障记录失败：{reason}"),
+            tone: Tone::Bad,
+            check: String::new(),
+            active: None,
+            history: Vec::new(),
+        }
+    }
+}
+
+/// Read the fault record the app instance's gateway wrote.
+pub fn read_fault_history(path: &Path) -> FaultHistory {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return FaultHistory::empty(),
+        Err(error) => return FaultHistory::failure(format!("{error}")),
+    };
+    let value: Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => return FaultHistory::failure(format!("不是有效 JSON：{error}")),
+    };
+    let Some(object) = value.as_object() else {
+        return FaultHistory::failure("记录格式无效：顶层不是对象".to_string());
+    };
+    let active = match object.get("active") {
+        None | Some(Value::Null) => None,
+        Some(value) => match parse_fault_row(value) {
+            Some(row) => Some(row),
+            None => return FaultHistory::failure("记录格式无效：活动故障字段不完整".to_string()),
+        },
+    };
+    let history = match object.get("history") {
+        None => Vec::new(),
+        Some(Value::Array(rows)) => {
+            let mut parsed = Vec::with_capacity(rows.len());
+            for row in rows {
+                match parse_recovery_row(row) {
+                    Some(row) => parsed.push(row),
+                    None => {
+                        return FaultHistory::failure(
+                            "记录格式无效：历史故障字段不完整".to_string(),
+                        )
+                    }
+                }
+            }
+            parsed
+        }
+        Some(_) => return FaultHistory::failure("记录格式无效：history 不是数组".to_string()),
+    };
+    let check = format_check(object);
+    FaultHistory {
+        status: if active.is_some() {
+            "当前有上游故障".to_string()
+        } else {
+            "当前无上游故障".to_string()
+        },
+        tone: if active.is_some() {
+            Tone::Bad
+        } else {
+            Tone::Good
+        },
+        check,
+        active,
+        history,
+    }
+}
+
+fn parse_fault_row(value: &Value) -> Option<FaultRow> {
+    let object = value.as_object()?;
+    let classification = object.get("classification")?.as_str()?;
+    Some(FaultRow {
+        title: format!("当前异常 · {}", fault_classification(classification)),
+        detail: fault_detail(object, None)?,
+        evidence: String::new(),
+    })
+}
+
+fn parse_recovery_row(value: &Value) -> Option<FaultRow> {
+    let object = value.as_object()?;
+    let classification = object.get("classification")?.as_str()?;
+    let recovered = object.get("recovered_epoch")?.as_f64()?;
+    let recovery_source = object.get("recovery_source")?.as_str()?;
+    let mut evidence = format!("恢复证据 {}", fault_source(recovery_source));
+    if let Some(status) = object.get("recovery_status").and_then(Value::as_u64) {
+        evidence.push_str(&format!(" HTTP {status}"));
+    }
+    if let Some(detail) = object.get("recovery_detail").and_then(Value::as_str) {
+        evidence.push_str(&format!(" · {detail}"));
+    }
+    evidence.push_str(&format!(" · 恢复于 {}", fault_time(recovered)));
+    Some(FaultRow {
+        title: format!("已恢复 · {}", fault_classification(classification)),
+        detail: fault_detail(object, Some(recovered))?,
+        evidence,
+    })
+}
+
+fn fault_detail(object: &serde_json::Map<String, Value>, recovered: Option<f64>) -> Option<String> {
+    let classification = object.get("classification")?.as_str()?;
+    let failures = object.get("failures")?.as_u64()?;
+    let started = object.get("started_epoch")?.as_f64()?;
+    let last = object.get("last_epoch")?.as_f64()?;
+    let source = object.get("source")?.as_str()?;
+    let status = object.get("upstream_status").and_then(Value::as_u64);
+    let summary = object.get("summary").and_then(Value::as_str);
+    let mut detail = fault_classification(classification);
+    if let Some(status) = status {
+        detail.push_str(&format!(" HTTP {status}"));
+    }
+    if let Some(summary) = summary {
+        detail.push_str(&format!(" · {summary}"));
+    }
+    detail.push_str(&format!(
+        " · 失败 {failures} 次 · 开始 {} · 最近 {}",
+        fault_time(started),
+        fault_time(last)
+    ));
+    match recovered {
+        Some(recovered) => detail.push_str(&format!(" · 恢复于 {}", fault_time(recovered))),
+        None => detail.push_str(" · 尚未恢复"),
+    }
+    detail.push_str(&format!(" · 来源 {}", fault_source(source)));
+    Some(detail)
+}
+
+fn format_check(object: &serde_json::Map<String, Value>) -> String {
+    let mut check = match object.get("last_check") {
+        None | Some(Value::Null) => "尚无上游核验".to_string(),
+        Some(Value::Object(last)) => {
+            let epoch = last.get("epoch").and_then(Value::as_f64);
+            let result = last.get("result").and_then(Value::as_str);
+            match (epoch, result) {
+                (Some(epoch), Some(result)) => {
+                    let mut text =
+                        format!("最近核验 {} · {}", fault_time(epoch), fault_result(result));
+                    if let Some(status) = last.get("upstream_status").and_then(Value::as_u64) {
+                        text.push_str(&format!(" HTTP {status}"));
+                    }
+                    if let Some(source) = last.get("source").and_then(Value::as_str) {
+                        text.push_str(&format!(" · {}", fault_source(source)));
+                    }
+                    text
+                }
+                _ => "最近核验记录格式无效".to_string(),
+            }
+        }
+        Some(_) => "最近核验记录格式无效".to_string(),
+    };
+    match object.get("next_check_epoch") {
+        None | Some(Value::Null) => {}
+        Some(value) => match value.as_f64() {
+            Some(next) => check.push_str(&format!(" · 下次复查 {}", fault_time(next))),
+            None => check.push_str(" · 下次复查时间格式无效"),
+        },
+    }
+    check
+}
+
+fn fault_time(epoch: f64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_opt(epoch as i64, 0)
+        .single()
+        .map(|time| time.format("%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "时间未知".to_string())
+}
+
+fn fault_classification(code: &str) -> String {
+    match code {
+        "upstream_5xx" => "上游 5xx".to_string(),
+        "timeout" => "超时".to_string(),
+        "network_error" => "网络错误".to_string(),
+        "stream_error" => "流中断".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn fault_source(code: &str) -> String {
+    match code {
+        "background_probe" => "后台探测".to_string(),
+        "active_probe" => "主动探测".to_string(),
+        "business_request" => "业务请求".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn fault_result(code: &str) -> String {
+    match code {
+        "valid" => "有效".to_string(),
+        "upstream_5xx" => "上游 5xx".to_string(),
+        "timeout" => "超时".to_string(),
+        "network_error" => "网络错误".to_string(),
+        "non_json_response" => "非 JSON 响应".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The Slint surface of the upstream fault history card.
+///
+/// The shell implements it on the main window; the headless tests implement it on
+/// the same window type so the card's copy and layout stay the tested seam.
+pub trait FaultSurface {
+    fn set_fault_status(&self, status: &str);
+    fn set_fault_tone(&self, tone: Tone);
+    fn set_fault_check(&self, check: &str);
+    fn set_fault_active(&self, active: Option<&FaultRow>);
+    fn set_fault_history(&self, rows: &[FaultRow]);
+}
+
+/// Apply one read result to the fault history card.
+pub fn apply_fault_history<S: FaultSurface>(surface: &S, history: &FaultHistory) {
+    surface.set_fault_status(&history.status);
+    surface.set_fault_tone(history.tone);
+    surface.set_fault_check(&history.check);
+    surface.set_fault_active(history.active.as_ref());
+    surface.set_fault_history(&history.history);
 }

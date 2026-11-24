@@ -1,5 +1,6 @@
 //! Slint view models over the instance ledger and service log.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{FixedOffset, TimeZone};
@@ -39,6 +40,17 @@ impl Range {
             Self::All => "all",
         }
     }
+
+    /// The visible range name used in the export copy.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Today => "今天",
+            Self::Day => "24 小时",
+            Self::Week => "7 天",
+            Self::Month => "30 天",
+            Self::All => "全部",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +77,9 @@ pub struct UsageView {
     pub request_total: String,
     pub coverage: Coverage,
     pub message: String,
+    /// How many ledger rows the read scanned. Zero means there is no usage to
+    /// export even when the range has calendar buckets.
+    pub scanned: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,11 +89,47 @@ pub struct RequestRow {
     pub at: String,
     pub model: String,
     pub result: String,
-    pub input: String,
-    pub output: String,
+    /// Input tokens as the ledger reported them; a missing reading keeps its
+    /// reason instead of folding to zero or a bare dash.
+    pub input: ReadingView,
+    /// Output tokens as the ledger reported them; a missing reading keeps its
+    /// reason instead of folding to zero or a bare dash.
+    pub output: ReadingView,
     pub duration: String,
     pub first_token: String,
     pub detail: String,
+    /// Numeric HTTP status such as `200`; `None` when the response ended
+    /// before a status or the ledger did not record one.
+    pub http_status: Option<String>,
+    /// The error code the gateway wrote (for example `upstream_unavailable`).
+    /// Kept separate from the human-readable message.
+    pub error_code: Option<String>,
+    /// The human-readable error message. Never filled from the code.
+    pub error_message: Option<String>,
+    pub cache_read: ReadingView,
+    pub reasoning: ReadingView,
+    /// Why the first-token reading is unavailable; `None` when it is present.
+    pub first_token_note: Option<String>,
+    pub speed: ReadingView,
+    pub speed_basis: String,
+    /// `None` when the ledger has no request ID and physical retries cannot be
+    /// attached; `Some(empty)` when it recorded the request but no retries.
+    pub retries: Option<Vec<RetryStep>>,
+}
+
+/// One physical retry step attached to a logical request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetryStep {
+    pub at: String,
+    pub note: String,
+}
+
+/// A ledger reading as the detail panel shows it: the formatted amount, or the
+/// ledger's reason why no amount exists. Missing values stay distinct from zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReadingView {
+    pub value: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +182,16 @@ impl RequestSummary {
         // The failure count is the one metric that reads as bad when it is real.
         let failures = self.request_failed.trim();
         let failed = failures != "0" && failures != "—" && !failures.is_empty();
+        // The value already carries Token/秒; a note that repeats it would print
+        // the unit twice, so only the qualifier stays in the detail line.
+        let speed_note = self.speed_note.as_str();
+        let speed_detail = if speed_note.is_empty() {
+            "整次平均，含首字等待"
+        } else {
+            speed_note
+                .strip_prefix("Token/秒 · ")
+                .unwrap_or(speed_note)
+        };
         vec![
             MetricCard {
                 label: "Token".into(),
@@ -153,11 +214,7 @@ impl RequestSummary {
             MetricCard {
                 label: "输出速度".into(),
                 value: speed,
-                detail: if self.speed_note.is_empty() {
-                    "Token/秒 · 整次平均".into()
-                } else {
-                    self.speed_note.clone()
-                },
+                detail: speed_detail.into(),
                 detail_tone: 3,
             },
             MetricCard {
@@ -214,6 +271,32 @@ pub struct RequestPage {
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
     pub chart: RequestChart,
+    /// Models seen anywhere in the selected time window, sorted and deduplicated.
+    /// The model dropdown uses these options; the result and search filters do
+    /// not shrink them.
+    pub models: Vec<String>,
+}
+
+/// What a 加载更早 click should do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EarlierLoad {
+    /// No older page is left; the page shows 没有更早记录.
+    NoMore,
+    /// A 加载更早 read is already in flight; the click is ignored.
+    Busy,
+    /// Read the page at this cursor and append it to the displayed rows.
+    Cursor(String),
+}
+
+/// What appending an older page changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EarlierOutcome {
+    /// `added` older rows now follow the displayed ones.
+    Appended { added: usize },
+    /// No older rows remain; the displayed rows stay on screen.
+    NoMore,
+    /// The ledger could not be read; the displayed rows stay on screen.
+    Failed(String),
 }
 
 /// Page cursor stack and last good page for the request list. `pages` always
@@ -224,10 +307,17 @@ pub struct RequestPage {
 pub struct RequestNav {
     pub pages: Vec<Option<String>>,
     pub earlier: Option<String>,
+    /// The cursor for the next 加载更早 page. It starts at the page anchor's
+    /// cursor and advances independently of the 较新/较早 page stack, so loading
+    /// history never moves the current page.
+    pub append_cursor: Option<String>,
+    /// True while a 加载更早 read is in flight; a second click is ignored.
+    pub appending: bool,
     pub rows: Vec<RequestRow>,
     pub summary: RequestSummary,
     pub model_speeds: Vec<ModelSpeed>,
     pub chart: RequestChart,
+    pub models: Vec<String>,
     pub now: i64,
     pub generation: u64,
 }
@@ -238,6 +328,8 @@ impl RequestNav {
         self.pages.clear();
         self.pages.push(None);
         self.earlier = None;
+        self.append_cursor = None;
+        self.appending = false;
         self.now = now;
         self.generation = self.generation.wrapping_add(1);
         self.pages.last().cloned()
@@ -258,6 +350,8 @@ impl RequestNav {
             -1 => return None,
             _ => return None,
         }
+        self.append_cursor = None;
+        self.appending = false;
         self.generation = self.generation.wrapping_add(1);
         self.pages.last().cloned()
     }
@@ -270,9 +364,63 @@ impl RequestNav {
         if range == Range::Today && beijing_day(self.now) != beijing_day(now) {
             return self.query(now);
         }
+        self.appending = false;
         self.now = now;
         self.generation = self.generation.wrapping_add(1);
         Some(cursor)
+    }
+
+    /// Records a page read at the current anchor. `restart_earlier` resets the
+    /// 加载更早 cursor from this page; a refresh that kept appended rows passes
+    /// `false` so the next 加载更早 continues after them.
+    pub fn apply_page(&mut self, page: &RequestPage, restart_earlier: bool) {
+        self.rows = page.rows.clone();
+        self.earlier = page.earlier.clone();
+        if restart_earlier {
+            self.append_cursor = page.earlier.clone();
+        }
+        self.appending = false;
+        self.summary = page.summary.clone();
+        self.model_speeds = page.model_speeds.clone();
+        self.chart = page.chart.clone();
+        self.models = page.models.clone();
+    }
+
+    /// Starts appending the next older page. The page stack and its anchor stay
+    /// put; only the 加载更早 cursor advances.
+    pub fn begin_earlier(&mut self) -> EarlierLoad {
+        if self.appending {
+            return EarlierLoad::Busy;
+        }
+        let Some(cursor) = self.append_cursor.clone() else {
+            return EarlierLoad::NoMore;
+        };
+        self.appending = true;
+        self.generation = self.generation.wrapping_add(1);
+        EarlierLoad::Cursor(cursor)
+    }
+
+    /// Appends an older page after the displayed rows. Duplicate keys from a
+    /// moved ledger are skipped; the rows already shown stay in place.
+    pub fn finish_earlier(&mut self, page: RequestPage) -> EarlierOutcome {
+        self.appending = false;
+        if page.coverage == Coverage::Unavailable {
+            return EarlierOutcome::Failed(page.message);
+        }
+        let mut seen: HashSet<String> = self.rows.iter().map(|row| row.key.clone()).collect();
+        let before = self.rows.len();
+        for row in page.rows {
+            if seen.insert(row.key.clone()) {
+                self.rows.push(row);
+            }
+        }
+        let added = self.rows.len() - before;
+        self.append_cursor = if added == 0 { None } else { page.earlier };
+        if added == 0 {
+            EarlierOutcome::NoMore
+        } else {
+            EarlierOutcome::Appended { added }
+        }
     }
 }
 
@@ -388,6 +536,97 @@ fn first_token_display(reading: &Value) -> String {
     }
 }
 
+fn reading_note(reading: &Value) -> Option<String> {
+    reading["note"]
+        .as_str()
+        .map(sanitize_text)
+        .filter(|note| !note.is_empty())
+}
+
+fn reading_view(reading: &Value) -> ReadingView {
+    ReadingView {
+        value: amount(reading).map(|value| format!("{}{value}", reading_prefix(reading))),
+        note: reading_note(reading),
+    }
+}
+
+fn rate_view(reading: &Value) -> ReadingView {
+    ReadingView {
+        value: float_amount(reading).map(|value| format!("{}{value:.1}", reading_prefix(reading))),
+        note: reading_note(reading),
+    }
+}
+
+fn speed_basis_label(basis: &str) -> String {
+    match basis {
+        "whole_request" => "整次平均，含等待".into(),
+        "generation" => "生成阶段实测".into(),
+        _ => "口径未知".into(),
+    }
+}
+
+/// A detail line for a reading. Missing values say 不可用 and keep the ledger's
+/// reason; a present value carries its unit and the "already counted in" suffix.
+fn reading_line(label: &str, reading: &ReadingView, unit: &str, suffix: &str) -> String {
+    match &reading.value {
+        Some(value) => format!("{label}  {value}{unit}{suffix}"),
+        None => match &reading.note {
+            Some(note) => format!("{label}  不可用（{note}）"),
+            None => format!("{label}  不可用"),
+        },
+    }
+}
+
+fn http_status_line(row: &RequestRow) -> String {
+    match &row.http_status {
+        Some(status) => format!("HTTP 状态  {status}"),
+        None => "HTTP 状态  不可用（连接在响应前结束或没有记录）".to_string(),
+    }
+}
+
+fn error_lines(row: &RequestRow) -> String {
+    match (&row.error_code, &row.error_message) {
+        (Some(code), Some(message)) => format!("错误代码  {code}\n错误信息  {message}"),
+        (Some(code), None) => {
+            format!("错误代码  {code}\n错误信息  不可用（账本没有记录错误信息）")
+        }
+        (None, Some(message)) => {
+            format!("错误代码  不可用（账本没有记录错误代码）\n错误信息  {message}")
+        }
+        (None, None) if row.result == "成功" => "无".to_string(),
+        (None, None) => {
+            "错误代码  不可用（账本没有记录错误代码）\n错误信息  不可用（账本没有记录错误信息）"
+                .to_string()
+        }
+    }
+}
+
+fn first_token_line(row: &RequestRow) -> String {
+    if row.first_token != "—" {
+        return format!("首字耗时  {}", row.first_token);
+    }
+    match &row.first_token_note {
+        Some(note) => format!("首字耗时  不可用（{note}）"),
+        None => "首字耗时  不可用".to_string(),
+    }
+}
+
+fn retry_lines(row: &RequestRow) -> String {
+    match &row.retries {
+        None => "重试步骤  不可用（缺少 request_id，无法关联物理重试）".to_string(),
+        Some(steps) if steps.is_empty() => "重试步骤  没有记录到重试".to_string(),
+        Some(steps) => {
+            let mut lines = vec!["重试步骤".to_string()];
+            lines.extend(
+                steps
+                    .iter()
+                    .map(|step| format!("- {}  {}", step.at, step.note)),
+            );
+            lines.join("\n")
+        }
+    }
+}
+
 fn coverage(value: &Value, empty: bool, empty_message: &str) -> (Coverage, String) {
     match value["status"].as_str() {
         Some("ok") if empty => (Coverage::Empty, empty_message.to_string()),
@@ -417,6 +656,7 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
                 request_total: "—".into(),
                 coverage: Coverage::Unavailable,
                 message: format!("无法读取选定时间的用量：{error}"),
+                scanned: 0,
             };
         }
     };
@@ -445,6 +685,88 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
         request_total: amount_display(&value["total"]["requests"]),
         coverage,
         message,
+        scanned: value["coverage"]["scanned"].as_u64().unwrap_or(0),
+    }
+}
+
+/// Writes the selected range's usage as CSV to the user-chosen path. A legal
+/// empty range and an unreadable ledger are refused with their own reason, so the
+/// caller never reports a successful export with no rows.
+pub fn export_usage_csv(
+    ledger: &Path,
+    range: Range,
+    now_ms: i64,
+    path: &Path,
+) -> Result<String, String> {
+    let view = read_usage(ledger, range, now_ms);
+    if view.coverage == Coverage::Unavailable {
+        return Err(view.message);
+    }
+    if view.coverage == Coverage::Empty || view.scanned == 0 || view.buckets.is_empty() {
+        return Err(format!("{}没有可导出的用量", range.label()));
+    }
+    let mut csv = String::from("时间,Token,请求数\n");
+    for bucket in &view.buckets {
+        csv.push_str(&format!(
+            "{},{},{}\n",
+            csv_field(&bucket.label),
+            bucket
+                .token_count
+                .map_or_else(String::new, |value| value.to_string()),
+            bucket
+                .request_count
+                .map_or_else(String::new, |value| value.to_string()),
+        ));
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建导出目录 {}：{error}", parent.display()))?;
+    }
+    std::fs::write(path, csv).map_err(|error| format!("无法写入 {}：{error}", path.display()))?;
+    Ok(format!(
+        "已导出{}的 {} 个时段到 {}",
+        range.label(),
+        view.buckets.len(),
+        path.display()
+    ))
+}
+
+/// Writes the displayed request rows as CSV to the given path. An empty list is
+/// refused instead of writing a header-only file.
+pub fn export_requests_csv(rows: &[RequestRow], path: &Path) -> Result<String, String> {
+    if rows.is_empty() {
+        return Err("没有可导出的请求".to_string());
+    }
+    let mut csv = String::from("时间,模型,结果,首字耗时,请求 ID\n");
+    for row in rows {
+        csv.push_str(&format!(
+            "{},{},{},{},{}\n",
+            csv_field(&row.at),
+            csv_field(&row.model),
+            csv_field(&row.result),
+            csv_field(&row.first_token),
+            csv_field(row.request_id.as_deref().unwrap_or("")),
+        ));
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建导出目录 {}：{error}", parent.display()))?;
+    }
+    std::fs::write(path, csv).map_err(|error| format!("无法写入 {}：{error}", path.display()))?;
+    Ok(format!("已导出 {} 条请求到 {}", rows.len(), path.display()))
+}
+
+fn csv_field(text: &str) -> String {
+    if text.chars().any(|ch| matches!(ch, ',' | '"' | '\n' | '\r')) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
     }
 }
 
@@ -460,12 +782,14 @@ pub fn keep_previous_on_failure(previous: &UsageView, next: UsageView) -> UsageV
         request_total: previous.request_total.clone(),
         coverage: Coverage::Unavailable,
         message: format!("刷新失败：{}", next.message),
+        scanned: previous.scanned,
     }
 }
 
 pub fn read_requests(
     ledger: &Path,
     range: Range,
+    model: Option<&str>,
     result_index: i32,
     search: &str,
     cursor: Option<&str>,
@@ -475,14 +799,16 @@ pub fn read_requests(
         1 => "success",
         2 => "failed",
         3 => "truncated",
-        4 => "cancelled",
-        5 => "client_disconnected",
+        4 => "client_disconnected",
+        5 => "cancelled",
+        6 => "unknown",
         _ => "all",
     };
+    let model = model.filter(|model| !model.is_empty());
     let value = match desktop_requests(
         ledger,
         range.key(),
-        None,
+        model,
         result,
         search,
         cursor,
@@ -499,6 +825,7 @@ pub fn read_requests(
                 summary: RequestSummary::default(),
                 model_speeds: Vec::new(),
                 chart: RequestChart::default(),
+                models: Vec::new(),
             };
         }
     };
@@ -507,7 +834,31 @@ pub fn read_requests(
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let (coverage, message) = coverage(&page["coverage"], rows.is_empty(), "没有符合条件的请求。");
+    // An empty page says which empty it is: a filter that matched nothing or a
+    // time window with no requests at all.
+    let filtered = model.is_some() || result_index != 0 || !search.is_empty();
+    let empty_message = if filtered {
+        "没有符合条件的请求。"
+    } else {
+        "所选时间没有请求记录。"
+    };
+    let (coverage, message) = coverage(&page["coverage"], rows.is_empty(), empty_message);
+    let mut models = value["models"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|model| text(model, ""))
+        .collect::<Vec<_>>();
+    // Keep the active model visible even when the selected window has no row
+    // for it; the empty result then explains the filter instead of showing a
+    // dropdown that silently disagrees with the rows.
+    if let Some(model) = model {
+        if !models.iter().any(|candidate| candidate == model) {
+            models.push(model.to_string());
+            models.sort();
+        }
+    }
     RequestPage {
         rows: rows.iter().map(request_row).collect(),
         earlier: page["earlier"].as_str().map(str::to_owned),
@@ -522,6 +873,7 @@ pub fn read_requests(
             .map(model_speed)
             .collect(),
         chart: request_chart(&value),
+        models,
     }
 }
 
@@ -603,6 +955,7 @@ pub fn keep_previous_page_on_failure(previous: &RequestPage, next: RequestPage) 
         summary: previous.summary.clone(),
         model_speeds: previous.model_speeds.clone(),
         chart: previous.chart.clone(),
+        models: previous.models.clone(),
     }
 }
 
@@ -616,10 +969,10 @@ fn request_row(row: &Value) -> RequestRow {
     let result = match row["result"].as_str() {
         Some("success") => "成功",
         Some("failed") => "失败",
-        Some("truncated") => "回复截断",
-        Some("cancelled") => "已取消",
+        Some("truncated") => "截断",
         Some("client_disconnected") => "客户端断开",
-        _ => "结果未知",
+        Some("cancelled") => "已取消",
+        _ => "未知",
     };
     let note = text(&row["resultNote"], "未知");
     let retries = row["retries"].as_array().map(Vec::len);
@@ -627,17 +980,46 @@ fn request_row(row: &Value) -> RequestRow {
         Some(count) => format!("{note}\n已关联的物理重试 {count} 次"),
         None => note,
     };
+    let first_token = first_token_display(&row["firstTokenMs"]);
+    let first_token_note = if first_token == "—" {
+        reading_note(&row["firstTokenMs"])
+    } else {
+        None
+    };
     RequestRow {
         key: text(&row["key"], ""),
         request_id: row["requestId"].as_str().map(str::to_string),
         at: format_at(row["at"].as_i64()),
         model: text(&row["model"], "未知模型"),
         result: result.into(),
-        input: display(&row["input"]),
-        output: display(&row["output"]),
+        input: reading_view(&row["input"]),
+        output: reading_view(&row["output"]),
         duration,
-        first_token: first_token_display(&row["firstTokenMs"]),
+        first_token,
         detail,
+        http_status: row["httpStatus"].as_i64().map(|status| status.to_string()),
+        error_code: row["error"]["code"]
+            .as_str()
+            .map(sanitize_text)
+            .filter(|code| !code.is_empty()),
+        error_message: row["error"]["message"]
+            .as_str()
+            .map(sanitize_text)
+            .filter(|message| !message.is_empty()),
+        cache_read: reading_view(&row["cacheRead"]),
+        reasoning: reading_view(&row["reasoning"]),
+        first_token_note,
+        speed: rate_view(&row["speed"]),
+        speed_basis: speed_basis_label(row["speedBasis"].as_str().unwrap_or("")),
+        retries: row["retries"].as_array().map(|steps| {
+            steps
+                .iter()
+                .map(|step| RetryStep {
+                    at: format_at(step["at"].as_i64()),
+                    note: text(&step["note"], ""),
+                })
+                .collect()
+        }),
     }
 }
 
@@ -686,32 +1068,85 @@ pub fn read_request_logs(
     }
 }
 
-/// Detail text for one ledger row. `logs` is `None` while the matching service
-/// log events are still being read; the finished text only ever includes the
-/// sanitized lines already filtered by [`read_request_logs`].
-pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> String {
-    let mut detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n首字  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
+/// One request's detail panel: the sectioned body plus the raw log disclosure.
+/// `logs` is `None` while the matching service events are still being read; the
+/// log text only ever includes the sanitized lines already filtered by
+/// [`read_request_logs`]. The request ID stays out of the body: the panel header
+/// already shows and copies it, so the body never repeats it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestDetail {
+    pub body: String,
+    pub log_label: String,
+    pub log_note: String,
+    pub log_text: String,
+}
+
+// One rule between the detail body's sections: the monospace TextEdit cannot
+// bold a heading, so a full-width line carries the section boundary instead.
+const SECTION_RULE: &str = "────────────";
+
+pub fn request_detail(row: &RequestRow, logs: Option<&RequestLogs>) -> RequestDetail {
+    // 错误 comes right after 结果: the detail panel's first screen must answer
+    // "did it work and why not" before the duration and token readings, which
+    // sat below the fold in the old 结果 → 耗时 → Token → 错误 order.
+    // A ledger result note that repeats the error message is drawn only once, in
+    // 错误; a distinct note keeps its own 结果说明 line.
+    let mut note_lines = row.detail.lines();
+    let result_note = note_lines.next().unwrap_or("");
+    let result_detail = if row.error_message.as_deref() == Some(result_note) {
+        note_lines.collect::<Vec<_>>().join("\n")
+    } else {
+        row.detail.clone()
+    };
+    let result_section = if result_detail.is_empty() {
+        String::new()
+    } else {
+        format!("  结果说明  {result_detail}\n")
+    };
+    let body = format!(
+        "结果\n  时间  {}\n  结果  {}\n  模型  {}\n  {}\n{}{}\n\n{}\n错误\n{}\n\n{}\n耗时\n  {}\n  {}\n  {}\n  {}\n\n{}\nToken\n  {}\n  {}\n  {}\n  {}",
         row.at,
         row.result,
         row.model,
-        row.request_id.as_deref().unwrap_or("—"),
+        http_status_line(row),
+        result_section,
+        indent(&retry_lines(row)),
+        SECTION_RULE,
+        indent(&error_lines(row)),
+        SECTION_RULE,
         row.duration,
-        row.first_token,
-        row.input,
-        row.output,
-        row.detail
+        first_token_line(row),
+        reading_line("速度", &row.speed, " Token/秒", ""),
+        format!("速度口径  {}", row.speed_basis),
+        SECTION_RULE,
+        reading_line("输入", &row.input, " Token", ""),
+        reading_line("输出", &row.output, " Token", ""),
+        reading_line("缓存读取", &row.cache_read, " Token", "（已含在输入中）"),
+        reading_line("思考 Token", &row.reasoning, "", "（已计入输出）"),
     );
-    match logs {
-        Some(logs) => {
-            detail.push_str("\n\n运行日志\n");
-            detail.push_str(&logs.message);
-            if !logs.lines.is_empty() {
-                detail.push('\n');
-                detail.push_str(&logs.lines.join("\n"));
-            }
-        }
-        None => detail.push_str("\n\n正在读取关联运行日志…"),
+    let (log_label, log_note, log_text) = match logs {
+        Some(logs) => (
+            format!("原始日志（{} 条）", logs.lines.len()),
+            logs.message.clone(),
+            logs.lines.join("\n"),
+        ),
+        None => (
+            "原始日志".to_string(),
+            "正在读取关联运行日志…".to_string(),
+            String::new(),
+        ),
+    };
+    RequestDetail {
+        body,
+        log_label,
+        log_note,
+        log_text,
     }
-    detail
+}
+
+fn indent(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

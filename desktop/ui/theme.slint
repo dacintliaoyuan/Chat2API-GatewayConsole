@@ -1,4 +1,4 @@
-import { Palette } from "std-widgets.slint";
+import { Palette, ListView } from "std-widgets.slint";
 import { AppIcon } from "icons.slint";
 
 // Magpie's product palette: near-neutral surfaces, one blue accent, green for
@@ -17,6 +17,10 @@ export global Theme {
     // Mirrors the system choice from Palette. It stays in-out so the headless
     // tests can drive the same derivation without a native window.
     in-out property <bool> system-dark: Palette.color-scheme == ColorScheme.dark;
+    // Turns off the remaining semi-transparent layers: card and overlay shadows
+    // and the badge fill that normally sits on the accent. It is a real visual
+    // effect, not a saved-only preference.
+    in-out property <bool> reduce-transparency: false;
     out property <bool> dark: theme-mode == 2 || (theme-mode == 0 && system-dark);
 
     out property <color> background: dark ? #1a1a1c : #f5f5f7;
@@ -32,9 +36,11 @@ export global Theme {
     out property <color> edge-control: dark ? #6a6a6e : #8e8e93;
     out property <color> edge-control-strong: dark ? #a0a0a8 : #6e6e73;
     out property <color> ink: dark ? #f5f5f7 : #1d1d1f;
-    // Secondary text follows the product palette (#6e6e73 / #b0b0b8); both clear
-    // AA against the page and card surfaces.
-    out property <color> muted: dark ? #b0b0b8 : #6e6e73;
+    // Secondary text follows the product palette (#6d6d72 / #b0b0b8); both
+    // clear AA against the page, card and field surfaces. The light value is
+    // one step darker than #6e6e73 so a disabled action's muted label still
+    // clears 4.5:1 on the #f0f0f2 field fill.
+    out property <color> muted: dark ? #b0b0b8 : #6d6d72;
     out property <color> accent: dark ? #0a84ff : #0071e3;
     out property <color> accent-strong: dark ? #409cff : #0062c4;
     out property <color> on-accent: dark ? #06121f : #ffffff;
@@ -63,8 +69,11 @@ export global Theme {
     out property <color> grid: dark ? #2c2c2e : #e4e4e7;
     out property <color> data: dark ? #f5f5f7 : #1d1d1f;
     out property <color> hover: dark ? #2c2c2e : #f0f0f2;
-    out property <color> selected: dark ? #2c2c2e : #e8f2ff;
-    out property <color> card-shadow: dark ? #00000066 : #00000012;
+    // A selected row keeps the accent-soft blue in both themes; the dark value
+    // is not the hover fill, so selected and hover never look identical.
+    out property <color> selected: dark ? #0b2946 : #e8f2ff;
+    out property <color> card-shadow: reduce-transparency ? transparent
+        : dark ? #00000066 : #00000012;
     out property <string> font-display: "Segoe UI";
     out property <string> font-body: "Segoe UI";
     out property <string> font-data: "Consolas";
@@ -171,23 +180,33 @@ export component Tag inherits Rectangle {
 }
 
 // A list row. The hover and selected fills sit inside the row so adjacent rows
-// stay separate instead of forming one solid block.
+// stay separate instead of forming one solid block. Keyboard focus adds a 1 px
+// control-strength inset edge, so Tab into a list is visible instead of only the
+// ~1.1:1 hover fill.
 export component Selectable inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     callback activate();
     min-height: 36px;
     background: transparent;
+    // Test seams: the actual fill and the focus ring the row draws.
+    out property <bool> focus-visible: keyboard.has-focus;
+    out property <color> fill-tint: row-fill.background;
+    out property <color> focus-edge: row-fill.border-color;
+    out property <length> focus-edge-width: row-fill.border-width;
+    public function take-focus() { keyboard.focus(); }
     row-fill := Rectangle {
         x: 2px;
         y: 2px;
         width: parent.width - 4px;
         height: parent.height - 4px;
         border-radius: 5px;
+        border-width: keyboard.has-focus ? 1px : 0px;
+        border-color: Theme.edge-control-strong;
         background: root.selected ? Theme.selected
             : keyboard.has-focus ? Theme.hover
             : pointer.has-hover ? Theme.hover : transparent;
-        animate background { duration: Theme.quick; easing: ease-in-out; }
+        animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
     }
     @children
     keyboard := FocusScope {
@@ -215,8 +234,14 @@ export component FocusAction inherits Rectangle {
     in property <bool> quiet: false;
     in property <bool> danger: false;
     in property <bool> link: false;
+    // A trigger that owns an open overlay keeps the selected fill and edge
+    // instead of the quiet resting surface, so the overlay has a visible anchor.
+    in property <bool> active: false;
     in property <bool> enabled: true;
     in property <string> icon: "";
+    // A trailing glyph points at the destination a navigation action opens;
+    // the leading icon stays empty so the arrow never reads as a bullet.
+    in property <string> icon-after: "";
     // Manual refresh buttons rotate their glyph for 600 ms; the reset to zero
     // is static so the completed turn never animates backwards.
     in property <angle> icon-rotation: 0deg;
@@ -226,6 +251,34 @@ export component FocusAction inherits Rectangle {
     // and the same text is exposed to assistive technology.
     in property <string> tooltip: "";
     out property <bool> has-focus: focus.has-focus;
+    // Test seams: a quiet button keeps a 1 px transparent frame so keyboard
+    // focus can step it up to the 3:1 control edge instead of relying on the
+    // ~1.1:1 hover fill alone.
+    // Test seams: the colours the danger label, icon and frame actually draw.
+    // The label and icon use `bad-text` so a 12 px red label clears 4.5:1 on
+    // both surfaces; the frame keeps the vivid red for its 3:1 non-text edge.
+    // A disabled action draws its own resting state instead of dimming the
+    // enabled colours: the neutral field fill, the control edge and the muted
+    // label. Dimming the accent button to 55 % left a pale blue frame that
+    // still read as a focused primary action and dropped the label under 4.5:1.
+    out property <color> label-tint: !root.enabled ? Theme.muted
+        : root.active ? Theme.accent
+        : root.primary ? Theme.on-accent
+        : root.danger ? Theme.bad-text
+        : root.link ? Theme.accent : Theme.ink;
+    out property <color> icon-tint: root.label-tint;
+    out property <color> frame-tint: root.border-color;
+    out property <color> focus-ring-color: root.border-color;
+    out property <length> focus-ring-width: root.border-width;
+    // A disabled action never counts as a visible focus target: it cannot be
+    // tabbed to (the FocusScope is disabled too) and its edge is the resting
+    // control edge, not the focus step. A primary action draws its focus as a
+    // 2 px outer ring instead of stepping the accent border, so the 3:1 neutral
+    // ring is visible against the page around the blue fill.
+    out property <bool> focus-visible:
+        root.enabled && focus.has-focus && (root.primary
+            || root.border-color == Theme.edge-control-strong
+            || (root.danger && root.border-color == Theme.bad-text));
     callback clicked();
     public function take-focus() { focus.focus(); }
     height: Theme.control-height;
@@ -233,15 +286,27 @@ export component FocusAction inherits Rectangle {
     // Keyboard focus darkens the fill or steps the neutral edge up; it never
     // draws a blue outline.
     background: !root.enabled ? Theme.field
+        : root.active ? Theme.accent-soft
         : root.primary ? (pointer.pressed || pointer.has-hover || focus.has-focus ? Theme.accent-strong : Theme.accent)
         : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
         : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
-    border-width: root.quiet || root.link ? 0px : 1px;
-    border-color: root.danger ? Theme.bad : root.primary ? Theme.accent : focus.has-focus ? Theme.edge-strong : Theme.edge;
-    opacity: root.enabled ? 1 : 0.55;
+    // Quiet and link actions keep the transparent frame at rest so their focus
+    // border never shifts the text by a pixel. A danger action keeps the red
+    // edge, but its label and icon use `bad-text`: #ff3b30 is only 3.6:1 on
+    // white, while #a9271c clears 4.5:1 for the 12 px label. Focus steps the
+    // edge to the same readable red instead of the neutral control edge, so the
+    // red identity survives keyboard focus.
+    border-width: 1px;
+    border-color: !root.enabled ? Theme.edge-control
+        : root.active ? Theme.accent
+        : root.quiet || root.link
+        ? (focus.has-focus ? Theme.edge-control-strong : transparent)
+        : root.danger ? (focus.has-focus ? Theme.bad-text : Theme.bad)
+        : root.primary ? Theme.accent
+        : focus.has-focus ? Theme.edge-control-strong
+        : Theme.edge;
     animate background { duration: Theme.quick; easing: ease-in-out; }
     animate border-color { duration: Theme.quick; easing: ease-in-out; }
-    animate opacity { duration: Theme.quick; easing: ease-in-out; }
     HorizontalLayout {
         padding-left: root.icon-only ? 0px : 10px;
         padding-right: root.icon-only ? 0px : 10px;
@@ -253,7 +318,7 @@ export component FocusAction inherits Rectangle {
         if !root.icon.is-empty : AppIcon {
             size: root.icon-only ? 17px : 15px;
             kind: root.icon;
-            tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+            tint: root.icon-tint;
             transform-rotation: root.icon-rotation;
             animate transform-rotation {
                 duration: root.icon-rotation == 0deg ? 0ms : 150ms;
@@ -262,16 +327,23 @@ export component FocusAction inherits Rectangle {
         }
         if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
-            color: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
+            color: root.label-tint;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
             animate color { duration: Theme.quick; easing: ease-in-out; }
         }
+        if !root.icon-after.is-empty && !root.icon-only : AppIcon {
+            size: 13px;
+            kind: root.icon-after;
+            tint: root.icon-tint;
+            vertical-alignment: center;
+        }
         if !root.badge.is-empty : Rectangle {
             height: 17px;
             border-radius: 4px;
-            background: root.primary ? Theme.on-accent.with-alpha(0.22) : Theme.accent-soft;
+            background: root.primary ? (Theme.reduce-transparency
+                ? Theme.on-accent : Theme.on-accent.with-alpha(0.22)) : Theme.accent-soft;
             HorizontalLayout {
                 padding-left: 5px;
                 padding-right: 5px;
@@ -286,6 +358,9 @@ export component FocusAction inherits Rectangle {
         }
     }
     focus := FocusScope {
+        // A disabled action is not a tab stop either: the frame, the label and
+        // the fill already say 不可用, so focus must not land on it.
+        enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 if (root.enabled) { root.clicked(); }
@@ -299,9 +374,25 @@ export component FocusAction inherits Rectangle {
         mouse-cursor: MouseCursor.pointer;
         clicked => { focus.focus(); root.clicked(); }
     }
+    // A primary action fills with the accent, so its own 1 px border cannot
+    // carry a 3:1 focus step. Draw a 2 px control-strength ring just outside
+    // the button instead; it reads against the page like every other focus ring.
+    if root.enabled && root.primary && focus.has-focus : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 9px;
+        border-width: 2px;
+        border-color: Theme.edge-control-strong;
+        background: transparent;
+    }
     if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
     accessible-role: button;
-    accessible-label: root.label;
+    // A badge is visible inside a 30 px icon button, so the count must also
+    // reach assistive technology instead of living only in the glyph.
+    accessible-label: root.badge.is-empty
+        ? root.label : root.label + "，" + root.badge + " 条新日志";
     accessible-description: root.tooltip;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 }
@@ -334,7 +425,7 @@ export component Segmented inherits Rectangle {
         background: Theme.accent-soft;
         drop-shadow-offset-y: 1px;
         drop-shadow-blur: 2px;
-        drop-shadow-color: #00000014;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000014;
         animate x, width { duration: Theme.settle; easing: ease-out; }
         animate background { duration: Theme.quick; easing: ease-in-out; }
     }
@@ -390,6 +481,152 @@ export component Segmented inherits Rectangle {
     accessible-label: root.label;
 }
 
+// A compact select for short option lists: the button keeps the field language,
+// and the option list opens below it without changing the row height.
+export component Dropdown inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current-index: 0;
+    in property <string> label: "选项";
+    // Hover and assistive copy for the closed set; the tooltip never changes
+    // the control's layout height.
+    in property <string> tooltip: "";
+    in property <bool> enabled: true;
+    callback selected(int);
+    out property <bool> open: self.is-open;
+    in-out property <bool> is-open: false;
+    out property <length> option-height: 30px;
+    out property <length> list-x: options-panel.absolute-position.x;
+    out property <length> list-y: options-panel.absolute-position.y;
+    out property <length> list-width: options-panel.width;
+    out property <length> list-height: options-panel.height;
+    out property <int> option-count: root.options.length;
+    out property <string> current-text: root.options.length > 0
+        && root.current-index >= 0 && root.current-index < root.options.length
+        ? root.options[root.current-index] : "";
+
+    height: Theme.control-height;
+    background: focus.has-focus ? Theme.field-strong : Theme.field;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: focus.has-focus ? Theme.edge-control-strong : Theme.edge-control;
+    opacity: root.enabled ? 1 : 0.55;
+    animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 4px;
+        Text {
+            text: root.current-text.is-empty ? "全部" : root.current-text;
+            color: Theme.ink;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        AppIcon {
+            width: 14px;
+            height: 14px;
+            kind: "chevron-down";
+            tint: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.is-open = !root.is-open;
+                return accept;
+            }
+            if (event.text == Key.Escape && root.is-open) {
+                root.is-open = false;
+                return accept;
+            }
+            if (event.text == Key.LeftArrow && root.current-index > 0) {
+                root.current-index -= 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.current-index + 1 < root.options.length) {
+                root.current-index += 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            if (!root.enabled) { return; }
+            focus.focus();
+            root.is-open = !root.is-open;
+        }
+    }
+    // The list floats above the page; z keeps it above the next filter row and
+    // the analytics card without changing the layout height.
+    options-panel := Rectangle {
+        x: 0;
+        y: root.height + 2px;
+        width: max(root.width, 168px);
+        height: root.options.length == 0 ? 0px
+            : min(root.options.length * root.option-height + 8px, 240px);
+        visible: root.is-open && root.options.length > 0;
+        z: 50;
+        background: Theme.surface;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000022;
+        ListView {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            for item[index] in root.options : Rectangle {
+                height: root.option-height;
+                border-radius: 4px;
+                background: index == root.current-index ? Theme.accent-soft : transparent;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height;
+                    text: item;
+                    color: Theme.ink;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => {
+                        root.current-index = index;
+                        root.is-open = false;
+                        root.selected(index);
+                    }
+                }
+                accessible-role: radio-button;
+                accessible-label: item;
+                accessible-checked: index == root.current-index;
+                accessible-action-default => {
+                    root.current-index = index;
+                    root.is-open = false;
+                    root.selected(index);
+                }
+            }
+        }
+    }
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-description: root.tooltip;
+    accessible-expanded: root.is-open;
+    accessible-action-default => { root.is-open = !root.is-open; }
+    if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
 export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
@@ -400,6 +637,9 @@ export component Field inherits VerticalLayout {
     in property <bool> clearable: false;
     in property <bool> enabled: true;
     in property <bool> invalid: false;
+    // Long values such as the export path elide at rest; the tooltip keeps the
+    // full value readable without changing the field's one-line layout.
+    in property <string> tooltip: "";
     out property <bool> has-focus: input.has-focus;
     out property <bool> input-selected: input.has-selection;
     // Test seam: the clear control is only visible while the field has text.
@@ -442,6 +682,7 @@ export component Field inherits VerticalLayout {
             kind: root.icon;
             tint: Theme.muted;
         }
+        if !root.tooltip.is-empty : Tooltip { text: @markdown("\{root.tooltip}"); }
         // The input fills the box below the border and centers its single line,
         // so the text sits in the middle at any font metric or DPI.
         input := TextInput {
@@ -524,7 +765,11 @@ export component Toggle inherits Rectangle {
             border-radius: 4px;
             background: root.checked ? Theme.accent : focus.has-focus ? Theme.field-strong : Theme.field;
             border-width: 1px;
-            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-strong : pointer.has-hover ? Theme.edge-strong : Theme.edge;
+            // Keyboard focus uses the control-strength edge (3:1); the old
+            // edge-strong sat at about 2.1:1 on the page. The unchecked box
+            // keeps the same 3:1 boundary at rest so the level filter is
+            // visible before it is selected.
+            border-color: root.checked ? Theme.accent : focus.has-focus ? Theme.edge-control-strong : pointer.has-hover ? Theme.edge-control-strong : Theme.edge-control;
             animate background, border-color { duration: Theme.quick; easing: ease-in-out; }
             AppIcon {
                 x: (parent.width - self.width) / 2;
@@ -581,7 +826,12 @@ export component NavItem inherits Rectangle {
     background: root.selected ? Theme.rail-selected
         : keyboard.has-focus ? Theme.rail-hover
         : pointer.has-hover ? Theme.rail-hover : transparent;
+    // A selected item keeps its accent-soft fill, so keyboard focus needs its
+    // own neutral 3:1 edge instead of relying on the fill step.
+    border-width: 1px;
+    border-color: keyboard.has-focus ? Theme.edge-control-strong : transparent;
     animate background { duration: Theme.quick; easing: ease-in-out; }
+    animate border-color { duration: Theme.quick; easing: ease-in-out; }
     keyboard := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
@@ -612,7 +862,35 @@ export component NavItem inherits Rectangle {
             animate color { duration: Theme.quick; easing: ease-in-out; }
         }
     }
-    if !root.icon.is-empty && root.compact : Tooltip { text: @markdown("\{root.label}"); }
+    // The compact rail keeps only the icon; hover uses the platform tooltip,
+    // and keyboard focus draws the same label beside the icon so Tab never
+    // leaves an unnamed icon.
+    if !root.icon.is-empty && root.compact : Tooltip {
+        text: @markdown("\{root.label}");
+    }
+    if root.compact && keyboard.has-focus : Rectangle {
+        x: root.width + 6px;
+        y: (root.height - self.height) / 2;
+        width: root.label.character-count * 13px + 18px;
+        height: 26px;
+        z: 30;
+        border-radius: 5px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.edge;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: Theme.reduce-transparency ? transparent : #00000018;
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+    }
     pointer := TouchArea {
         mouse-cursor: MouseCursor.pointer;
         clicked => { keyboard.focus(); root.activate(); }

@@ -5,7 +5,8 @@ use std::path::Path;
 
 use chrono::{Local, TimeZone};
 use um_desktop::logstream::{
-    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, LOG_ROW_HEIGHT,
+    format_log_time, plan_log_page, read_history, LevelFilter, LiveLog, LogReadError, LogStream,
+    LOG_ROW_HEIGHT,
 };
 
 mod common;
@@ -197,12 +198,11 @@ fn replacement_with_the_same_length_resets_by_content_not_by_length() {
 }
 
 #[test]
-fn a_missing_file_is_an_error_with_the_path_not_an_empty_window() {
+fn a_missing_file_is_the_empty_state_without_a_read_failure() {
     let dir = TempDir::new("logstream-missing");
     let path = dir.path().join("missing.log");
-    let error = LogStream::open(&path).expect_err("missing log must fail");
-    assert!(error.contains("missing.log"), "{error}");
-    assert!(error.contains("读取日志失败"), "{error}");
+    let error = LogStream::open(&path).expect_err("a missing log has no window yet");
+    assert_eq!(error, LogReadError::Missing);
 
     append(&path, "appeared\n");
     let stream = LogStream::open(&path).expect("open appeared log");
@@ -210,13 +210,16 @@ fn a_missing_file_is_an_error_with_the_path_not_an_empty_window() {
 }
 
 #[test]
-fn a_directory_is_an_error_not_an_empty_window() {
+fn a_directory_is_a_read_failure_not_an_empty_window() {
     let dir = TempDir::new("logstream-directory");
     let error = LogStream::open(dir.path()).expect_err("a directory must not open as a log");
-    assert!(error.contains("logstream-directory"), "{error}");
+    let LogReadError::Failed(reason) = &error else {
+        panic!("a directory must be a read failure, got {error:?}");
+    };
+    assert!(reason.contains("logstream-directory"), "{reason}");
     assert!(
-        error.contains("读取日志失败") || error.contains("不是文件"),
-        "{error}"
+        reason.contains("读取日志失败") || reason.contains("不是文件"),
+        "{reason}"
     );
 }
 
@@ -226,16 +229,23 @@ fn a_poll_error_keeps_the_previous_window_for_the_next_retry() {
     let path = dir.path().join("service.log");
     append(&path, "a\n");
     let mut stream = LogStream::open(&path).expect("open log");
+    // A directory in place of the file is a real read failure, not a missing
+    // file: the previous window must survive for the retry.
     std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
 
-    let error = stream.poll().expect_err("deleted log must fail");
-    assert!(error.contains("service.log"), "{error}");
+    let error = stream.poll().expect_err("an unreadable log must fail");
+    let LogReadError::Failed(reason) = &error else {
+        panic!("an unreadable log must be a read failure, got {error:?}");
+    };
+    assert!(reason.contains("service.log"), "{reason}");
     assert_eq!(
         texts(&stream),
         vec!["a"],
         "a failed poll must keep the shown lines"
     );
 
+    std::fs::remove_dir(&path).unwrap();
     append(&path, "b\n");
     let outcome = stream.poll().expect("poll recreated log");
     assert!(outcome.reset, "a recreated file must reset the window");
@@ -514,8 +524,8 @@ fn a_recovered_file_backfills_without_duplicating_the_kept_window() {
     append(&path, "a\n");
     let mut stream = LogStream::open(&path).expect("open log");
     std::fs::remove_file(&path).unwrap();
-    let error = stream.poll().expect_err("a missing log must fail");
-    assert!(error.contains("service.log"), "{error}");
+    let error = stream.poll().expect_err("a vanished log has no window to read");
+    assert_eq!(error, LogReadError::Missing);
     assert_eq!(texts(&stream), vec!["a"]);
 
     append(&path, "a\nb\n");
@@ -649,7 +659,7 @@ fn a_history_cursor_past_the_file_is_an_error_not_an_empty_page() {
 
     let error = read_history(&path, Some(length + 1), 0, LevelFilter::All, "")
         .expect_err("a cursor past the file must fail");
-    assert!(error.contains("轮换"), "{error}");
+    assert!(error.to_string().contains("轮换"), "{error}");
 }
 
 #[test]
@@ -718,4 +728,63 @@ fn append_to_poll_latency_p95_stays_under_500_ms() {
         p95 <= std::time::Duration::from_millis(500),
         "p95 read latency {p95:?} exceeded 500ms"
     );
+}
+
+#[test]
+fn a_live_log_reports_a_missing_file_once_as_the_empty_state() {
+    let dir = TempDir::new("logstream-live-missing");
+    let path = dir.path().join("gateway.log");
+    let mut live = LiveLog::new(&path);
+
+    let tick = live
+        .read(false)
+        .expect("a missing log must yield the empty state");
+    assert_eq!(tick.failure, None, "a missing log is not a failure");
+    assert!(tick.reset, "the empty state must replace the page rows");
+    assert!(tick.entries.is_empty());
+    assert!(
+        live.read(false).is_none(),
+        "the empty state must be reported once, not every tick"
+    );
+    assert!(
+        live.read(true).is_some(),
+        "an explicit refresh must re-read the empty state"
+    );
+
+    append(&path, "{\"event\":\"first\"}\n");
+    let tick = live.read(false).expect("the appeared log must open");
+    assert_eq!(tick.failure, None);
+    assert_eq!(tick.entries.len(), 1);
+    assert!(tick.entries[0].entry.text.contains("first"));
+    assert!(tick.reset);
+    assert!(live.read(false).is_none(), "a quiet log must not rebuild");
+}
+
+#[test]
+fn a_live_log_reports_a_read_failure_once_until_the_file_recovers() {
+    let dir = TempDir::new("logstream-live-failure");
+    let path = dir.path().join("gateway.log");
+    std::fs::create_dir(&path).unwrap();
+    let mut live = LiveLog::new(&path);
+
+    let tick = live.read(false).expect("a directory must fail");
+    let failure = tick.failure.clone().expect("a directory is a read failure");
+    assert!(failure.contains("gateway.log"), "{failure}");
+    assert!(tick.entries.is_empty());
+    assert!(
+        live.read(false).is_none(),
+        "the same failure must be reported once"
+    );
+    assert!(
+        live.read(true).is_some(),
+        "an explicit refresh must retry and report the failure again"
+    );
+
+    std::fs::remove_dir(&path).unwrap();
+    append(&path, "{\"event\":\"recovered\"}\n");
+    let tick = live.read(false).expect("the recovered log must open");
+    assert_eq!(tick.failure, None);
+    assert!(tick.reset);
+    assert_eq!(tick.entries.len(), 1);
+    assert!(tick.entries[0].entry.text.contains("recovered"));
 }

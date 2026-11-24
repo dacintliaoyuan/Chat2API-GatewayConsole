@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -420,6 +420,7 @@ pub struct ProxyState {
     effort_models: Vec<String>,
     upstream: UpstreamClient,
     faults: UpstreamFaultLog,
+    admin: crate::admin::AdminState,
     pub(crate) recovery: Option<crate::upstream_recovery::Recovery>,
 }
 
@@ -462,11 +463,23 @@ impl ProxyState {
             effort_models: config.effort_models.clone(),
             upstream: UpstreamClient::from_config(config)?,
             faults: UpstreamFaultLog::open(config.effective_upstream_fault_log()),
+            admin: crate::admin::AdminState::new(config),
             recovery: (config.role == Role::Local
                 && config.run_mode == crate::config::RunMode::Worker
                 && !config.desktop_instance)
                 .then(crate::upstream_recovery::Recovery::new),
         })
+    }
+
+    /// The desktop admin read state: bound address, in-process probes and the
+    /// last stop marker.
+    pub fn admin_state(&self) -> &crate::admin::AdminState {
+        &self.admin
+    }
+
+    /// Publish the actually bound loopback address once the listener exists.
+    pub fn set_bound_addr(&self, addr: SocketAddr) {
+        self.admin.set_bound_addr(addr);
     }
 
     /// One public `/api/config` observation, without the user's bearer.
@@ -1263,6 +1276,64 @@ impl ProxyState {
             "checked_epoch": epoch_now() as u64,
             "note": "single-shot upstream /api/models probe; auth state and model cache untouched",
         })
+    }
+
+    /// One billed context-probe request against the upstream chat endpoint.
+    ///
+    /// The admin probe runner reuses the same upstream client and credential
+    /// fallback as every other gateway call; it never builds a second UM client.
+    pub(crate) fn probe_chat(
+        &self,
+        model_id: &str,
+        input_chars: i64,
+        max_tokens: i64,
+    ) -> crate::admin::ProbeCall {
+        let credential = self.upstream_credential();
+        let content = format!(
+            "The user message below contains numbered anchor lines. Reply with ONLY the text of the FINAL anchor line, verbatim, nothing else.\n\n{}anchor-{input_chars}",
+            "x".repeat(input_chars.max(0) as usize)
+        );
+        let body = json!({
+            "model": model_id,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+            "stream": false,
+        });
+        let payload = serde_json::to_vec(&body).unwrap_or_default();
+        let mut response = match self.upstream.request(
+            "POST",
+            "/api/chat/completions",
+            Some(&credential.value),
+            Some(&payload),
+            crate::admin::PROBE_TIMEOUT,
+        ) {
+            Ok(response) => response,
+            Err(failure) => return crate::admin::ProbeCall::Failure(failure.name()),
+        };
+        if credential.api_key && matches!(response.status, 401 | 403) {
+            self.mark_api_key_rejected();
+            self.record_auth_rejection(
+                response.status,
+                summarize_error_text(&String::from_utf8_lossy(&response.body)),
+            );
+            let bearer = self.bearer();
+            if !bearer.is_empty() {
+                response = match self.upstream.request(
+                    "POST",
+                    "/api/chat/completions",
+                    Some(&bearer),
+                    Some(&payload),
+                    crate::admin::PROBE_TIMEOUT,
+                ) {
+                    Ok(response) => response,
+                    Err(failure) => return crate::admin::ProbeCall::Failure(failure.name()),
+                };
+            }
+        }
+        crate::admin::ProbeCall::Response {
+            status: response.status,
+            body: serde_json::from_slice(&response.body).unwrap_or(Value::Null),
+        }
     }
 }
 

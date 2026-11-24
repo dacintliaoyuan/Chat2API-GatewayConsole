@@ -5,8 +5,9 @@ use std::path::Path;
 use chrono::DateTime;
 use serde_json::{json, Value};
 use um_desktop::usage::{
-    keep_previous_on_failure, keep_previous_page_on_failure, read_request_logs, read_requests,
-    read_usage, request_detail, Coverage, Range, RequestNav, RequestSummary,
+    export_requests_csv, export_usage_csv, keep_previous_on_failure, keep_previous_page_on_failure,
+    read_request_logs, read_requests, read_usage, request_detail, Coverage, Range, RequestNav,
+    RequestSummary,
 };
 
 const REQUEST: &str = "f314e7d8c7526367baec95ac155b6406";
@@ -191,7 +192,7 @@ fn request_page_keeps_summary_model_speeds_chart_and_first_token_across_the_page
         .collect::<Vec<_>>();
     write_rows(&ledger, &rows);
     let now = time("2026-11-20T19:00:00+08:00");
-    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     assert_eq!(page.rows.len(), 60, "the page still holds 60 rows");
     assert_eq!(page.summary.token_total, "1,400");
     assert_eq!(page.summary.request_total, "70");
@@ -291,16 +292,43 @@ fn request_metric_cards_include_first_token_and_keep_missing_as_a_dash() {
 }
 
 #[test]
+fn the_output_speed_card_keeps_the_unit_out_of_its_detail_line() {
+    let summary = RequestSummary {
+        speed: "38.6".into(),
+        speed_note: "Token/秒 · 整次平均".into(),
+        ..RequestSummary::default()
+    };
+    let card = &summary.cards()[3];
+    assert_eq!(card.value, "38.6 Token/秒");
+    assert!(
+        !card.detail.contains("Token/秒"),
+        "the value already carries the unit: {}",
+        card.detail
+    );
+
+    let fallback = RequestSummary {
+        speed: "38.6".into(),
+        speed_note: String::new(),
+        ..RequestSummary::default()
+    };
+    let card = &fallback.cards()[3];
+    assert!(!card.detail.contains("Token/秒"), "{}", card.detail);
+}
+
+#[test]
 fn request_detail_shows_first_token_or_a_dash_for_legacy_rows() {
     let tmp = common::TempDir::new("usage-first-token");
     let ledger = tmp.path().join("usage.jsonl");
     write_rows(&ledger, &[row("2026-11-20T00:01:00+08:00", "ok", 8, 2)]);
     let now = time("2026-11-20T19:00:00+08:00");
-    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let request = &page.rows[0];
     assert_eq!(request.first_token, "—");
-    let detail = request_detail(request, None);
-    assert!(detail.contains("首字  —"));
+    let detail = request_detail(request, None).body;
+    assert!(
+        detail.contains("首字耗时  不可用（账本没有记录首字耗时，不推算）"),
+        "{detail}"
+    );
     assert_eq!(page.summary.first_token, "—");
 }
 
@@ -334,11 +362,12 @@ fn diagnostics_search_page_and_link_only_matches_for_this_request() {
         ],
     );
     let now = time("2026-11-20T19:00:00+08:00");
-    let first = read_requests(&ledger, Range::Today, 1, "FIXTURE-MODEL", None, now);
+    let first = read_requests(&ledger, Range::Today, None, 1, "FIXTURE-MODEL", None, now);
     assert_eq!(first.rows.len(), 60);
     let next = read_requests(
         &ledger,
         Range::Today,
+        None,
         1,
         "FIXTURE-MODEL",
         first.earlier.as_deref(),
@@ -355,7 +384,7 @@ fn diagnostics_search_page_and_link_only_matches_for_this_request() {
     assert_eq!(related.lines.len(), 1);
     assert!(!related.lines[0].contains("secret-must-not-escape"));
     assert_eq!(
-        read_requests(&ledger, Range::Today, 2, "", None, now).coverage,
+        read_requests(&ledger, Range::Today, None, 2, "", None, now).coverage,
         Coverage::Empty
     );
 }
@@ -411,7 +440,7 @@ fn success_failure_stream_and_embeddings_rows_are_counted_from_the_ledger() {
     assert_eq!(today.buckets[0].token_count, Some(177));
     assert_eq!(today.buckets[0].request_count, Some(4));
 
-    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     assert_eq!(page.rows.len(), 4);
     assert_eq!(
         page.rows.iter().filter(|row| row.result == "成功").count(),
@@ -629,40 +658,40 @@ fn diagnostics_filter_by_time_result_and_keyword() {
     );
     let now = time("2026-11-20T19:00:00+08:00");
     assert_eq!(
-        read_requests(&ledger, Range::Today, 0, "", None, now)
+        read_requests(&ledger, Range::Today, None, 0, "", None, now)
             .rows
             .len(),
         2
     );
     assert_eq!(
-        read_requests(&ledger, Range::Day, 0, "", None, now)
+        read_requests(&ledger, Range::Day, None, 0, "", None, now)
             .rows
             .len(),
         2
     );
     assert_eq!(
-        read_requests(&ledger, Range::Week, 0, "", None, now)
+        read_requests(&ledger, Range::Week, None, 0, "", None, now)
             .rows
             .len(),
         3
     );
     assert_eq!(
-        read_requests(&ledger, Range::Month, 0, "", None, now)
+        read_requests(&ledger, Range::Month, None, 0, "", None, now)
             .rows
             .len(),
         4
     );
     assert_eq!(
-        read_requests(&ledger, Range::All, 0, "", None, now)
+        read_requests(&ledger, Range::All, None, 0, "", None, now)
             .rows
             .len(),
         5
     );
 
-    let success = read_requests(&ledger, Range::Month, 1, "", None, now);
+    let success = read_requests(&ledger, Range::Month, None, 1, "", None, now);
     assert_eq!(success.rows.len(), 2);
     assert!(success.rows.iter().all(|row| row.result == "成功"));
-    let failed = read_requests(&ledger, Range::Month, 2, "", None, now);
+    let failed = read_requests(&ledger, Range::Month, None, 2, "", None, now);
     assert_eq!(failed.rows.len(), 2);
     assert!(failed.rows.iter().all(|row| row.result == "失败"));
     assert!(failed
@@ -670,15 +699,23 @@ fn diagnostics_filter_by_time_result_and_keyword() {
         .iter()
         .any(|row| row.detail.contains("上游不可用")));
 
-    let by_model = read_requests(&ledger, Range::Month, 0, "ALPHA", None, now);
+    let by_model = read_requests(&ledger, Range::Month, None, 0, "ALPHA", None, now);
     assert_eq!(by_model.rows.len(), 2);
-    let by_request_id = read_requests(&ledger, Range::Month, 0, &OTHER_REQUEST[..8], None, now);
+    let by_request_id = read_requests(
+        &ledger,
+        Range::Month,
+        None,
+        0,
+        &OTHER_REQUEST[..8],
+        None,
+        now,
+    );
     assert_eq!(by_request_id.rows.len(), 1);
     assert_eq!(
         by_request_id.rows[0].request_id.as_deref(),
         Some(OTHER_REQUEST)
     );
-    let no_match = read_requests(&ledger, Range::Month, 0, "gamma", None, now);
+    let no_match = read_requests(&ledger, Range::Month, None, 0, "gamma", None, now);
     assert!(no_match.rows.is_empty());
     assert_eq!(no_match.coverage, Coverage::Empty);
     assert!(no_match.message.contains("没有符合条件"));
@@ -704,9 +741,9 @@ fn refresh_failure_keeps_the_previous_usage_and_request_page() {
     assert_eq!(kept.request_total, previous.request_total);
     assert!(kept.message.starts_with("刷新失败："), "{}", kept.message);
 
-    let previous_page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let previous_page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     assert_eq!(previous_page.rows.len(), 1);
-    let failed_page = read_requests(tmp.path(), Range::Today, 0, "", None, now);
+    let failed_page = read_requests(tmp.path(), Range::Today, None, 0, "", None, now);
     assert_eq!(failed_page.coverage, Coverage::Unavailable);
     let kept_page = keep_previous_page_on_failure(&previous_page, failed_page);
     assert_eq!(kept_page.rows, previous_page.rows);
@@ -753,27 +790,32 @@ fn request_detail_shows_ledger_fields_and_only_sanitized_events_for_this_request
         ],
     );
     let now = time("2026-11-20T19:00:00+08:00");
-    let page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
     let request = page.rows.first().expect("one ledger row");
     assert_eq!(request.request_id.as_deref(), Some(REQUEST));
 
     let pending = request_detail(request, None);
-    assert!(pending.contains("正在读取关联运行日志"));
+    assert!(pending.log_note.contains("正在读取关联运行日志"));
+    assert!(pending.log_text.is_empty());
 
     let logs = read_request_logs(&log, request.request_id.as_deref(), now);
     assert_eq!(logs.lines.len(), 2);
     let detail = request_detail(request, Some(&logs));
-    assert!(detail.contains("fixture-model"));
-    assert!(detail.contains(REQUEST));
-    assert!(detail.contains("1200 ms"));
-    assert!(detail.contains("输入  8 Token"));
-    assert!(detail.contains("输出  2 Token"));
-    assert!(detail.contains("运行日志"));
-    assert!(detail.contains("request_summary"));
-    assert!(!detail.contains("secret-must-not-escape"));
-    assert!(!detail.contains("hunter2"));
-    assert!(!detail.contains("sk-secret"));
-    assert!(!detail.contains("top-secret"));
+    assert!(detail.body.contains("fixture-model"));
+    assert!(
+        !detail.body.contains(REQUEST),
+        "the body must not repeat the panel header's request ID: {}",
+        detail.body
+    );
+    assert!(detail.body.contains("1200 ms"));
+    assert!(detail.body.contains("输入  8 Token"));
+    assert!(detail.body.contains("输出  2 Token"));
+    assert!(detail.log_label.contains("原始日志"));
+    assert!(detail.log_text.contains("request_summary"));
+    assert!(!detail.log_text.contains("secret-must-not-escape"));
+    assert!(!detail.log_text.contains("hunter2"));
+    assert!(!detail.log_text.contains("sk-secret"));
+    assert!(!detail.log_text.contains("top-secret"));
 
     let no_id = um_desktop::usage::RequestRow {
         request_id: None,
@@ -782,11 +824,77 @@ fn request_detail_shows_ledger_fields_and_only_sanitized_events_for_this_request
     let without_id = read_request_logs(&log, None, now);
     assert!(without_id.message.contains("没有可关联的请求 ID"));
     let without_id_detail = request_detail(&no_id, Some(&without_id));
-    assert!(without_id_detail.contains("请求 ID  —"));
-    assert!(without_id_detail.contains("没有可关联的请求 ID"));
+    assert!(
+        !without_id_detail.body.contains("请求 ID"),
+        "{}",
+        without_id_detail.body
+    );
+    assert!(without_id_detail.log_note.contains("没有可关联的请求 ID"));
 
     let unreadable = read_request_logs(&tmp.path().join("missing.log"), Some(REQUEST), now);
     assert!(unreadable.message.contains("暂不可读"));
     let unreadable_detail = request_detail(request, Some(&unreadable));
-    assert!(unreadable_detail.contains("暂不可读"));
+    assert!(unreadable_detail.log_note.contains("暂不可读"));
+}
+
+#[test]
+fn exporting_usage_writes_csv_and_refuses_empty_or_unreadable_ledgers() {
+    let tmp = common::TempDir::new("usage-export");
+    let ledger = tmp.path().join("usage.jsonl");
+    let now = time("2026-11-23T19:00:00+08:00");
+    write_rows(
+        &ledger,
+        &[row("2026-11-23T09:00:00+08:00", "ok", 1000, 200)],
+    );
+    let out = tmp.path().join("exports").join("usage.csv");
+    let message = export_usage_csv(&ledger, Range::Today, now, &out).expect("export usage");
+    assert!(message.contains("已导出今天的"), "{message}");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(csv.starts_with("时间,Token,请求数\n"), "{csv}");
+    assert!(csv.contains("09:00,1200,1"), "{csv}");
+
+    let missing = tmp.path().join("missing.jsonl");
+    let missing_out = tmp.path().join("missing.csv");
+    let refused = export_usage_csv(&missing, Range::Today, now, &missing_out);
+    assert!(
+        refused.is_err(),
+        "an empty range must not export an empty CSV"
+    );
+    assert!(
+        !missing_out.exists(),
+        "a refused export must not create the file"
+    );
+
+    let broken = tmp.path().join("broken.jsonl");
+    std::fs::write(&broken, "{bad JSON\n").unwrap();
+    let broken_out = tmp.path().join("broken.csv");
+    let refused = export_usage_csv(&broken, Range::Today, now, &broken_out);
+    assert!(refused.is_err(), "an unreadable ledger must not export");
+    assert!(
+        refused.unwrap_err().contains("没有可导出的用量"),
+        "a ledger with no readable usage keeps its own reason"
+    );
+}
+
+#[test]
+fn exporting_requests_writes_the_displayed_rows_and_refuses_an_empty_list() {
+    let tmp = common::TempDir::new("requests-export");
+    let ledger = tmp.path().join("usage.jsonl");
+    let now = time("2026-11-23T19:00:00+08:00");
+    write_rows(
+        &ledger,
+        &[row("2026-11-23T09:00:00+08:00", "ok", 1000, 200)],
+    );
+    let page = read_requests(&ledger, Range::Today, None, 0, "", None, now);
+    assert_eq!(page.rows.len(), 1);
+    let out = tmp.path().join("requests.csv");
+    let message = export_requests_csv(&page.rows, &out).expect("export requests");
+    assert!(message.contains("已导出 1 条请求"), "{message}");
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        csv.starts_with("时间,模型,结果,首字耗时,请求 ID\n"),
+        "{csv}"
+    );
+    assert!(csv.contains(REQUEST), "{csv}");
+    assert!(export_requests_csv(&[], &out).is_err());
 }

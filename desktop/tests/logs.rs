@@ -57,14 +57,28 @@ fn a_line_without_a_time_keeps_none_instead_of_zero() {
 }
 
 #[test]
-fn missing_file_is_a_failure_not_an_empty_log() {
+fn missing_file_is_a_legal_empty_log_not_a_failure() {
     let dir = TempDir::new("logs-missing");
     let view = read_log_file(&dir.path().join("gateway.log"));
+    assert_eq!(
+        view,
+        LogsView::Loaded(Vec::new()),
+        "a fresh instance has no gateway.log until a request finally fails"
+    );
+    let (status, tone) = logs_status(&view);
+    assert_eq!(tone, Tone::Warn);
+    assert!(status.contains("暂无日志"), "{status}");
+}
+
+#[test]
+fn an_unreadable_path_is_a_failure_not_an_empty_log() {
+    let dir = TempDir::new("logs-unreadable");
+    let view = read_log_file(dir.path());
     match &view {
         LogsView::Failed(reason) => {
-            assert!(reason.contains("gateway.log"), "{reason}");
+            assert!(reason.contains("logs-unreadable"), "{reason}");
         }
-        other => panic!("a missing log must be failed, got {other:?}"),
+        other => panic!("a directory must be a read failure, got {other:?}"),
     }
     let (status, tone) = logs_status(&view);
     assert_eq!(tone, Tone::Bad);
@@ -113,5 +127,5 @@ fn loaded_rows_are_reported_as_instance_logs() {
     let (status, tone) = logs_status(&view);
     assert_eq!(tone, Tone::Good);
     assert!(status.contains("最近 1 条"), "{status}");
-    assert!(status.contains("本实例"), "{status}");
+    assert!(!status.contains("实时"), "the Tag already names the layer: {status}");
 }

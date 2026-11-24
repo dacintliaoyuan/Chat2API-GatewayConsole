@@ -160,6 +160,10 @@ pub struct StubBehaviour {
     /// Accept the request and close without answering: a network error that is
     /// distinct from a slow response (timeout) and from an HTTP status.
     pub drop_connection: bool,
+    /// The admin context-probe upstream answer.
+    pub probe_status: u16,
+    pub probe_body: Option<Value>,
+    pub probe_delay: Duration,
 }
 
 impl Default for StubBehaviour {
@@ -171,6 +175,9 @@ impl Default for StubBehaviour {
             version_status: 200,
             version_body: None,
             drop_connection: false,
+            probe_status: 200,
+            probe_body: None,
+            probe_delay: Duration::ZERO,
         }
     }
 }
@@ -212,6 +219,9 @@ impl StubUpstream {
             version_status: 200,
             version_body: Some(json!({"version": "0.7.0-fixture"})),
             drop_connection: false,
+            probe_status: 200,
+            probe_body: None,
+            probe_delay: Duration::ZERO,
         }));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let worker_shutdown = Arc::clone(&shutdown);
@@ -362,6 +372,17 @@ fn serve_stub(
             thread::sleep(behaviour.delay);
         }
         body
+    } else if path == "/api/chat/completions" {
+        if behaviour.probe_delay > Duration::ZERO {
+            thread::sleep(behaviour.probe_delay);
+        }
+        (
+            behaviour.probe_status,
+            behaviour
+                .probe_body
+                .clone()
+                .unwrap_or_else(|| json!({"choices": [{"message": {"content": "anchor"}}]})),
+        )
     } else {
         (404, json!({"detail": "not found"}))
     };
@@ -409,6 +430,15 @@ impl ClientRequest {
             target: target.to_string(),
             headers: Vec::new(),
             body: Some(body.as_bytes().to_vec()),
+        }
+    }
+
+    pub fn delete(target: &str) -> Self {
+        Self {
+            method: "DELETE".to_string(),
+            target: target.to_string(),
+            headers: Vec::new(),
+            body: None,
         }
     }
 

@@ -53,9 +53,24 @@ fn click(window: &MainWindow, x: f32, y: f32) {
     window
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
-        position,
-        button: PointerEventButton::Left,
-    });
+            position,
+            button: PointerEventButton::Left,
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
+fn scroll(window: &MainWindow, x: f32, y: f32, delta_y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y,
+        });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 }
 
@@ -107,6 +122,9 @@ fn open_account_form(window: &MainWindow) {
 #[test]
 fn overview_content_is_visible_and_scrolls_at_minimum_size() {
     let window = window_at(1060.0, 720.0);
+    // Match the captured first screen, including the failure evidence row.
+    window.set_overview_failure_count(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     println!(
         "window={}x{} content={} viewport={} scroll_h={} state={} state_content={}x{} login={} login_content={} chart_y={} chart_h={} status_y={} status_h={}",
         window.get_window_width(),
@@ -139,6 +157,11 @@ fn overview_content_is_visible_and_scrolls_at_minimum_size() {
         window.get_overview_chart_y() + window.get_overview_chart_height()
             <= window.get_overview_viewport_height() + 1.0,
         "the usage chart must be visible in the default window"
+    );
+    assert!(
+        window.get_overview_chart_height() <= 300.0 + 1.0,
+        "the usage chart must not absorb the first screen: {}",
+        window.get_overview_chart_height()
     );
     assert!(
         window.get_status_row_y() + window.get_status_row_height() <= 720.0 + 1.0,
@@ -301,12 +324,13 @@ fn settings_cards_share_one_column_and_uniform_spacing() {
     }
 
     assert!(
-        (window.get_settings_refresh_x() - cards[0].1).abs() < 0.5,
-        "设置刷新按钮必须与卡片左对齐"
+        window.get_settings_refresh_x() + window.get_settings_refresh_width()
+            > window.get_window_width() - 20.0 - 1.0,
+        "the one refresh action sits at the title row's right edge"
     );
     assert!(
         window.get_settings_refresh_y() + window.get_settings_refresh_height() <= cards[0].2 + 0.5,
-        "设置刷新按钮必须排在首张卡上方"
+        "the title-row refresh stays above the first card"
     );
 }
 
@@ -359,7 +383,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
 
     // The appearance row is the left label plus a right-aligned control.
     assert!(
-        (window.get_appearance_row_label_x() - (window.get_appearance_card_x() + inset)).abs() < 0.5,
+        (window.get_appearance_row_label_x() - (window.get_appearance_card_x() + inset)).abs()
+            < 0.5,
         "外观行标签必须与卡片内边距对齐"
     );
     assert!(
@@ -400,7 +425,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
         "端口输入必须排在标签右侧"
     );
     assert!(
-        window.get_port_apply_x() >= window.get_port_input_x() + window.get_port_input_width() - 0.5,
+        window.get_port_apply_x()
+            >= window.get_port_input_x() + window.get_port_input_width() - 0.5,
         "应用按钮必须排在端口输入右侧"
     );
     assert!(
@@ -421,7 +447,8 @@ fn settings_rows_share_one_height_and_align_controls_right() {
     );
     assert!(
         window.get_gateway_address_x()
-            >= window.get_gateway_address_label_x() + window.get_gateway_address_label_width() - 0.5,
+            >= window.get_gateway_address_label_x() + window.get_gateway_address_label_width()
+                - 0.5,
         "地址值必须排在标签右侧"
     );
     assert!(
@@ -530,7 +557,7 @@ fn the_instance_card_aligns_its_detail_rows() {
     let window = window_at(1060.0, 720.0);
     window.set_page(2);
     window.set_supervision_value("运行中".into());
-    window.set_supervision_detail("本实例网关 PID 4242".into());
+    window.set_supervision_detail("本机网关 PID 4242".into());
     window.set_supervision_tone(0);
     window.set_config_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\desktop.json".into());
     window.set_instance_path("C:\\Users\\me\\AppData\\Local\\Chat2API\\instances\\144".into());
@@ -561,8 +588,7 @@ fn the_instance_card_aligns_its_detail_rows() {
 
     let inset = 16.0;
     assert!(
-        window.get_instance_supervision_y()
-            < window.get_instance_config_y()
+        window.get_instance_supervision_y() < window.get_instance_config_y()
             && window.get_instance_config_y() < window.get_instance_data_y(),
         "实例卡详情必须按网关监督、配置文件、实例数据排列"
     );
@@ -926,6 +952,7 @@ fn log_row(index: usize) -> LogRow {
         id: format!("row-{index}").into(),
         at: "10:00:00".into(),
         level: "信息".into(),
+        source: "chat2api".into(),
         text: format!("line-{index}").into(),
         detail: format!("2026-11-21 10:00:00 +08:00  信息\n\nline-{index}").into(),
     }
@@ -935,27 +962,30 @@ fn log_row(index: usize) -> LogRow {
 fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     let window = window_at(540.0, 420.0);
     window.set_page(3);
+    window.set_log_mode(1);
     let rows: Vec<LogRow> = (0..20).map(log_row).collect();
     window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
     let height = window.get_log_list_height();
+    // The merged status row costs one row at the minimum width; three complete
+    // rows stay visible, and the list keeps its own scroll.
     assert!(
-        height >= 4.0 * 36.0,
+        height >= 3.0 * 36.0,
         "log list height at minimum size: {height}"
     );
 
     window.set_log_filter_keyword("timeout".into());
-    let applied = Rc::new(RefCell::new(None));
-    window.on_apply_log_filter({
+    let applied = Rc::new(RefCell::new(0));
+    window.on_query_log_history({
         let applied = Rc::clone(&applied);
-        move |level, keyword| *applied.borrow_mut() = Some((level, keyword))
+        move || *applied.borrow_mut() += 1
     });
 
-    // At the minimum width the level filter stays a 5-item segmented control;
-    // click the second item ("信息").
-    let x = window.get_log_level_x() + window.get_log_level_width() * 0.3;
-    let y = window.get_log_level_y() + window.get_log_level_height() / 2.0;
+    // At the minimum width the four level filters are independent toggles;
+    // click the third one ("信息") and then the first one ("错误").
+    let x = window.get_log_level_info_x() + window.get_log_level_info_width() / 2.0;
+    let y = window.get_log_level_info_y() + window.get_log_level_info_height() / 2.0;
     let position = slint::LogicalPosition::new(x, y);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position,
@@ -964,11 +994,39 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
     window
         .window()
         .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_log_level_info(),
+        "the info level toggle must be on"
+    );
+    assert_eq!(*applied.borrow(), 1);
+
+    let x = window.get_log_level_error_x() + window.get_log_level_error_width() / 2.0;
+    let y = window.get_log_level_error_y() + window.get_log_level_error_height() / 2.0;
+    let position = slint::LogicalPosition::new(x, y);
+    window.window().dispatch_event(WindowEvent::PointerPressed {
         position,
         button: PointerEventButton::Left,
     });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(*applied.borrow(), Some((1, "timeout".into())));
+    assert!(
+        window.get_log_level_error(),
+        "the error level toggle must be on"
+    );
+    assert!(
+        window.get_log_level_info(),
+        "the earlier level toggle stays on"
+    );
+    assert_eq!(*applied.borrow(), 2);
 
     window
         .window()
@@ -978,7 +1036,46 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
         .window()
         .set_size(slint::LogicalSize::new(540.0, 420.0));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_log_filter_level(), 1);
+    assert!(window.get_log_level_info());
+    assert!(window.get_log_level_error());
+}
+
+#[test]
+fn log_keyword_query_is_debounced_and_mode_switch_cancels_the_pending_one() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_mode(1);
+    let applied = Rc::new(Cell::new(0usize));
+    window.on_query_log_history({
+        let applied = Rc::clone(&applied);
+        move || applied.set(applied.get() + 1)
+    });
+    let saved = Rc::new(Cell::new(0usize));
+    window.on_settings_changed({
+        let saved = Rc::clone(&saved);
+        move || saved.set(saved.get() + 1)
+    });
+
+    window.set_log_filter_keyword("timeout".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(applied.get(), 0, "typing must not query on every key");
+    assert_eq!(saved.get(), 0, "typing must not save on every key");
+    assert!(window.get_log_search_pending());
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(applied.get(), 1, "one pause makes one query");
+    assert_eq!(saved.get(), 1, "one pause makes one save");
+    assert!(!window.get_log_search_pending());
+
+    // A second edit while the pause is still pending is cancelled by switching
+    // back to the live layer, so the stale query never lands.
+    window.set_log_filter_keyword("error".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_log_search_pending());
+    window.set_log_mode(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(300));
+    assert_eq!(applied.get(), 1, "the live switch cancels the pending query");
+    assert!(!window.get_log_search_pending());
 }
 
 #[test]
@@ -1192,6 +1289,10 @@ fn the_settings_address_row_copies_the_base_and_v1_urls() {
         move |text| copied.borrow_mut().push(text.to_string())
     });
 
+    // The appearance card and the port hint make the settings page scroll at
+    // this size; bring the gateway address row into view before clicking it.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
@@ -1280,6 +1381,10 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     window.on_copy_text(|_| {});
 
+    // The gateway address row sits below the taller appearance card and the
+    // port hint; bring it into view before clicking the copy entry.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
@@ -1296,7 +1401,10 @@ fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1900));
     assert!(window.get_copy_status_visible());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
-    assert!(!window.get_copy_status_visible(), "the copy status clears after two seconds");
+    assert!(
+        !window.get_copy_status_visible(),
+        "the copy status clears after two seconds"
+    );
     assert_eq!(window.get_copy_base_icon(), "copy");
 
     click(
@@ -1380,6 +1488,9 @@ fn addresses_stay_copyable_when_the_gateway_is_not_running() {
     window.set_gateway_value("未运行".into());
     window.set_gateway_tone(2);
     window.set_active_address("127.0.0.1:7999".into());
+    // The appearance card and the port hint make the settings page scroll at
+    // this size; bring the gateway address row into view before clicking it.
+    scroll(&window, 600.0, 400.0, -300.0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
     let copied = Rc::new(RefCell::new(None::<String>));
@@ -1449,25 +1560,38 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
     let settings = Rc::clone(&calls);
     window.on_refresh_settings(move || settings.borrow_mut().push("settings"));
 
+    window.set_overview_updated_seq(1);
     window.set_overview_updated_at("10:00:00".into());
+    window.set_request_updated_seq(2);
     window.set_request_updated_at("10:01:00".into());
+    window.set_log_updated_seq(3);
     window.set_log_updated_at("10:02:00".into());
+    window.set_settings_updated_seq(4);
     window.set_settings_updated_at("10:03:00".into());
+    window.set_last_update_seq(5);
+    window.set_last_update("10:04:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert_eq!(window.get_overview_updated_at_label(), "更新于 10:00:00");
-    assert_eq!(window.get_request_updated_at_label(), "更新于 10:01:00");
-    assert_eq!(window.get_log_updated_at_label(), "更新于 10:02:00");
-    assert_eq!(window.get_settings_updated_at_label(), "更新于 10:03:00");
+    assert_eq!(window.get_overview_updated_at_label(), "10:00:00");
+    assert_eq!(window.get_request_updated_at_label(), "10:01:00");
+    assert_eq!(window.get_log_updated_at_label(), "10:02:00");
+    assert_eq!(window.get_settings_updated_at_label(), "10:03:00");
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 10:04:00",
+        "the footer is the one place that spells 更新于"
+    );
 
     window.set_page(0);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert!(window.get_overview_refresh_enabled());
+    assert!(window.get_page_refresh_visible());
+    assert!(window.get_page_refresh_tooltip().contains("总览"));
     click_refresh(
         &window,
-        window.get_overview_refresh_x(),
-        window.get_overview_refresh_y(),
-        window.get_overview_refresh_width(),
-        window.get_overview_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview"]);
     assert!(window.get_refreshing());
@@ -1476,40 +1600,209 @@ fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
 
     window.set_page(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("请求"));
     click_refresh(
         &window,
-        window.get_request_refresh_x(),
-        window.get_request_refresh_y(),
-        window.get_request_refresh_width(),
-        window.get_request_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview", "requests"]);
     finish_refresh();
 
     window.set_page(3);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("日志"));
     click_refresh(
         &window,
-        window.get_log_refresh_x(),
-        window.get_log_refresh_y(),
-        window.get_log_refresh_width(),
-        window.get_log_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(calls.borrow().as_slice(), ["overview", "requests", "logs"]);
     finish_refresh();
 
     window.set_page(2);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_page_refresh_tooltip().contains("网关"));
     click_refresh(
         &window,
-        window.get_settings_refresh_x(),
-        window.get_settings_refresh_y(),
-        window.get_settings_refresh_width(),
-        window.get_settings_refresh_height(),
+        window.get_page_refresh_x(),
+        window.get_page_refresh_y(),
+        window.get_page_refresh_width(),
+        window.get_page_refresh_height(),
     );
     assert_eq!(
         calls.borrow().as_slice(),
         ["overview", "requests", "logs", "settings"]
+    );
+
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        !window.get_page_refresh_visible(),
+        "the static help page has no data read to refresh"
+    );
+    assert!(
+        !window.get_footer_time_visible(),
+        "the static help page must not carry an 更新于 stamp"
+    );
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_footer_time_visible(),
+        "the data pages keep the one footer read time"
+    );
+}
+
+#[test]
+fn quiet_request_actions_show_keyboard_focus_on_a_three_to_one_edge() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    let idle = window.get_request_fail_toggle_focus_ring_color();
+    assert_eq!(
+        window.get_request_fail_toggle_focus_ring_width(),
+        1.0,
+        "a quiet action keeps a transparent frame so focus never shifts the row"
+    );
+    window.invoke_focus_request_fail_toggle();
+    // The border colour animates for 120 ms; read it after that step so the
+    // focus ring is the settled control edge, not its transparent start.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        window.get_request_fail_toggle_has_focus(),
+        "the quiet action takes keyboard focus"
+    );
+    assert!(
+        window.get_request_fail_toggle_focus_visible(),
+        "the quiet action must show keyboard focus"
+    );
+    assert_eq!(window.get_request_fail_toggle_focus_ring_width(), 1.0);
+    assert_ne!(
+        window.get_request_fail_toggle_focus_ring_color(),
+        idle,
+        "focus must step the frame edge, not only the ~1.1:1 fill"
+    );
+}
+
+#[test]
+fn the_footer_is_the_one_visible_time_source() {
+    let window = window_at(1060.0, 720.0);
+    assert!(
+        !window.get_overview_chart_updated_at_visible(),
+        "the overview chart header must not repeat 更新于"
+    );
+    window.set_request_updated_seq(1);
+    window.set_request_updated_at("10:01:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 10:01:00",
+        "the footer follows the request page read time"
+    );
+    window.set_log_updated_seq(2);
+    window.set_log_updated_at("10:02:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 10:02:00");
+    window.set_settings_updated_seq(3);
+    window.set_settings_updated_at("10:03:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 10:03:00");
+}
+
+#[test]
+fn the_footer_time_survives_midnight_with_a_monotonic_read_stamp() {
+    let window = window_at(1060.0, 720.0);
+    window.set_overview_updated_seq(1);
+    window.set_overview_updated_at("23:59:59".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_last_update_label(), "更新于 23:59:59");
+
+    // The next read is after midnight: 00:00:01 sorts before 23:59:59 as a
+    // string, so the footer must follow the monotonic stamp instead.
+    window.set_request_updated_seq(2);
+    window.set_request_updated_at("00:00:01".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 00:00:01",
+        "a read after midnight must replace the previous day's time"
+    );
+}
+
+#[test]
+fn the_query_and_export_actions_use_search_and_download_glyphs() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_request_query_icon(),
+        "search",
+        "查询 is a search action, not a forward arrow"
+    );
+    assert_eq!(
+        window.get_request_export_icon(),
+        "download",
+        "导出 CSV is a download, not a forward arrow"
+    );
+    assert_eq!(
+        window.get_request_fail_toggle_icon(),
+        "filter",
+        "只看失败 is a filter, not the search glyph"
+    );
+}
+
+#[test]
+fn the_request_list_header_names_first_token_duration() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_request_list_header_first_token_text(),
+        "首字耗时",
+        "the list header must use the same term as the detail, help and metric card"
+    );
+}
+
+#[test]
+fn settings_explains_that_the_installer_owns_autostart() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_autostart_status_text(), "由安装器管理");
+    assert!(
+        window.get_autostart_hint_text().contains("安装器"),
+        "the autostart state must name its owner: {}",
+        window.get_autostart_hint_text()
+    );
+    assert!(
+        window.get_autostart_hint_text().contains("不修改注册表"),
+        "the App must not claim it writes the Run key"
+    );
+}
+
+#[test]
+fn help_explains_credentials_cache_hit_and_first_token() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        window.get_help_credential_text().contains("凭据"),
+        "{}",
+        window.get_help_credential_text()
+    );
+    assert!(
+        window.get_help_cache_hit_text().contains("缓存"),
+        "{}",
+        window.get_help_cache_hit_text()
+    );
+    assert!(
+        window.get_help_first_token_text().contains("首个输出 Token"),
+        "{}",
+        window.get_help_first_token_text()
     );
 }
 
@@ -1618,29 +1911,37 @@ fn the_request_filter_rows_align_the_range_result_search_and_refresh() {
         "the range row starts at the page edge"
     );
     assert!(
-        (window.get_request_refresh_y() - window.get_request_period_y()).abs() < 1.0,
-        "refresh shares the range row"
+        window.get_page_refresh_y() + window.get_page_refresh_height()
+            < window.get_request_period_y(),
+        "the one refresh action sits in the title row above the filters"
     );
     assert!(
-        window.get_request_refresh_x() + window.get_request_refresh_width() > page_right - 1.0,
-        "refresh closes the first filter row at the right edge"
+        window.get_page_refresh_x() + window.get_page_refresh_width() > page_right - 1.0,
+        "the refresh action closes the title row at the right edge"
     );
 
     assert!(
-        (window.get_request_result_x() - page_left).abs() < 1.0,
-        "the result row starts at the page edge"
+        (window.get_request_model_x() - page_left).abs() < 1.0,
+        "the model row starts at the page edge"
+    );
+    assert!(
+        window.get_request_result_x()
+            > window.get_request_model_x() + window.get_request_model_width(),
+        "the result filter follows the model filter"
     );
     assert!(
         (window.get_request_result_y() - window.get_request_search_y()).abs() < 1.0
             && (window.get_request_search_y() - window.get_request_query_y()).abs() < 1.0,
-        "result, search and query share the second filter row"
+        "model, result, search and query share the second filter row"
     );
     assert!(
-        window.get_request_result_y() > window.get_request_period_y() + window.get_request_period_height(),
+        window.get_request_result_y()
+            > window.get_request_period_y() + window.get_request_period_height(),
         "the second filter row sits below the range row"
     );
     assert!(
-        window.get_request_search_x() > window.get_request_result_x() + window.get_request_result_width(),
+        window.get_request_search_x()
+            > window.get_request_result_x() + window.get_request_result_width(),
         "search follows the result filter"
     );
     assert!(
@@ -1745,8 +2046,8 @@ fn the_request_list_and_detail_share_one_row_with_one_gap() {
         "the list and detail share the top edge"
     );
     assert!(
-        window.get_request_detail_height() >= window.get_request_list_height(),
-        "the detail panel spans the list row"
+        (window.get_request_detail_height() - window.get_request_list_height()).abs() < 1.0,
+        "the detail panel spans the list row instead of floating above its bottom"
     );
 }
 
@@ -1778,16 +2079,16 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
         "the filter rows fill the compact page content"
     );
     assert!(
-        (window.get_request_period_x() - page_left).abs() < 1.0
-            && (window.get_request_refresh_x() + window.get_request_refresh_width() - page_right)
-                .abs()
-                < 1.0,
-        "the compact range and refresh rows stay inside the page"
+        (window.get_request_period_x() - page_left).abs() < 1.0,
+        "the compact range row stays inside the page"
+    );
+    assert!(
+        window.get_page_refresh_x() + window.get_page_refresh_width() > page_right - 1.0,
+        "the one refresh action stays in the title row at the page's right edge"
     );
     assert!(
         window.get_request_search_width() > 140.0
-            && (window.get_request_query_x() + window.get_request_query_width() - page_right)
-                .abs()
+            && (window.get_request_query_x() + window.get_request_query_width() - page_right).abs()
                 < 1.0,
         "the compact search and query stay inside the page"
     );
@@ -1801,7 +2102,8 @@ fn the_request_detail_uses_the_page_width_at_compact_size() {
     );
     assert!(
         window.get_request_detail_x() >= 96.0 - 1.0
-            && window.get_request_detail_x() + detail_width <= window.get_window_width() - 12.0 + 1.0,
+            && window.get_request_detail_x() + detail_width
+                <= window.get_window_width() - 12.0 + 1.0,
         "the compact detail stays inside the page content"
     );
 }
@@ -2004,7 +2306,11 @@ fn tray_less_quit_requires_a_second_click() {
         window.get_quit_confirm_x() + window.get_quit_confirm_width() / 2.0,
         window.get_quit_confirm_y() + window.get_quit_confirm_height() / 2.0,
     );
-    assert_eq!(quits.get(), 1, "the second click stops the gateway and quits");
+    assert_eq!(
+        quits.get(),
+        1,
+        "the second click stops the gateway and quits"
+    );
 }
 
 #[test]
@@ -2057,22 +2363,60 @@ fn the_log_page_opens_settings_from_its_toolbar() {
 fn the_log_filter_row_keeps_every_control_above_the_list() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
+    window.set_log_mode(1);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
 
-    let controls = [
+    let first_row = [
         (
-            "time range",
-            window.get_log_period_x(),
-            window.get_log_period_y(),
-            window.get_log_period_width(),
-            window.get_log_period_height(),
+            "mode",
+            window.get_log_mode_x(),
+            window.get_log_mode_y(),
+            window.get_log_mode_width(),
+            window.get_log_mode_height(),
         ),
         (
-            "level",
-            window.get_log_level_x(),
-            window.get_log_level_y(),
-            window.get_log_level_width(),
-            window.get_log_level_height(),
+            "time range",
+            window.get_log_range_x(),
+            window.get_log_range_y(),
+            window.get_log_range_width(),
+            window.get_log_range_height(),
+        ),
+        (
+            "error level",
+            window.get_log_level_error_x(),
+            window.get_log_level_error_y(),
+            window.get_log_level_error_width(),
+            window.get_log_level_error_height(),
+        ),
+        (
+            "warn level",
+            window.get_log_level_warn_x(),
+            window.get_log_level_warn_y(),
+            window.get_log_level_warn_width(),
+            window.get_log_level_warn_height(),
+        ),
+        (
+            "info level",
+            window.get_log_level_info_x(),
+            window.get_log_level_info_y(),
+            window.get_log_level_info_width(),
+            window.get_log_level_info_height(),
+        ),
+        (
+            "debug level",
+            window.get_log_level_debug_x(),
+            window.get_log_level_debug_y(),
+            window.get_log_level_debug_width(),
+            window.get_log_level_debug_height(),
+        ),
+    ];
+    let second_row = [
+        (
+            "source",
+            window.get_log_source_x(),
+            window.get_log_source_y(),
+            window.get_log_source_width(),
+            window.get_log_source_height(),
         ),
         (
             "search",
@@ -2081,64 +2425,65 @@ fn the_log_filter_row_keeps_every_control_above_the_list() {
             window.get_log_search_width(),
             window.get_log_search_height(),
         ),
-        (
-            "refresh",
-            window.get_log_refresh_x(),
-            window.get_log_refresh_y(),
-            window.get_log_refresh_width(),
-            window.get_log_refresh_height(),
-        ),
-        (
-            "follow",
-            window.get_log_follow_x(),
-            window.get_log_follow_y(),
-            window.get_log_follow_width(),
-            window.get_log_follow_height(),
-        ),
-        (
-            "settings",
-            window.get_log_settings_x(),
-            window.get_log_settings_y(),
-            window.get_log_settings_width(),
-            window.get_log_settings_height(),
-        ),
     ];
-    for (label, x, y, width, height) in controls {
+    for (label, x, y, width, height) in first_row.iter().chain(second_row.iter()) {
         assert!(
-            x >= 0.0 && width > 0.0 && height > 0.0,
+            *x >= 0.0 && *width > 0.0 && *height > 0.0,
             "{label} control must have a visible box"
         );
         assert!(
-            y + height <= window.get_log_list_y() + 1.0,
+            *y + *height <= window.get_log_list_y() + 1.0,
             "{label} control must sit above the log list"
         );
     }
-    for (index, (label, _, y, _, height)) in controls.iter().enumerate() {
-        for (other, _, other_y, _, other_height) in &controls[index + 1..] {
-            assert!(
-                *y < other_y + other_height && *other_y < y + height,
-                "{label} and {other} must share the filter row"
-            );
-        }
+    let first_y = first_row[0].2;
+    for (label, _, y, _, _) in &first_row {
+        assert!(
+            (*y - first_y).abs() < 1.0,
+            "{label} must stay in the first filter row"
+        );
     }
-    let order: Vec<f32> = controls.iter().map(|(_, x, _, _, _)| *x).collect();
+    let first_order: Vec<f32> = first_row.iter().map(|(_, x, _, _, _)| *x).collect();
     assert!(
-        order.windows(2).all(|pair| pair[0] < pair[1]),
-        "filter controls must read left to right in ticket order: {order:?}"
+        first_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "the mode, range and four level toggles must read left to right: {first_order:?}"
+    );
+    let second_y = second_row[0].2;
+    for (label, _, y, _, _) in &second_row {
+        assert!(
+            (*y - second_y).abs() < 1.0,
+            "{label} must stay in the second filter row"
+        );
+    }
+    let second_order: Vec<f32> = second_row.iter().map(|(_, x, _, _, _)| *x).collect();
+    assert!(
+        second_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "the source and search must read left to right: {second_order:?}"
+    );
+    assert!(
+        window.get_page_refresh_y() + window.get_page_refresh_height()
+            < window.get_log_mode_y(),
+        "the one refresh action sits in the title row above the log filters"
     );
 }
 
 #[test]
-fn log_refresh_acknowledgement_expires() {
+fn the_log_page_footer_names_the_read_time_instead_of_the_update_time() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
-    window.set_log_refreshed(true);
+    window.set_log_updated_at("10:02:00".into());
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert!(window.get_log_refreshed());
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
-    assert!(
-        !window.get_log_refreshed(),
-        "the refresh acknowledgement must return to its normal state"
+    assert_eq!(
+        window.get_last_update_label(),
+        "读取于 10:02:00",
+        "the log page footer is the read time, not the last row's time"
+    );
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_last_update_label(),
+        "更新于 10:02:00",
+        "the other pages keep the update wording"
     );
 }
 
@@ -2229,7 +2574,10 @@ fn focusing_the_port_field_selects_the_whole_value() {
         window.get_port_input_y() + window.get_port_input_height() / 2.0,
     );
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert!(window.get_port_input_focused(), "the click focuses the port field");
+    assert!(
+        window.get_port_input_focused(),
+        "the click focuses the port field"
+    );
     assert!(
         window.get_port_input_selected(),
         "focusing the port field selects its whole value"
@@ -2264,6 +2612,10 @@ fn restarting_the_gateway_asks_once_and_reports_the_outcome() {
         let restarts = Rc::clone(&restarts);
         move || restarts.set(restarts.get() + 1)
     });
+    // The taller appearance card and the port hint push the gateway card down;
+    // bring the restart action into view before clicking it.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     click(
         &window,
         window.get_restart_gateway_x() + window.get_restart_gateway_width() / 2.0,
@@ -2290,5 +2642,961 @@ fn the_request_list_keeps_a_readable_height_at_the_default_size() {
     assert!(
         window.get_request_list_height() >= 240.0,
         "the request list keeps a readable height"
+    );
+}
+
+#[test]
+fn the_expanded_request_chart_keeps_the_list_at_240px() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    // A manual choice, so the viewport default does not fold the chart.
+    window.set_request_chart_collapsed_explicit(true);
+    window.set_request_chart_collapsed(false);
+    let rows = (0..14).map(request_row).collect::<Vec<_>>();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    println!(
+        "chart_visible={} list_y={} list_h={} page_h={} viewport_h={}",
+        window.get_request_chart_visible(),
+        window.get_request_list_y(),
+        window.get_request_list_height(),
+        window.get_request_page_height(),
+        window.get_request_scroll_viewport_height(),
+    );
+    assert!(
+        window.get_request_chart_visible(),
+        "the manual choice keeps the analytics chart expanded"
+    );
+    assert!(
+        window.get_request_list_height() >= 240.0,
+        "the expanded chart must not squeeze the list below 240 px: {}",
+        window.get_request_list_height()
+    );
+    assert!(
+        window.get_request_page_height() > window.get_request_scroll_viewport_height(),
+        "the page scrolls instead of squeezing the list"
+    );
+}
+
+#[test]
+fn an_empty_request_window_collapses_the_analytics_card_and_centers_the_reason() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_requests(ModelRc::from(Vec::<RequestRow>::new().as_slice()));
+    window.set_request_status("所选时间没有请求记录。".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let empty_y = window.get_request_empty_y();
+    let empty_h = window.get_request_empty_height();
+    let panel_y = window.get_request_list_panel_y();
+    let panel_h = window.get_request_list_panel_height();
+    let body_h = panel_h
+        - window.get_request_list_header_height()
+        - window.get_request_list_footer_height()
+        - 20.0;
+    println!(
+        "analytics_visible={} analytics_h={} panel_y={} panel_h={} body_h={} empty_y={} empty_h={} row_h={} pane_h={} page_pref={} page_actual={} scroll_content={} viewport={} filters_h={} status_h={} status={}",
+        window.get_request_analytics_visible(),
+        window.get_request_analytics_height(),
+        panel_y,
+        panel_h,
+        body_h,
+        empty_y,
+        empty_h,
+        window.get_request_row_height(),
+        window.get_request_list_pane_height(),
+        window.get_request_page_height(),
+        window.get_request_page_actual_height(),
+        window.get_request_scroll_content_height(),
+        window.get_request_scroll_viewport_height(),
+        window.get_request_filters_height(),
+        window.get_request_status_row_height(),
+        window.get_request_status_display_text(),
+    );
+    assert!(
+        !window.get_request_analytics_visible(),
+        "an unfiltered empty window keeps only the list card"
+    );
+    assert_eq!(
+        window.get_request_analytics_height(),
+        0.0,
+        "the hidden analytics card must not reserve a 107 px band"
+    );
+    assert!(
+        empty_h >= body_h - 4.0,
+        "the empty state fills the list body: empty {empty_h} body {body_h}"
+    );
+    assert!(
+        (empty_y + empty_h / 2.0 - (panel_y + panel_h / 2.0)).abs() <= 24.0,
+        "the empty reason sits in the middle of the table: empty center {} panel center {}",
+        empty_y + empty_h / 2.0,
+        panel_y + panel_h / 2.0
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 0 条",
+        "the status row keeps the page count instead of repeating the table reason"
+    );
+    assert_eq!(
+        window.get_request_empty_title().as_str(),
+        "所选时间没有请求记录",
+        "the table owns the one empty reason"
+    );
+}
+
+#[test]
+fn the_secondary_appearance_labels_sit_above_their_own_controls() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let sidebar_label_bottom =
+        window.get_appearance_sidebar_label_y() + window.get_appearance_sidebar_label_height();
+    let motion_label_bottom =
+        window.get_appearance_motion_label_y() + window.get_appearance_motion_label_height();
+    let transparency_label_bottom = window.get_appearance_transparency_label_y()
+        + window.get_appearance_transparency_label_height();
+    println!(
+        "sidebar label={}..{} control={} motion label={}..{} control={} transparency label={:?} {}..{} control={} toggle={:?}",
+        window.get_appearance_sidebar_label_y(),
+        sidebar_label_bottom,
+        window.get_appearance_sidebar_control_y(),
+        window.get_appearance_motion_label_y(),
+        motion_label_bottom,
+        window.get_appearance_motion_control_y(),
+        window.get_appearance_transparency_label_text(),
+        window.get_appearance_transparency_label_y(),
+        transparency_label_bottom,
+        window.get_appearance_transparency_control_y(),
+        window.get_transparency_toggle_label(),
+    );
+    assert!(
+        sidebar_label_bottom <= window.get_appearance_sidebar_control_y() + 0.5,
+        "侧栏 label must sit directly above its control"
+    );
+    assert!(
+        motion_label_bottom <= window.get_appearance_motion_control_y() + 0.5,
+        "界面动效 label must sit directly above its control"
+    );
+    assert!(
+        transparency_label_bottom <= window.get_appearance_transparency_control_y() + 0.5,
+        "降低透明度 label must sit directly above its control"
+    );
+    assert!(
+        (window.get_transparency_toggle_x() - window.get_appearance_transparency_label_x()).abs()
+            < 1.0,
+        "the 开启 checkbox must share the group label's left edge"
+    );
+    assert_eq!(
+        window.get_appearance_transparency_label_text(),
+        "降低透明度",
+        "the group label names the setting once"
+    );
+    assert_eq!(
+        window.get_transparency_toggle_label(),
+        "开启",
+        "the checkbox must not repeat the setting name"
+    );
+}
+
+#[test]
+fn cancelling_a_typed_account_form_asks_before_discarding() {
+    let window = window_at(1060.0, 720.0);
+    open_account_form(&window);
+    type_text(&window, "someone@um.edu.mo");
+    // The account form is below the taller appearance card; scroll it into
+    // view before clicking 取消.
+    scroll(&window, 600.0, 400.0, -300.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_cancel_button_x() + window.get_cancel_button_width() / 2.0,
+        window.get_cancel_button_y() + window.get_cancel_button_height() / 2.0,
+    );
+    assert!(
+        window.get_account_discard_confirm_visible(),
+        "a typed form asks before discarding"
+    );
+    assert!(
+        window.get_account_form_visible(),
+        "the form stays until the choice"
+    );
+
+    click(
+        &window,
+        window.get_account_keep_editing_x() + window.get_account_keep_editing_width() / 2.0,
+        window.get_account_keep_editing_y() + window.get_account_keep_editing_height() / 2.0,
+    );
+    assert!(
+        !window.get_account_discard_confirm_visible(),
+        "继续编辑 returns to the form"
+    );
+    assert!(window.get_account_form_visible());
+
+    click(
+        &window,
+        window.get_cancel_button_x() + window.get_cancel_button_width() / 2.0,
+        window.get_cancel_button_y() + window.get_cancel_button_height() / 2.0,
+    );
+    click(
+        &window,
+        window.get_account_discard_x() + window.get_account_discard_width() / 2.0,
+        window.get_account_discard_y() + window.get_account_discard_height() / 2.0,
+    );
+    assert!(
+        !window.get_account_form_visible(),
+        "放弃修改 closes the form"
+    );
+}
+
+#[test]
+fn the_log_page_actions_share_the_status_row_and_align_right() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    let page_left = 196.0 + 20.0;
+    let page_right = window.get_window_width() - 20.0;
+    println!(
+        "status row x={} y={} w={} h={} settings x={} w={} follow x={} w={}",
+        window.get_log_status_row_x(),
+        window.get_log_status_row_y(),
+        window.get_log_status_row_width(),
+        window.get_log_status_row_height(),
+        window.get_log_settings_x(),
+        window.get_log_settings_width(),
+        window.get_log_follow_x(),
+        window.get_log_follow_width(),
+    );
+    assert!(
+        (window.get_log_status_row_x() - page_left).abs() < 1.0,
+        "the status row fills the page width"
+    );
+    assert!(
+        (window.get_log_status_row_width() - (page_right - page_left)).abs() < 1.0,
+        "the status row width is the page content width"
+    );
+    assert!(
+        (window.get_log_settings_x() + window.get_log_settings_width() - page_right).abs() < 1.5,
+        "the page actions end at the right edge instead of floating mid-page"
+    );
+    assert!(
+        (window.get_log_settings_y() - window.get_log_status_row_y()).abs() < 1.0,
+        "the settings action sits inside the status row, not on its own line"
+    );
+    assert!(
+        (window.get_log_follow_y() - window.get_log_status_row_y()).abs() < 1.0,
+        "the follow action sits inside the status row, not on its own line"
+    );
+    assert!(
+        window.get_log_follow_x() + window.get_log_follow_width()
+            < window.get_log_settings_x(),
+        "跟随 reads before 设置 in the status row"
+    );
+    assert!(
+        (window.get_log_status_text_y() - window.get_log_follow_y()).abs() < 1.0,
+        "the status text and the follow action share one top edge"
+    );
+    assert!(
+        (window.get_log_status_text_height() - window.get_log_status_row_height()).abs() < 1.0,
+        "the status text fills the fixed 34 px status row"
+    );
+    assert!(
+        (window.get_log_status_row_height() - 34.0).abs() < 0.5,
+        "the status row is the 34 px control height, got {}",
+        window.get_log_status_row_height()
+    );
+}
+
+#[test]
+fn the_compact_log_status_keeps_its_text_instead_of_dropping_it() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(3);
+    window.set_log_status("已连接 · 最近 24 条".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert!(window.get_log_status_text_visible());
+    assert_eq!(
+        window.get_log_status_text().as_str(),
+        "已连接 · 最近 24 条"
+    );
+    assert!(
+        window.get_log_status_text_width() > 0.0,
+        "the compact status text keeps a readable box instead of collapsing"
+    );
+    assert!(
+        (window.get_log_status_text_y() - window.get_log_follow_y()).abs() < 1.0,
+        "the compact status text and the follow action share one top edge"
+    );
+}
+
+#[test]
+fn the_settings_copy_buttons_show_the_copy_word() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_copy_base_icon_only() && !window.get_copy_v1_icon_only(),
+        "ADR 0015 asks for a visible 复制 label, not an icon-only button"
+    );
+    assert!(window.get_copy_base_label().contains("复制"));
+    assert!(window.get_copy_v1_label().contains("复制"));
+}
+
+#[test]
+fn the_port_hint_names_the_accepted_range_and_the_reserved_ports() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    click(
+        &window,
+        window.get_port_input_x() + window.get_port_input_width() / 2.0,
+        window.get_port_input_y() + window.get_port_input_height() / 2.0,
+    );
+    assert!(window.get_port_range_hint_visible());
+    let hint = window.get_port_range_hint_text().to_string();
+    assert!(hint.contains("1–65535"), "{hint}");
+    assert!(hint.contains("7998") && hint.contains("7999"), "{hint}");
+}
+
+#[test]
+fn export_is_disabled_with_its_reason_when_there_is_no_usage() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_export_available(false);
+    window.set_export_note("今天没有可导出的用量".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_export_button_enabled());
+    assert!(window.get_export_status_visible());
+    assert!(window.get_export_status_text().contains("没有可导出的用量"));
+
+    window.set_export_available(true);
+    window.set_export_note("可导出今天的 24 个时段".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_export_button_enabled());
+}
+
+#[test]
+fn f1_opens_the_help_page_with_the_new_task_entries() {
+    let window = window_at(1060.0, 720.0);
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    window.invoke_focus_root();
+    press(&window, Key::F1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(window.get_f1_seen(), "F1 reaches the shortcut handler");
+    assert_eq!(window.get_page(), 4, "F1 opens help");
+    assert!(window.get_help_visible());
+    assert!(
+        window.get_help_terminology_text().contains("本机网关"),
+        "{:?}",
+        window.get_help_terminology_text()
+    );
+    assert!(window.get_help_export_text().contains("导出用量"));
+    assert!(window.get_help_troubleshoot_text().contains("请求失败"));
+}
+
+#[test]
+fn the_help_search_filters_the_entries() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_help_visible_count(),
+        9,
+        "an empty query keeps every help entry"
+    );
+
+    window.set_help_keyword("端口".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        window.get_help_visible_count(),
+        1,
+        "the port-switch entry is the only match"
+    );
+    assert!(!window.get_help_no_result_visible());
+
+    window.set_help_keyword("没有这个条目".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_help_visible_count(), 0);
+    assert!(
+        window.get_help_no_result_visible(),
+        "a query with no match says so instead of showing every card"
+    );
+
+    window.set_help_keyword("".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_help_visible_count(), 9);
+}
+
+#[test]
+fn the_request_detail_copies_the_request_id() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("f314e7d8c7526367baec95ac155b6406".into());
+    window.set_request_detail("请求详情".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+    click(
+        &window,
+        window.get_request_detail_id_copy_x() + window.get_request_detail_id_copy_width() / 2.0,
+        window.get_request_detail_id_copy_y() + window.get_request_detail_id_copy_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().as_deref(),
+        Some("f314e7d8c7526367baec95ac155b6406"),
+        "复制请求 ID copies the selected request's stable ID"
+    );
+}
+
+#[test]
+fn a_disabled_primary_action_keeps_readable_neutral_colors_instead_of_dimmed_blue() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_probe_run_enabled(),
+        "上下文探测 starts disabled until a model is selected"
+    );
+    for theme in [1, 2] {
+        window.set_theme_mode(theme);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        assert_eq!(
+            window.get_probe_run_fill(),
+            window.get_console_field_color(),
+            "a disabled action rests on the neutral field fill, not a dimmed accent"
+        );
+        assert_eq!(
+            window.get_probe_run_frame_tint(),
+            window.get_console_edge_control_color(),
+            "a disabled action keeps the control edge instead of the accent frame"
+        );
+        assert_eq!(
+            window.get_probe_run_label_tint(),
+            window.get_console_muted_color(),
+            "a disabled action uses the muted label"
+        );
+        let ratio = contrast_ratio(
+            window.get_probe_run_label_tint(),
+            window.get_probe_run_fill(),
+        );
+        assert!(
+            ratio >= 4.5,
+            "the disabled label must stay readable on its fill, got {ratio:.2} in theme {theme}"
+        );
+        assert!(
+            !window.get_probe_run_focus_visible(),
+            "a disabled action must not read as a visible focus target"
+        );
+    }
+}
+
+// WCAG relative luminance, so the danger-label check is a real contrast
+// measurement instead of a token-name comparison.
+fn relative_luminance(color: slint::Color) -> f64 {
+    fn channel(value: u8) -> f64 {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.039_28 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(color.red())
+        + 0.7152 * channel(color.green())
+        + 0.0722 * channel(color.blue())
+}
+
+fn contrast_ratio(foreground: slint::Color, background: slint::Color) -> f64 {
+    let (first, second) = (
+        relative_luminance(foreground),
+        relative_luminance(background),
+    );
+    let (lighter, darker) = if first > second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[test]
+fn danger_action_label_and_icon_clear_the_aa_text_floor_in_both_themes() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_account_can_clear(true);
+    for theme in [1, 2] {
+        window.set_theme_mode(theme);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        let surface = window.get_console_surface_color();
+        for (name, tint) in [
+            ("label", window.get_danger_action_label_tint()),
+            ("icon", window.get_danger_action_icon_tint()),
+        ] {
+            let ratio = contrast_ratio(tint, surface);
+            assert!(
+                ratio >= 4.5,
+                "the danger {name} must clear 4.5:1 on the card surface, got {ratio:.2} in theme {theme}"
+            );
+        }
+        let frame = contrast_ratio(window.get_danger_action_frame_tint(), surface);
+        assert!(
+            frame >= 3.0,
+            "the danger frame keeps the 3:1 non-text floor, got {frame:.2} in theme {theme}"
+        );
+    }
+}
+
+#[test]
+fn the_request_kpi_scope_caption_sits_above_the_five_cards() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_request_chart_collapsed(false);
+    window.set_request_chart_collapsed_explicit(true);
+    let metrics = vec![
+        RequestMetric {
+            label: "Token".into(),
+            value: "84 亿".into(),
+            detail: "入 42 亿 · 出 42 亿".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "请求".into(),
+            value: "2,100".into(),
+            detail: "失败 3".into(),
+            detail_tone: 2,
+        },
+        RequestMetric {
+            label: "缓存命中率".into(),
+            value: "62.4%".into(),
+            detail: "缓存读取 / 输入 Token".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "输出速度".into(),
+            value: "38.6 Token/秒".into(),
+            detail: "整次平均".into(),
+            detail_tone: 3,
+        },
+        RequestMetric {
+            label: "首字耗时".into(),
+            value: "420 ms".into(),
+            detail: "请求开始到首个输出".into(),
+            detail_tone: 3,
+        },
+    ];
+    window.set_request_metrics(ModelRc::from(metrics.as_slice()));
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert!(window.get_request_kpi_scope_visible());
+    assert_eq!(window.get_request_kpi_scope_text().as_str(), "所选范围");
+    let analytics_y = window.get_request_analytics_y();
+    let scope_y = window.get_request_kpi_scope_y();
+    let scope_height = window.get_request_kpi_scope_height();
+    let card_y = window.get_request_kpi_first_card_y();
+    assert!(
+        scope_y >= analytics_y,
+        "所选范围 stays inside the analytics card: {scope_y} vs {analytics_y}"
+    );
+    assert!(
+        scope_y + scope_height <= card_y + 0.5,
+        "所选范围 sits above the KPI cards: {} + {} vs {card_y}",
+        scope_y,
+        scope_height
+    );
+}
+
+#[test]
+fn the_first_run_footer_hint_retires_after_help_and_answers_ctrl_r() {
+    let window = window_at(1060.0, 720.0);
+    assert!(
+        window.get_footer_help_hint_visible(),
+        "the first-run footer points at the help page"
+    );
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "按 F1 查看帮助"
+    );
+
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "opening help retires the first-run hint"
+    );
+
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_footer_help_hint_visible());
+
+    window.set_page(4);
+    window.invoke_show_help_no_refresh();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_footer_help_hint_visible());
+    assert_eq!(
+        window.get_footer_help_hint_text().as_str(),
+        "帮助页无刷新",
+        "Ctrl+R on the static help page names the no-op instead of spinning a hidden icon"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
+    assert!(
+        !window.get_footer_help_hint_visible(),
+        "the note is transient"
+    );
+}
+
+#[test]
+fn the_history_level_filter_names_the_empty_selection() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_mode(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(window.get_log_level_hint_visible());
+    assert_eq!(
+        window.get_log_level_hint_text().as_str(),
+        "未选级别时显示全部"
+    );
+}
+
+#[test]
+fn the_compact_settings_directory_balances_its_two_rows() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "toc_h={} appearance=({},{}) export_y={} login_rounds=({},{})",
+        window.get_settings_toc_height(),
+        window.get_settings_toc_appearance_x(),
+        window.get_settings_toc_appearance_y(),
+        window.get_settings_toc_export_y(),
+        window.get_settings_toc_login_rounds_x(),
+        window.get_settings_toc_login_rounds_y(),
+    );
+    assert!(
+        window.get_settings_toc_export_y() > window.get_settings_toc_appearance_y(),
+        "导出用量 starts the second directory row instead of following 实例管理"
+    );
+    assert_eq!(
+        window.get_settings_toc_login_rounds_y(),
+        window.get_settings_toc_export_y(),
+        "登录轮次 shares the second row instead of sitting alone on a third"
+    );
+    assert!(
+        window.get_settings_toc_login_rounds_x() > window.get_settings_toc_appearance_x(),
+        "登录轮次 follows 导出用量 and UM 模型 on the second row"
+    );
+}
+
+#[test]
+fn the_maintenance_menu_uses_a_wrench_not_the_settings_gear() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_maintenance_toggle_icon().as_str(),
+        "wrench",
+        "the maintenance menu must not reuse the settings page's gear"
+    );
+}
+
+#[test]
+fn the_request_page_uses_one_column_at_800px() {
+    for (width, height) in [(800.0, 540.0), (800.0, 720.0)] {
+        let window = window_at(width, height);
+        window.set_page(1);
+        let rows = (0..3).map(request_row).collect::<Vec<_>>();
+        window.set_requests(ModelRc::from(rows.as_slice()));
+        window.set_selected_request("key-0".into());
+        window.set_request_detail("HTTP 状态  200\n错误\n  无".into());
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+        assert!(
+            !window.get_request_list_visible(),
+            "800 px must show the detail as a single-column overlay, not squeeze the list"
+        );
+        assert!(
+            window.get_request_detail_width() >= window.get_request_page_host_width() - 1.0,
+            "the detail must take the full content width: detail {} page {}",
+            window.get_request_detail_width(),
+            window.get_request_page_host_width()
+        );
+
+        // The page status row owns the one chart disclosure at this width;
+        // the click is the product callback, not a coordinate guess.
+        click(
+            &window,
+            window.get_request_chart_toggle_x() + window.get_request_chart_toggle_width() / 2.0,
+            window.get_request_chart_toggle_y() + window.get_request_chart_toggle_height() / 2.0,
+        );
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        assert!(
+            window.get_request_analytics_compact(),
+            "800 px must stack the analytics card instead of the wide row"
+        );
+        assert!(
+            window.get_request_analytics_chart_width() > 300.0,
+            "the chart keeps a readable width: {}",
+            window.get_request_analytics_chart_width()
+        );
+        assert!(
+            (window.get_request_analytics_chart_width()
+                - window.get_request_analytics_speed_table_width())
+                .abs()
+                < 1.0,
+            "the speed table must sit under the chart at the same width: chart {} table {}",
+            window.get_request_analytics_chart_width(),
+            window.get_request_analytics_speed_table_width()
+        );
+        assert!(
+            window.get_request_analytics_chart_y()
+                + window.get_request_analytics_chart_height()
+                <= window.get_request_analytics_speed_table_y() + 1.0,
+            "the speed table must sit below the chart, chart bottom {} table y {}",
+            window.get_request_analytics_chart_y() + window.get_request_analytics_chart_height(),
+            window.get_request_analytics_speed_table_y()
+        );
+    }
+}
+
+#[test]
+fn keyboard_focus_on_rows_chips_and_cards_uses_a_control_strength_edge() {
+    let probe = RowStyleProbe::new().expect("create RowStyleProbe");
+    probe.show().expect("show RowStyleProbe");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+
+    assert_eq!(
+        probe.get_row_focus_edge_width(),
+        0.0,
+        "a resting row keeps no focus ring"
+    );
+    probe.invoke_focus_row();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_row_focus_visible());
+    assert_eq!(probe.get_row_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_row_focus_edge(),
+        probe.get_control_strong(),
+        "a focused list row must step to the 3:1 control edge"
+    );
+
+    probe.invoke_focus_chip();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_chip_focus_visible());
+    assert_eq!(probe.get_chip_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_chip_focus_edge(),
+        probe.get_control_strong(),
+        "a focused address chip must step to the 3:1 control edge"
+    );
+
+    probe.invoke_focus_card();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(probe.get_card_focus_visible());
+    assert_eq!(probe.get_card_focus_edge_width(), 1.0);
+    assert_eq!(
+        probe.get_card_focus_edge(),
+        probe.get_control_strong(),
+        "a focused clickable card must step to the 3:1 control edge"
+    );
+
+    probe.set_probe_row_selected(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(probe.get_row_fill(), probe.get_selected_fill());
+    assert_ne!(
+        probe.get_selected_fill(),
+        probe.get_hover_fill(),
+        "a selected row must not share the hover fill in either theme"
+    );
+    probe.set_probe_theme_mode(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_ne!(
+        probe.get_selected_fill(),
+        probe.get_hover_fill(),
+        "dark selected must stay distinct from hover"
+    );
+    assert_eq!(probe.get_row_fill(), probe.get_selected_fill());
+}
+
+#[test]
+fn the_first_screen_at_1060x720_reaches_the_recent_issues_title() {
+    let window = window_at(1060.0, 720.0);
+    window.set_account_label("已登录".into());
+    window.set_overview_failure_count(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "chart_y={} chart_h={} plot_h={} verify_h={} recent_title_y={} recent_title_h={} viewport_bottom={} status_y={}",
+        window.get_overview_chart_absolute_y(),
+        window.get_overview_chart_height(),
+        window.get_overview_plot_height(),
+        window.get_verify_card_height(),
+        window.get_recent_issues_title_y(),
+        window.get_recent_issues_title_height(),
+        window.get_overview_viewport_bottom(),
+        window.get_status_row_y(),
+    );
+    assert!(
+        window.get_overview_chart_height() <= 300.0 + 1.0,
+        "the usage chart must not absorb the first screen: {}",
+        window.get_overview_chart_height()
+    );
+    assert!(
+        window.get_overview_plot_height() >= 120.0,
+        "the usage plot must keep readable bars in the default window: {}",
+        window.get_overview_plot_height()
+    );
+    assert!(
+        window.get_verify_card_height() <= 56.0,
+        "the recent verify card must be one compact row: {}",
+        window.get_verify_card_height()
+    );
+    assert!(
+        window.get_overview_chart_absolute_y() < window.get_recent_issues_title_y(),
+        "the trend chart precedes the status cards on the overview"
+    );
+    assert!(
+        window.get_recent_issues_title_y() + window.get_recent_issues_title_height()
+            <= window.get_overview_viewport_bottom() + 1.0,
+        "the 近期问题 title must be visible in the first screen: title bottom {} viewport bottom {}",
+        window.get_recent_issues_title_y() + window.get_recent_issues_title_height(),
+        window.get_overview_viewport_bottom()
+    );
+}
+
+#[test]
+fn the_compact_status_row_keeps_the_page_count_unelided() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(1);
+    window.set_request_status("北京时间 · 本页 3 条".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "status={} width={} preferred={}",
+        window.get_request_status_display_text(),
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width(),
+    );
+    assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 3 条",
+        "the compact status row keeps the page count"
+    );
+    assert!(
+        window.get_request_status_hint_width() + 0.5
+            >= window.get_request_status_hint_preferred_width(),
+        "the status hint must not elide the page count: width {} preferred {}",
+        window.get_request_status_hint_width(),
+        window.get_request_status_hint_preferred_width()
+    );
+}
+
+#[test]
+fn the_primary_query_action_shows_a_three_to_one_focus_ring() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_request_query_primary());
+    assert!(!window.get_request_query_focus_visible());
+    window.invoke_focus_request_query();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        window.get_request_query_has_focus(),
+        "the primary 查询 action takes keyboard focus"
+    );
+    assert!(
+        window.get_request_query_focus_visible(),
+        "a primary action must still expose a 3:1 focus ring"
+    );
+}
+
+#[test]
+fn the_compact_verify_card_keeps_its_row_inside_the_card() {
+    let window = window_at(540.0, 420.0);
+    window.set_verify_at("核验于 11-22 10:01:00".into());
+    window.set_verify_result("通过".into());
+    window.set_verify_detail("上游返回 200，未调用模型".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "card_x={} card_w={} card_h={} button_x={} button_w={}",
+        window.get_verify_card_x(),
+        window.get_verify_card_width(),
+        window.get_verify_card_height(),
+        window.get_verify_button_x(),
+        window.get_verify_button_width(),
+    );
+    assert!(
+        window.get_verify_card_height() <= 56.0,
+        "the recent verify card stays one row at 540 px: {}",
+        window.get_verify_card_height()
+    );
+    let card_right = window.get_verify_card_x() + window.get_verify_card_width();
+    let button_right = window.get_verify_button_x() + window.get_verify_button_width();
+    assert!(
+        button_right <= card_right - 8.0,
+        "the 重新核验 action stays inside the card: button right {button_right} card right {card_right}"
+    );
+    assert!(
+        window.get_verify_button_width() >= 96.0 - 0.5,
+        "the re-verify action keeps its full label: {}",
+        window.get_verify_button_width()
+    );
+}
+
+#[test]
+fn the_request_row_accessible_label_carries_first_token_and_summary() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    let rows = vec![request_row(0)];
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    let label = window.get_request_row_label_sample();
+    println!("row label={label}");
+    assert!(label.contains("120 ms"), "missing 首字耗时 in {label}");
+    assert!(label.contains("1200 ms"), "missing summary in {label}");
+    assert!(label.contains("成功"), "missing 结果 in {label}");
+}
+
+#[test]
+fn ctrl_f_reaches_the_help_search_field() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_help_search_focused());
+    window.invoke_focus_page_search();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(
+        window.get_help_search_focused(),
+        "the help page's Ctrl+F target must take focus"
+    );
+}
+
+#[test]
+fn the_settings_directory_scrolls_to_a_lower_card() {
+    let window = window_at(540.0, 420.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(window.get_settings_scroll_y(), 0.0);
+    window.invoke_scroll_settings_to(window.get_settings_viewport_height());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    println!(
+        "settings y={} viewport={} content_h={}",
+        window.get_settings_scroll_y(),
+        window.get_settings_viewport_height(),
+        window.get_settings_content_height(),
+    );
+    assert!(
+        window.get_settings_scroll_y() < 0.0,
+        "the settings directory must scroll to a lower card"
     );
 }

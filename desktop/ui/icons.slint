@@ -15,11 +15,13 @@ export component AppIcon inherits Image {
     image-fit: contain;
     colorize: root.tint;
     source: root.kind == "search" ? @image-url("icons/search.svg")
+        : root.kind == "filter" ? @image-url("icons/list-filter.svg")
         : root.kind == "refresh" ? @image-url("icons/refresh-cw.svg")
         : root.kind == "chevron-left" ? @image-url("icons/chevron-left.svg")
         : root.kind == "chevron-right" ? @image-url("icons/chevron-right.svg")
         : root.kind == "chevron-down" ? @image-url("icons/chevron-down.svg")
         : root.kind == "arrow-right" ? @image-url("icons/arrow-right.svg")
+        : root.kind == "download" ? @image-url("icons/download.svg")
         : root.kind == "pause" ? @image-url("icons/pause.svg")
         : root.kind == "play" ? @image-url("icons/play.svg")
         : root.kind == "copy" ? @image-url("icons/copy.svg")
@@ -30,6 +32,7 @@ export component AppIcon inherits Image {
         : root.kind == "check" ? @image-url("icons/check.svg")
         : root.kind == "power" ? @image-url("icons/power.svg")
         : root.kind == "settings" ? @image-url("icons/settings.svg")
+        : root.kind == "wrench" ? @image-url("icons/wrench.svg")
         : root.kind == "dashboard" ? @image-url("icons/layout-dashboard.svg")
         : root.kind == "scroll-text" ? @image-url("icons/scroll-text.svg")
         : root.kind == "help" ? @image-url("icons/circle-help.svg")

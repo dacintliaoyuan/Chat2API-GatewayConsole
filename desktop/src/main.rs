@@ -25,12 +25,15 @@ use chrono::TimeZone;
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel,
 };
+use um_desktop::access_info;
 use um_desktop::account::{
-    self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
-    AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
+    self, account_view, apply_account, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState,
+    FormError, HttpAuthAdmin, LoadOutcome, OnDemandLogin, VerifyOutcome,
 };
 use um_desktop::clipboard;
-use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, ThemeMode};
+use um_desktop::config::{
+    self, DesktopConfig, LoadOutcome as ConfigLoadOutcome, MotionPreference, SidebarMode, ThemeMode,
+};
 use um_desktop::dwm;
 use um_desktop::gateway::{
     load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
@@ -38,14 +41,23 @@ use um_desktop::gateway::{
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logstream::{
-    format_log_time, plan_log_page, read_history, LevelFilter, LogStream, StreamLine,
+use um_desktop::log_history::{
+    self, append_history_rows, HistoryClient, HistoryQuery, HistoryRange, HttpHistoryClient,
+    LevelSelection,
 };
+use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
+use um_desktop::logstream::{
+    format_log_time, plan_log_page, LevelFilter, LiveLog, LiveTick, StreamLine,
+};
+use um_desktop::maintenance;
+use um_desktop::models;
+use um_desktop::models::ProbeClient;
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
+use um_desktop::recent_issues;
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
+use um_desktop::ui::*;
+use um_desktop::um_service;
 use um_desktop::usage::{self, Coverage, Range, UsageView};
-
-slint::include_modules!();
 
 static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -53,41 +65,25 @@ static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
 static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
+static MODELS_REFRESH: AtomicU64 = AtomicU64::new(0);
+static ACCESS_REFRESH: AtomicU64 = AtomicU64::new(0);
+static LOGIN_ROUNDS_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static VERIFY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+// One monotonic stamp per page read; the footer compares it instead of
+// ordering HH:MM:SS strings, so a read after midnight still wins.
+static PAGE_READ_SEQ: AtomicI32 = AtomicI32::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// One log-page update produced by the reader thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LogUpdate {
-    previous: Vec<StreamLine>,
-    entries: Vec<StreamLine>,
-    appended: Vec<StreamLine>,
-    reset: bool,
-    trimmed: usize,
-    failure: Option<String>,
-}
-
-impl LogUpdate {
-    fn failed(reason: String) -> Self {
-        Self {
-            previous: Vec::new(),
-            entries: Vec::new(),
-            appended: Vec::new(),
-            reset: false,
-            trimmed: 0,
-            failure: Some(reason),
-        }
-    }
-}
+///
+/// The live reader owns the missing/empty/failure distinction; this is only the
+/// copy the UI thread applies.
+type LogUpdate = LiveTick;
 
 fn status_tone(tone: Tone) -> i32 {
-    match tone {
-        Tone::Good => 0,
-        Tone::Warn => 1,
-        Tone::Bad => 2,
-        Tone::Neutral => 3,
-    }
+    um_desktop::ui::tone_index(tone)
 }
 
 fn theme_mode_index(theme: ThemeMode) -> i32 {
@@ -114,6 +110,20 @@ fn theme_label(theme: ThemeMode) -> &'static str {
     }
 }
 
+fn sidebar_label(mode: SidebarMode) -> &'static str {
+    match mode {
+        SidebarMode::Expanded => "侧栏展开",
+        SidebarMode::IconsOnly => "侧栏仅图标",
+    }
+}
+
+fn motion_label(preference: MotionPreference) -> &'static str {
+    match preference {
+        MotionPreference::System => "动效跟随系统",
+        MotionPreference::Reduced => "减少动效",
+    }
+}
+
 fn clock(at: Option<i64>) -> String {
     at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
         .map(|time| time.format("%H:%M:%S").to_string())
@@ -124,46 +134,8 @@ fn clock_now() -> String {
     clock(Some(chrono::Local::now().timestamp_millis()))
 }
 
-impl AccountSurface for MainWindow {
-    fn set_saved_account(&self, value: &str) {
-        self.set_account_saved(value.into());
-    }
-
-    fn set_saved_detail(&self, value: &str) {
-        self.set_account_saved_detail(value.into());
-    }
-
-    fn set_can_clear(&self, value: bool) {
-        self.set_account_can_clear(value);
-    }
-
-    fn set_can_continue_login(&self, value: bool) {
-        self.set_account_can_continue(value);
-    }
-
-    fn set_overview_label(&self, value: &str) {
-        self.set_account_label(value.into());
-    }
-
-    fn set_overview_detail(&self, value: &str) {
-        self.set_account_detail(value.into());
-    }
-
-    fn set_overview_tone(&self, tone: Tone) {
-        self.set_account_tone(status_tone(tone));
-    }
-
-    fn set_overview_pulse(&self, value: bool) {
-        self.set_account_pulse(value);
-    }
-
-    fn set_login_status(&self, value: &str) {
-        self.set_login_status(value.into());
-    }
-
-    fn set_credential_status(&self, value: &str) {
-        self.set_credential_status(value.into());
-    }
+fn next_page_read_seq() -> i32 {
+    PAGE_READ_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
 fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved: &LoadOutcome) {
@@ -188,7 +160,7 @@ fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved
 
 fn read_auth(auth_admin: &HttpAuthAdmin, token_path: &Path, gateway: &GatewayStatus) -> AuthRead {
     if !matches!(gateway.state, GatewayState::Running { .. }) {
-        return AuthRead::Unavailable(format!("本实例网关未就绪：{}", gateway.state.detail()));
+        return AuthRead::Unavailable(format!("本机网关未就绪：{}", gateway.state.detail()));
     }
     let token = match load_control_token(token_path) {
         Ok(token) => token,
@@ -224,10 +196,7 @@ fn save_message(auth: &AuthRead, view: &AccountView) -> (String, Tone) {
     match auth {
         AuthRead::Status(status) => match status.state {
             AuthState::Valid => ("账号已保存；本实例已登录".to_string(), Tone::Good),
-            AuthState::LoggingIn => (
-                "账号已保存；本实例网关正在自动重登…".to_string(),
-                Tone::Warn,
-            ),
+            AuthState::LoggingIn => ("账号已保存；本机网关正在自动重登…".to_string(), Tone::Warn),
             _ => (format!("账号已保存；{}", view.state_detail), Tone::Warn),
         },
         AuthRead::Unavailable(reason) => {
@@ -263,8 +232,26 @@ fn log_row(line: &StreamLine) -> LogRow {
         id: format!("{}:{:x}", line.id.offset, line.id.hash).into(),
         at: time.label.into(),
         level: level.into(),
+        source: "chat2api".into(),
         text: line.entry.text.clone().into(),
         detail: format!("{}  {level}\n\n{}", time.precise, line.detail).into(),
+    }
+}
+
+/// One history row already carries the gateway's level and source labels.
+fn history_row(row: &log_history::HistoryRow) -> LogRow {
+    let time = format_log_time(row.at, chrono::Local::now());
+    LogRow {
+        id: row.key.clone().into(),
+        at: time.label.into(),
+        level: row.level.clone().into(),
+        source: row.source.clone().into(),
+        text: row.text.clone().into(),
+        detail: format!(
+            "{}  {} · {}\n\n{}",
+            time.precise, row.level, row.source, row.detail
+        )
+        .into(),
     }
 }
 
@@ -286,6 +273,7 @@ fn apply_overview(window: &MainWindow, overview: &Overview, account: &AccountVie
     window.set_status_tone(if overview.failures.is_empty() { 0 } else { 2 });
     if overview.failures.is_empty() {
         let now = clock_now();
+        window.set_last_update_seq(next_page_read_seq());
         window.set_last_update(now.clone().into());
         window.set_overview_updated_at(now.into());
     }
@@ -311,21 +299,37 @@ fn read_live_overview(
     (overview, account, auth)
 }
 
+/// One UM service read: the gateway answers only while the supervisor says it is
+/// running; otherwise the card points at the gateway start entry.
+fn service_view(
+    gateway: &GatewayStatus,
+    api: &um_service::HttpServiceApi,
+    token_path: &Path,
+    base: &str,
+) -> um_service::ServiceView {
+    match gateway.state {
+        GatewayState::Running { .. } => match load_control_token(token_path) {
+            Ok(token) => um_service::read(api, base, token.expose()),
+            Err(error) => um_service::ServiceView::failure(error),
+        },
+        GatewayState::Starting => {
+            um_service::ServiceView::gateway_starting(&gateway.state.detail())
+        }
+        _ => um_service::ServiceView::gateway_unavailable(&gateway.state.detail()),
+    }
+}
+
 fn apply_logs(window: &MainWindow, update: &LogUpdate) {
-    if window.get_log_period() != 0 {
+    if window.get_log_mode() != 0 {
         return;
     }
     if let Some(reason) = &update.failure {
         window.set_log_status(format!("刷新失败：{reason}").into());
         window.set_log_tone(status_tone(Tone::Bad));
-        window.set_log_refresh_pending(false);
-        window.set_log_refreshed(false);
         return;
     }
-    let acknowledge_refresh = window.get_log_refresh_pending();
 
-    let level = LevelFilter::from_index(window.get_log_filter_level());
-    let keyword = window.get_log_filter_keyword().trim().to_lowercase();
+    // The live layer is the unfiltered tail; the history filters never reach it.
     let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
     let filter_changed = APPLIED_FILTER_EPOCH.swap(epoch, Ordering::SeqCst) != epoch;
     let follow = window.get_log_follow();
@@ -343,8 +347,8 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
         follow,
         window.get_log_scroll_y(),
         window.get_new_log_count(),
-        level,
-        &keyword,
+        LevelFilter::All,
+        "",
     );
     if plan.rebuild {
         model.set_vec(plan.rows.iter().map(log_row).collect::<Vec<_>>());
@@ -360,96 +364,156 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     let visible = model.row_count();
     let status = if total == 0 {
         "本实例暂无日志记录".to_string()
-    } else if visible == 0 {
-        format!("最新 {total} 条中没有匹配的日志")
     } else if visible == total {
-        format!("实时 · 最近 {total} 条")
+        format!("已连接 · 最近 {total} 条")
     } else {
-        format!("实时 · 显示 {visible} / {total} 条")
+        format!("已连接 · 显示 {visible} / {total} 条")
     };
     window.set_log_total(total as i32);
     window.set_log_status(status.into());
-    // A live stream reads as healthy; an empty or filtered list stays neutral.
-    window.set_log_tone(if total == 0 { 3 } else { status_tone(Tone::Good) });
-    window.set_log_refresh_pending(false);
-    if acknowledge_refresh {
-        window.set_log_refreshed(true);
-    }
+    // A live stream reads as healthy; an empty list stays neutral.
+    window.set_log_tone(if total == 0 {
+        3
+    } else {
+        status_tone(Tone::Good)
+    });
+    window.set_log_history_note("".into());
     window.set_log_version(window.get_log_version().wrapping_add(1));
+    window.set_log_updated_seq(next_page_read_seq());
     window.set_log_updated_at(clock_now().into());
 }
 
 #[derive(Default)]
 struct HistoryNav {
-    pages: Vec<Option<u64>>,
-    older: Option<u64>,
+    rows: Vec<log_history::HistoryRow>,
+    cursor: Option<String>,
     generation: u64,
 }
 
-fn load_historical_logs(
+fn level_selection(window: &MainWindow) -> LevelSelection {
+    LevelSelection::from_flags(
+        window.get_log_level_error(),
+        window.get_log_level_warn(),
+        window.get_log_level_info(),
+        window.get_log_level_debug(),
+    )
+}
+
+fn history_sources(window: &MainWindow) -> Vec<String> {
+    let options = window.get_log_source_options();
+    (1..options.row_count())
+        .filter_map(|index| options.row_data(index))
+        .map(|source| source.to_string())
+        .collect()
+}
+
+fn apply_history_sources(window: &MainWindow, sources: &[String]) {
+    let mut options = vec![String::from("全部来源")];
+    options.extend(sources.iter().cloned());
+    let selected = window.get_log_source().to_string();
+    let index = if selected.is_empty() {
+        0
+    } else {
+        options
+            .iter()
+            .position(|source| source == &selected)
+            .map_or(0, |index| index as i32)
+    };
+    let options = options
+        .iter()
+        .map(|source| source.as_str().into())
+        .collect::<Vec<slint::SharedString>>();
+    window.set_log_source_options(ModelRc::from(options.as_slice()));
+    window.set_log_source_index(index);
+    if index == 0 && !selected.is_empty() {
+        window.set_log_source("".into());
+    }
+}
+
+fn apply_history_failure(window: &MainWindow, nav: &mut HistoryNav, reason: String) {
+    let previous = log_history::HistoryView {
+        status: String::new(),
+        tone: Tone::Neutral,
+        rows: nav.rows.clone(),
+        sources: history_sources(window),
+        earlier: nav.cursor.clone(),
+        empty: false,
+        note: String::new(),
+    };
+    let failure = log_history::history_failure(reason, Some(&previous));
+    window.set_log_status(failure.status.into());
+    window.set_log_tone(status_tone(failure.tone));
+    window.set_older_logs(nav.cursor.is_some());
+    window.set_log_history_note("".into());
+}
+
+fn load_log_history(
     window: &MainWindow,
-    path: &Path,
+    client: &Arc<dyn HistoryClient>,
+    base_url: &str,
+    token_path: &Path,
     navigation: &Arc<Mutex<HistoryNav>>,
-    direction: i32,
+    append: bool,
 ) {
-    let period = window.get_log_period();
-    if period == 0 {
-        window.set_log_status("正在读取实时日志…".into());
-        window.set_log_follow(true);
-        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
-        REFRESH_LOGS.store(true, Ordering::SeqCst);
+    if window.get_log_mode() != 1 {
         return;
     }
-
-    let (before, generation) = {
+    let cursor = if append {
+        navigation
+            .lock()
+            .expect("log history navigation poisoned")
+            .cursor
+            .clone()
+    } else {
+        None
+    };
+    if append && cursor.is_none() {
+        window.set_older_logs(false);
+        window.set_log_history_note("没有更早记录".into());
+        return;
+    }
+    let query = HistoryQuery {
+        range: HistoryRange::from_index(window.get_log_range()),
+        levels: level_selection(window),
+        source: window.get_log_source().to_string(),
+        keyword: window.get_log_filter_keyword().to_string(),
+        cursor,
+        limit: log_history::HISTORY_LIMIT,
+    };
+    let (generation, previous_count) = {
         let mut nav = navigation.lock().expect("log history navigation poisoned");
-        match direction {
-            1 => match nav.older {
-                Some(cursor) => nav.pages.push(Some(cursor)),
-                None => return,
-            },
-            -1 if nav.pages.len() > 1 => {
-                nav.pages.pop();
-            }
-            -1 => return,
-            _ => {
-                nav.pages.clear();
-                nav.pages.push(None);
-            }
+        if !append {
+            nav.rows.clear();
+            nav.cursor = None;
         }
         nav.generation = nav.generation.wrapping_add(1);
-        (nav.pages.last().copied().flatten(), nav.generation)
+        (nav.generation, nav.rows.len())
     };
-    let path = path.to_path_buf();
+    let base = base_url.to_string();
+    let token_path = token_path.to_path_buf();
     let weak = window.as_weak();
     let navigation = Arc::clone(navigation);
-    let level = LevelFilter::from_index(window.get_log_filter_level());
-    let keyword = window.get_log_filter_keyword().to_string();
+    let client = Arc::clone(client);
     window.set_older_logs(false);
-    window.set_newer_logs(false);
-    window.set_log_status("正在读取历史日志…".into());
+    window.set_log_status(
+        if append {
+            "正在读取更早的日志…"
+        } else {
+            "正在读取历史日志…"
+        }
+        .into(),
+    );
     window.set_log_tone(3);
+    window.set_log_history_note("".into());
     std::thread::spawn(move || {
-        let now = chrono::Local::now();
-        let days = match period {
-            2 => 6,
-            3 => 29,
-            _ => 0,
-        };
-        let since = now
-            .date_naive()
-            .checked_sub_days(chrono::Days::new(days))
-            .and_then(|date| date.and_hms_opt(0, 0, 0))
-            .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
-            .map_or_else(
-                || (now - chrono::Duration::days(days as i64 + 1)).timestamp_millis(),
-                |time| time.timestamp_millis(),
-            );
-        let result = read_history(&path, before, since, level, &keyword);
+        let result = load_control_token(&token_path)
+            .and_then(|token| client.read_history(&base, &token, &query));
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else { return };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             let mut nav = navigation.lock().expect("log history navigation poisoned");
-            if window.get_log_period() != period || nav.generation != generation {
+            if window.get_log_mode() != 1 || nav.generation != generation {
                 return;
             }
             let model = window.get_logs();
@@ -457,29 +521,63 @@ fn load_historical_logs(
                 return;
             };
             match result {
-                Ok(result) => {
-                    let count = result.lines.len();
-                    nav.older = result.older;
-                    window.set_older_logs(nav.older.is_some());
-                    window.set_newer_logs(nav.pages.len() > 1);
-                    model.set_vec(result.lines.iter().map(log_row).collect::<Vec<_>>());
-                    window.set_log_scroll_y(0.0);
-                    let text = if count == 0 {
-                        "本页没有符合条件的记录".to_string()
-                    } else {
-                        format!("历史日志 · 本页 {count} 条")
-                    };
-                    window.set_log_status(text.into());
-                    window.set_log_tone(3);
-                    window.set_log_updated_at(clock_now().into());
-                }
-                Err(error) => {
-                    nav.older = None;
-                    window.set_older_logs(false);
-                    window.set_newer_logs(nav.pages.len() > 1);
-                    window.set_log_status(format!("刷新失败：历史日志读取失败：{error}").into());
-                    window.set_log_tone(status_tone(Tone::Bad));
-                }
+                Ok(payload) => match log_history::parse_history_payload(&payload) {
+                    Ok(view) if view.tone == Tone::Bad => {
+                        apply_history_failure(&window, &mut nav, view.status)
+                    }
+                    Ok(view) => {
+                        let mut view = view;
+                        view.rows = log_history::filter_history_rows(&view.rows, &query.keyword);
+                        view.empty = view.rows.is_empty();
+                        if view.empty {
+                            view.status = if query.keyword.trim().is_empty() {
+                                "读取范围内没有符合条件的日志".to_string()
+                            } else {
+                                "本页没有符合关键词的日志".to_string()
+                            };
+                            view.tone = Tone::Neutral;
+                        } else if !query.keyword.trim().is_empty() {
+                            view.status = format!("本页 {} 条", view.rows.len());
+                            view.tone = Tone::Good;
+                        }
+                        let rows = if append {
+                            append_history_rows(&nav.rows, &view)
+                        } else {
+                            view.rows.clone()
+                        };
+                        nav.rows = rows.clone();
+                        nav.cursor = view.earlier.clone();
+                        if append {
+                            model.extend(rows.iter().skip(previous_count).map(history_row));
+                        } else {
+                            model.set_vec(rows.iter().map(history_row).collect::<Vec<_>>());
+                            window.set_log_scroll_y(0.0);
+                            window.set_open_log_id("".into());
+                        }
+                        apply_history_sources(&window, &view.sources);
+                        window.set_older_logs(nav.cursor.is_some());
+                        window.set_log_history_note(if nav.cursor.is_none() {
+                            "没有更早记录".into()
+                        } else {
+                            "".into()
+                        });
+                        window.set_log_status(
+                            if append {
+                                format!("已加载 {} 条", rows.len())
+                            } else {
+                                view.status.clone()
+                            }
+                            .into(),
+                        );
+                        window.set_log_tone(status_tone(view.tone));
+                        window.set_log_total(rows.len() as i32);
+                        window.set_log_updated_seq(next_page_read_seq());
+                        window.set_log_updated_at(clock_now().into());
+                        window.set_log_version(window.get_log_version().wrapping_add(1));
+                    }
+                    Err(reason) => apply_history_failure(&window, &mut nav, reason),
+                },
+                Err(reason) => apply_history_failure(&window, &mut nav, reason),
             }
         });
     });
@@ -494,6 +592,28 @@ fn coverage_tone(coverage: Coverage) -> i32 {
 }
 
 fn apply_usage(window: &MainWindow, view: UsageView) {
+    // Export is only enabled for a readable range with rows; both a legal
+    // empty range and an unreadable ledger carry their own reason instead of a
+    // successful export with no data.
+    let export_available =
+        view.scanned > 0 && matches!(view.coverage, Coverage::Complete | Coverage::Partial);
+    let export_note = if matches!(view.coverage, Coverage::Unavailable) {
+        format!("无法导出用量：{}", view.message)
+    } else if matches!(view.coverage, Coverage::Empty)
+        || view.scanned == 0
+        || view.buckets.is_empty()
+    {
+        format!(
+            "{}没有可导出的用量",
+            Range::from_index(window.get_usage_period()).label()
+        )
+    } else {
+        format!(
+            "可导出{}的 {} 个时段",
+            Range::from_index(window.get_usage_period()).label(),
+            view.buckets.len()
+        )
+    };
     let points = if matches!(view.coverage, Coverage::Empty) {
         Vec::new()
     } else {
@@ -511,11 +631,24 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
                 request_value: bucket.requests.into(),
                 // The axis reads in 亿 so nine-digit labels do not crowd the
                 // plot; the exact total stays in the card and the selection line.
-                token_count: bucket.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0),
+                token_count: bucket
+                    .token_count
+                    .map_or(f32::NAN, |value| value as f32 / 100_000_000.0),
                 request_count: bucket.request_count.map_or(f32::NAN, |value| value as f32),
             })
             .collect::<Vec<_>>()
     };
+    window.set_export_available(export_available);
+    window.set_export_note(export_note.into());
+    if !export_available {
+        // A previous success must not outlive the data it described.
+        window.set_export_status("".into());
+    }
+    window.set_export_tone(if export_available {
+        status_tone(Tone::Neutral)
+    } else {
+        status_tone(Tone::Warn)
+    });
     window.set_token_total(view.token_total.into());
     window.set_request_total(view.request_total.into());
     let points = ModelRc::from(points.as_slice());
@@ -529,6 +662,7 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
     window.set_usage_tone(coverage_tone(view.coverage));
     window.set_usage_loading(false);
     if view.coverage != Coverage::Unavailable {
+        window.set_overview_updated_seq(next_page_read_seq());
         window.set_overview_updated_at(clock_now().into());
     }
 }
@@ -553,37 +687,94 @@ fn model_series(page: &usage::RequestPage, metric: u8) -> Vec<ChartDataset> {
         .models
         .iter()
         .map(|model| {
-            let values = page
-                .chart
-                .points
-                .iter()
-                .map(|point| {
-                    point
-                        .models
-                        .iter()
-                        .find(|row| &row.model == model)
-                        .map_or(f32::NAN, |row| match metric {
-                            1 => row.requests.map_or(f32::NAN, |value| value as f32),
-                            2 => row.speed.map_or(f32::NAN, |value| value as f32),
-                            _ => row.tokens.map_or(f32::NAN, |value| value as f32),
-                        })
-                })
-                .collect::<Vec<_>>();
+            let values =
+                page.chart
+                    .points
+                    .iter()
+                    .map(|point| {
+                        point.models.iter().find(|row| &row.model == model).map_or(
+                            f32::NAN,
+                            |row| match metric {
+                                1 => row.requests.map_or(f32::NAN, |value| value as f32),
+                                2 => row.speed.map_or(f32::NAN, |value| value as f32),
+                                _ => row.tokens.map_or(f32::NAN, |value| value as f32),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
             chart_dataset(model, values)
         })
         .collect()
 }
 
+fn request_row_ui(row: &usage::RequestRow) -> RequestRow {
+    RequestRow {
+        id: row.key.clone().into(),
+        at: row.at.clone().into(),
+        model: row.model.clone().into(),
+        outcome: row.result.clone().into(),
+        tone: match row.result.as_str() {
+            "成功" => status_tone(Tone::Good),
+            "失败" | "截断" => status_tone(Tone::Bad),
+            "客户端断开" => status_tone(Tone::Warn),
+            _ => status_tone(Tone::Neutral),
+        },
+        summary: format!(
+            "耗时 {} · ID {}",
+            row.duration,
+            row.request_id.as_deref().unwrap_or("—")
+        )
+        .into(),
+        first_token: row.first_token.clone().into(),
+        detail: "".into(),
+    }
+}
+
+fn apply_request_rows(window: &MainWindow, rows: &[usage::RequestRow]) {
+    let rows = rows.iter().map(request_row_ui).collect::<Vec<_>>();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+}
+
+fn apply_request_page(
+    window: &MainWindow,
+    page: &usage::RequestPage,
+    catalog: Option<&models::CatalogView>,
+) {
+    let mut options = vec![String::from("全部模型")];
+    options.extend(models::request_model_options(&page.models, catalog));
+    let selected = window.get_request_model_filter().to_string();
+    let model_index = if selected.is_empty() {
+        0
+    } else {
+        options
+            .iter()
+            .position(|model| model == &selected)
+            .map_or(0, |index| index as i32)
+    };
+    let model_options = options
+        .iter()
+        .map(|model| model.as_str().into())
+        .collect::<Vec<slint::SharedString>>();
+    window.set_request_model_options(ModelRc::from(model_options.as_slice()));
+    window.set_request_model_index(model_index);
+    apply_request_rows(window, &page.rows);
+    let count = page.rows.len();
+    apply_request_analytics(window, page);
+    if count == 0 || !page.message.is_empty() {
+        window.set_request_status(page.message.clone().into());
+    } else {
+        window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
+    }
+    window.set_request_tone(coverage_tone(page.coverage));
+    window.set_older_requests(page.earlier.is_some());
+    if page.coverage != Coverage::Unavailable {
+        window.set_request_updated_seq(next_page_read_seq());
+        window.set_request_updated_at(clock_now().into());
+    }
+}
+
 fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
     let cards = page.summary.cards();
-    // The compact request page folds the five cards into two readable lines;
-    // the break lands between whole metrics instead of inside a unit.
-    let summary = cards
-        .iter()
-        .map(|card| format!("{} {}", card.label, card.value))
-        .collect::<Vec<_>>();
-    window.set_request_summary(format!("{}
-{}", summary[..3].join(" · "), summary[3..].join(" · ")).into());
     let metrics = cards
         .into_iter()
         .map(|card| RequestMetric {
@@ -607,7 +798,11 @@ fn apply_request_analytics(window: &MainWindow, page: &usage::RequestPage) {
             .points
             .iter()
             // The request chart plots the same 亿 scale as the overview.
-            .map(|point| point.token_count.map_or(f32::NAN, |value| value as f32 / 100_000_000.0))
+            .map(|point| {
+                point
+                    .token_count
+                    .map_or(f32::NAN, |value| value as f32 / 100_000_000.0)
+            })
             .collect::<Vec<_>>()
             .as_slice(),
     ));
@@ -649,16 +844,19 @@ enum RequestLoad {
     Query,
     Page,
     Refresh,
+    Earlier,
 }
 
 fn load_requests(
     window: &MainWindow,
     ledger: &Path,
     nav: &Arc<Mutex<usage::RequestNav>>,
+    catalog: &Arc<Mutex<Option<models::CatalogView>>>,
     direction: i32,
     mode: RequestLoad,
 ) {
     let refresh = mode == RequestLoad::Refresh;
+    let earlier = mode == RequestLoad::Earlier;
     let range = Range::from_index(window.get_request_period());
     let current_time = chrono::Utc::now().timestamp_millis();
     let (cursor, now, generation) = {
@@ -667,6 +865,17 @@ fn load_requests(
             RequestLoad::Refresh => nav.refresh(current_time, range),
             RequestLoad::Query => nav.query(current_time),
             RequestLoad::Page => nav.page(direction),
+            RequestLoad::Earlier => match nav.begin_earlier() {
+                usage::EarlierLoad::Cursor(cursor) => Some(Some(cursor)),
+                usage::EarlierLoad::NoMore => {
+                    drop(nav);
+                    window.set_request_status("没有更早记录".into());
+                    window.set_request_tone(3);
+                    window.set_has_earlier_records(false);
+                    return;
+                }
+                usage::EarlierLoad::Busy => return,
+            },
         };
         let Some(cursor) = cursor else {
             return;
@@ -675,24 +884,82 @@ fn load_requests(
     };
     let result = window.get_request_result();
     let keyword = window.get_request_keyword().to_string();
+    let model = window.get_request_model_filter().to_string();
     let scroll = window.get_request_scroll_y();
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
-    if !refresh {
+    let catalog = catalog
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if earlier {
+        // Loading earlier appends history: the displayed rows, the selected
+        // detail and the scroll position stay where they are.
+        window.set_request_status("正在加载更早的记录…".into());
+        window.set_request_tone(3);
+    } else if !refresh {
         window.set_selected_request("".into());
-        window.set_request_scroll_y(0.0);
+        // Filter changes keep the reader where they were; only a page jump
+        // starts at the top of the new page.
+        if mode == RequestLoad::Page {
+            window.set_request_scroll_y(0.0);
+        }
         window.set_request_status("正在读取请求记录…".into());
         window.set_request_tone(3);
         window.set_older_requests(false);
+        window.set_has_earlier_records(false);
         window.set_newer_requests(false);
     }
     std::thread::spawn(move || {
-        let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
+        let model = if model.is_empty() { None } else { Some(model) };
+        let page = usage::read_requests(
+            &ledger,
+            range,
+            model.as_deref(),
+            result,
+            &keyword,
+            cursor.as_deref(),
+            now,
+        );
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else { return; };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             let mut nav = nav.lock().expect("request navigation poisoned");
-            if nav.generation != generation { return; }
+            if nav.generation != generation {
+                return;
+            }
+            if earlier {
+                match nav.finish_earlier(page) {
+                    usage::EarlierOutcome::Appended { added } => {
+                        apply_request_rows(&window, &nav.rows);
+                        // Appending changes the model; put the reader back at
+                        // the row they were reading.
+                        window.set_request_scroll_y(scroll);
+                        window.set_has_earlier_records(nav.append_cursor.is_some());
+                        window.set_older_requests(nav.earlier.is_some());
+                        window.set_request_status(
+                            format!("已加载更早的 {added} 条记录 · 共 {} 条", nav.rows.len())
+                                .into(),
+                        );
+                        window.set_request_tone(0);
+                        window.set_request_updated_seq(next_page_read_seq());
+                        window.set_request_updated_at(clock_now().into());
+                    }
+                    usage::EarlierOutcome::NoMore => {
+                        window.set_has_earlier_records(false);
+                        window.set_request_status("没有更早记录".into());
+                        window.set_request_tone(3);
+                    }
+                    usage::EarlierOutcome::Failed(message) => {
+                        window.set_has_earlier_records(nav.append_cursor.is_some());
+                        window.set_request_status(format!("加载更早失败：{message}").into());
+                        window.set_request_tone(2);
+                    }
+                }
+                return;
+            }
             let page = if refresh {
                 let previous = usage::RequestPage {
                     rows: nav.rows.clone(),
@@ -702,49 +969,19 @@ fn load_requests(
                     summary: nav.summary.clone(),
                     model_speeds: nav.model_speeds.clone(),
                     chart: nav.chart.clone(),
+                    models: nav.models.clone(),
                 };
                 usage::keep_previous_page_on_failure(&previous, page)
             } else {
                 page
             };
-            let rows = page.rows.iter().map(|row| RequestRow {
-                id: row.key.clone().into(),
-                at: row.at.clone().into(),
-                model: row.model.clone().into(),
-                outcome: row.result.clone().into(),
-                tone: match row.result.as_str() {
-                    "成功" => status_tone(Tone::Good),
-                    "失败" => status_tone(Tone::Bad),
-                    _ => status_tone(Tone::Warn),
-                },
-                summary: format!(
-                    "耗时 {} · ID {}",
-                    row.duration,
-                    row.request_id.as_deref().unwrap_or("—")
-                )
-                .into(),
-                first_token: row.first_token.clone().into(),
-                detail: "".into(),
-            }).collect::<Vec<_>>();
-            let count = rows.len();
-            window.set_requests(ModelRc::from(rows.as_slice()));
-            apply_request_analytics(&window, &page);
-            if count == 0 || !page.message.is_empty() {
-                window.set_request_status(page.message.into());
-            } else {
-                window.set_request_status(format!("北京时间 · 本页 {count} 条").into());
-            }
-            window.set_request_tone(coverage_tone(page.coverage));
-            window.set_older_requests(page.earlier.is_some());
+            apply_request_page(&window, &page, catalog.as_ref());
             window.set_newer_requests(nav.pages.len() > 1);
-            if page.coverage != Coverage::Unavailable {
-                window.set_request_updated_at(clock_now().into());
-            }
-            nav.summary = page.summary.clone();
-            nav.model_speeds = page.model_speeds.clone();
-            nav.chart = page.chart.clone();
-            nav.rows = page.rows;
-            nav.earlier = page.earlier;
+            // A failed refresh kept the appended rows and their 加载更早 cursor;
+            // a successful page read restarts 加载更早 from this page.
+            nav.apply_page(&page, !refresh || page.coverage != Coverage::Unavailable);
+            window.set_older_requests(nav.earlier.is_some());
+            window.set_has_earlier_records(nav.append_cursor.is_some());
             if refresh {
                 // Replacing the list model can move the viewport; the refresh
                 // must leave the reader where they were.
@@ -754,12 +991,7 @@ fn load_requests(
     });
 }
 
-fn show_request(
-    window: &MainWindow,
-    log: &Path,
-    nav: &Mutex<usage::RequestNav>,
-    key: &str,
-) {
+fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<usage::RequestNav>, key: &str) {
     let nav = nav.lock().expect("request navigation poisoned");
     let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else {
         return;
@@ -769,7 +1001,11 @@ fn show_request(
     let log = log.to_path_buf();
     window.set_selected_request(key.clone().into());
     window.set_request_detail_title("请求详情".into());
-    window.set_request_detail(usage::request_detail(&row, None).into());
+    let pending = usage::request_detail(&row, None);
+    window.set_request_detail(pending.body.into());
+    window.set_request_log_label(pending.log_label.into());
+    window.set_request_log_note(pending.log_note.into());
+    window.set_request_log_text(pending.log_text.into());
     std::thread::spawn(move || {
         let logs = usage::read_request_logs(
             &log,
@@ -779,7 +1015,11 @@ fn show_request(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = weak.upgrade() {
                 if window.get_selected_request().as_str() == key {
-                    window.set_request_detail(usage::request_detail(&row, Some(&logs)).into());
+                    let detail = usage::request_detail(&row, Some(&logs));
+                    window.set_request_detail(detail.body.into());
+                    window.set_request_log_label(detail.log_label.into());
+                    window.set_request_log_note(detail.log_note.into());
+                    window.set_request_log_text(detail.log_text.into());
                 }
             }
         });
@@ -810,6 +1050,29 @@ fn hide_now(window: &MainWindow) {
     let _ = window.hide();
 }
 
+/// Persists every page setting the window currently shows. A failed write keeps
+/// the captured values in memory and reports the reason on the settings status line.
+fn persist_window_settings(
+    window: &MainWindow,
+    path: Option<&Path>,
+    config: &Mutex<DesktopConfig>,
+    applied: &str,
+) {
+    let mut config = config
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match config::save_window_settings(path, &mut config, window) {
+        Ok(()) => {
+            window.set_settings_status(applied.into());
+            window.set_settings_tone(status_tone(Tone::Good));
+        }
+        Err(message) => {
+            window.set_settings_status(message.into());
+            window.set_settings_tone(status_tone(Tone::Warn));
+        }
+    }
+}
+
 fn show_now(window: &MainWindow) {
     let _ = window.show();
     window.window().set_minimized(false);
@@ -830,7 +1093,7 @@ fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &Sha
     let supervisor = Arc::clone(supervisor);
     let status = Arc::clone(status);
     let weak = window.as_weak();
-    window.set_status_line("正在停止本实例网关…".into());
+    window.set_status_line("正在停止本机网关…".into());
     window.set_status_tone(status_tone(Tone::Warn));
     std::thread::spawn(move || {
         let stopped = {
@@ -883,29 +1146,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window = MainWindow::new()?;
     slintplot::register!(window);
-    window.set_allow_motion(allow_motion());
     let config_path = config::default_config_path();
     let (loaded_config, settings_status, settings_tone) = match &config_path {
-        Ok(path) => match config::load_from(path) {
-            ConfigLoadOutcome::Missing => (
-                DesktopConfig::default(),
-                "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关".to_string(),
-                Tone::Neutral,
-            ),
-            ConfigLoadOutcome::Loaded(config) => (
-                config,
-                format!(
-                    "已加载配置：{}；启动时接入已有实例或拉起本实例网关",
-                    path.display()
+        Ok(path) => {
+            let (outcome, warnings) = config::load_from_with_warnings(path);
+            match outcome {
+                ConfigLoadOutcome::Missing => (
+                    DesktopConfig::default(),
+                    "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本机网关"
+                        .to_string(),
+                    Tone::Neutral,
                 ),
-                Tone::Good,
-            ),
-            ConfigLoadOutcome::Invalid(reason) => (
-                DesktopConfig::default(),
-                format!("配置不可用：{reason}；使用默认端口 7999"),
-                Tone::Bad,
-            ),
-        },
+                ConfigLoadOutcome::Loaded(config) if warnings.is_empty() => (
+                    config,
+                    format!(
+                        "已加载配置：{}；启动时接入已有实例或拉起本机网关",
+                        path.display()
+                    ),
+                    Tone::Good,
+                ),
+                ConfigLoadOutcome::Loaded(config) => (
+                    config,
+                    format!(
+                        "已加载配置：{}；以下设置已回默认：{}",
+                        path.display(),
+                        warnings.join("；")
+                    ),
+                    Tone::Warn,
+                ),
+                ConfigLoadOutcome::Invalid(reason) => (
+                    DesktopConfig::default(),
+                    format!("配置不可用：{reason}；使用默认端口 7999"),
+                    Tone::Bad,
+                ),
+            }
+        }
         Err(reason) => (DesktopConfig::default(), reason.clone(), Tone::Bad),
     };
     let app_data_root = config_path
@@ -925,9 +1200,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into(),
     );
     window.set_instance_path(paths.instance_dir.display().to_string().into());
+    window.set_export_path(
+        paths
+            .instance_dir
+            .join("exports")
+            .join("usage.csv")
+            .display()
+            .to_string()
+            .into(),
+    );
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(status_tone(settings_tone));
     window.set_theme_mode(theme_mode_index(loaded_config.theme));
+    config::apply_settings(&window, &loaded_config, allow_motion());
+    window.set_log_mode(
+        if matches!(loaded_config.settings.log_range, config::LogRange::Live) {
+            0
+        } else {
+            1
+        },
+    );
+    window.set_log_range(HistoryRange::from_log_range(loaded_config.settings.log_range).index());
     window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
@@ -945,9 +1238,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let saved_state = Arc::new(Mutex::new(saved_credentials.clone()));
     let auth_state: Arc<Mutex<Option<AuthRead>>> = Arc::new(Mutex::new(None));
+    let verify_state: Arc<Mutex<Option<VerifyOutcome>>> = Arc::new(Mutex::new(None));
     let account_form = Rc::new(RefCell::new(AccountForm::new(None)));
     let initial_account = account_view(&saved_credentials, None);
     apply_account(&window, &initial_account);
+    account::apply_verify(&window, &account::verify_view(None));
 
     let program = resolve_gateway_binary(gateway_bin_override(), &app_dir());
     let mut supervisor = GatewaySupervisor::new(
@@ -970,6 +1265,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
     let current_port = Arc::new(AtomicU16::new(loaded_config.model_api_port));
 
+    // The maintenance menu starts closed while the supervisor is still
+    // starting; the overview reader refreshes it with the real state.
+    {
+        let gateway = gateway_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        maintenance::apply_menu(
+            &window,
+            &maintenance::menu(&maintenance::MenuState::new(&gateway.state, None, None)),
+        );
+    }
+
     {
         let supervisor = Arc::clone(&gateway_supervisor);
         let status = Arc::clone(&gateway_status);
@@ -986,13 +1294,392 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *status
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+            // The first read may have landed while the supervisor was still
+            // starting; read the service card again now that the state is known.
+            OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
         });
     }
 
     let probe = HttpProbe::new();
     let auth_admin = Arc::new(HttpAuthAdmin::new());
+    let service_api = Arc::new(um_service::HttpServiceApi::new());
+    let records_api = Arc::new(maintenance::HttpRecordsApi::new());
+    let service_state: Arc<Mutex<Option<um_service::ServiceView>>> = Arc::new(Mutex::new(None));
     let service_log = paths.service_log.clone();
     let control_token_path = paths.control_token.clone();
+    let upstream_faults_path = paths.upstream_faults.clone();
+    // The settings page's UM login-round table (#159). The gateway already
+    // writes the history; this read only loads it when the gateway becomes
+    // running, after a port change, and on every filter or manual refresh. A
+    // failed read keeps its reason and never becomes an empty table.
+    let login_rounds_state: Arc<Mutex<Option<LoginRoundsView>>> = Arc::new(Mutex::new(None));
+    let login_rounds_query: Arc<Mutex<LoginRoundsQuery>> =
+        Arc::new(Mutex::new(LoginRoundsQuery::default()));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&login_rounds_state);
+        let query = Arc::clone(&login_rounds_query);
+        std::thread::spawn(move || {
+            let reader = login_rounds::HttpLoginRounds::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut last_state: Option<GatewayState> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = LOGIN_ROUNDS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let transition =
+                    last_state.as_ref() != Some(&gateway.state) || last_port != Some(port);
+                if epoch == last_epoch && !transition {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                last_state = Some(gateway.state.clone());
+                let query = query
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let view = if !running {
+                    LoginRoundsView::unavailable(format!(
+                        "本机网关未就绪：{}",
+                        gateway.state.detail()
+                    ))
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => login_rounds::read(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                            &query,
+                        ),
+                        Err(error) => LoginRoundsView::failed(error),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        login_rounds::apply_login_rounds(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+    // The settings page's UM model catalog. Every read is strict (`fresh=1`):
+    // it runs when the gateway first becomes running, after a restart or port
+    // change, and on every manual refresh. A failed read keeps the previous rows
+    // and marks them stale; a legal empty catalog clears the rows.
+    let catalog_state: Arc<Mutex<Option<models::CatalogView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&catalog_state);
+        std::thread::spawn(move || {
+            let reader = models::HttpCatalogReader::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut was_running = false;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = MODELS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let refresh = epoch != last_epoch;
+                let started = running && (!was_running || last_port != Some(port));
+                if !refresh && !started {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                was_running = running;
+                let previous = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let view = if !running {
+                    models::catalog_failure(
+                        format!("本机网关未就绪：{}", gateway.state.detail()),
+                        previous.as_ref(),
+                    )
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => models::refresh_catalog(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                            previous.as_ref(),
+                        ),
+                        Err(error) => models::catalog_failure(error, previous.as_ref()),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_catalog(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+    let weak_models = window.as_weak();
+    window.on_refresh_um_models(move || {
+        if let Some(window) = weak_models.upgrade() {
+            window.set_um_model_loading(true);
+            window.set_um_model_status("正在刷新 UM 模型目录…".into());
+            window.set_um_model_tone(3);
+        }
+        MODELS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_models = window.as_weak();
+    let open_catalog = Arc::clone(&catalog_state);
+    window.on_open_model(move |id| {
+        let Some(window) = weak_models.upgrade() else {
+            return;
+        };
+        let state = open_catalog
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        models::open_model(&window, state.as_ref(), id.as_str());
+    });
+
+    // Access info (#152): the settings page reads the gateway's connection
+    // hints whenever the gateway becomes running, after a port change and on every
+    // settings refresh. A failed read keeps its reason and never shows a made-up
+    // address; a gateway that is not running shows the configured address with an
+    // explicit note and never claims a connection.
+    let access_state: Arc<Mutex<Option<access_info::AccessInfoView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let state = Arc::clone(&access_state);
+        std::thread::spawn(move || {
+            let reader = access_info::HttpAccessInfoReader::new();
+            let mut last_epoch = 0u64;
+            let mut last_port: Option<u16> = None;
+            let mut last_state: Option<GatewayState> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let epoch = ACCESS_REFRESH.load(Ordering::SeqCst);
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let running = matches!(gateway.state, GatewayState::Running { .. });
+                let port = current_port.load(Ordering::SeqCst);
+                let transition =
+                    last_state.as_ref() != Some(&gateway.state) || last_port != Some(port);
+                if epoch == last_epoch && !transition {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                last_epoch = epoch;
+                last_port = Some(port);
+                last_state = Some(gateway.state.clone());
+                let view = if !running {
+                    access_info::access_failure(gateway.state.detail(), false, port)
+                } else {
+                    match load_control_token(&token_path) {
+                        Ok(token) => match access_info::read_access_info(
+                            &reader,
+                            &format!("http://127.0.0.1:{port}"),
+                            &token,
+                        ) {
+                            Ok(view) => view,
+                            Err(reason) => access_info::access_failure(reason, true, port),
+                        },
+                        Err(error) => access_info::access_failure(error, true, port),
+                    }
+                };
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        access_info::apply_access_info(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+
+    // Context probes (#154): the gateway owns the queue and the per-model
+    // results, so the App polls its admin face and only keeps the batch it
+    // submitted. The poll keeps the previous rows on a failed read; the status
+    // carries the reason. Submit and stop are immediate loopback actions.
+    let probe_batch: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+    let probe_client = Arc::new(models::HttpProbeClient::new());
+    // The overview's recent-issues card reads the last probe snapshot; a failed
+    // read keeps its reason in `ProbeView` and is never folded into zero.
+    let probe_state: Arc<Mutex<Option<models::ProbeView>>> = Arc::new(Mutex::new(None));
+    {
+        let weak = window.as_weak();
+        let gateway_status = Arc::clone(&gateway_status);
+        let current_port = Arc::clone(&current_port);
+        let token_path = paths.control_token.clone();
+        let catalog_state = Arc::clone(&catalog_state);
+        let batch_state = Arc::clone(&probe_batch);
+        let probe_state = Arc::clone(&probe_state);
+        std::thread::spawn(move || {
+            let client = models::HttpProbeClient::new();
+            let mut last_view: Option<models::ProbeView> = None;
+            while !QUIT.load(Ordering::SeqCst) {
+                let gateway = gateway_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                if !matches!(gateway.state, GatewayState::Running { .. }) {
+                    std::thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+                let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
+                let catalog = catalog_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let batch = batch_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let read = match load_control_token(&token_path) {
+                    Ok(token) => client.read_probes(&base, &token),
+                    Err(error) => Err(error),
+                };
+                let view = match read {
+                    Ok(payload) => {
+                        match models::parse_probe_snapshot(
+                            &payload,
+                            batch.as_deref(),
+                            catalog.as_ref(),
+                        ) {
+                            Ok(view) => {
+                                last_view = Some(view.clone());
+                                view
+                            }
+                            Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                        }
+                    }
+                    Err(reason) => models::probe_failure(reason, last_view.as_ref()),
+                };
+                *probe_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.clone());
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        models::apply_probe(&window, &view);
+                    }
+                });
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        });
+    }
+    let weak_probe = window.as_weak();
+    window.on_toggle_probe_model(move |id| {
+        if let Some(window) = weak_probe.upgrade() {
+            models::toggle_probe_model(&window, id.as_str());
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_catalog = Arc::clone(&catalog_state);
+    window.on_select_all_probes(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            let catalog = probe_catalog
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            models::select_all_probes(&window, catalog.as_ref());
+        }
+    });
+    let weak_probe = window.as_weak();
+    window.on_clear_probe_selection(move || {
+        if let Some(window) = weak_probe.upgrade() {
+            models::clear_probe_selection(&window);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_run = Arc::clone(&probe_client);
+    let probe_port_run = Arc::clone(&current_port);
+    let probe_token_run = paths.control_token.clone();
+    let probe_batch_run = Arc::clone(&probe_batch);
+    window.on_run_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        if window.get_probe_loading() || window.get_probe_running() {
+            return;
+        }
+        let base = format!("http://127.0.0.1:{}", probe_port_run.load(Ordering::SeqCst));
+        let token = match load_control_token(&probe_token_run) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("上下文探测启动失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let selected: Vec<String> = window
+            .get_probe_selected()
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        window.set_probe_loading(true);
+        window.set_probe_status("正在提交上下文探测…".into());
+        window.set_probe_tone(status_tone(Tone::Neutral));
+        let result = models::run_context_probe(&window, &*probe_client_run, &base, &token);
+        window.set_probe_loading(false);
+        if result.is_ok() {
+            *probe_batch_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(selected);
+        }
+    });
+    let weak_probe = window.as_weak();
+    let probe_client_stop = Arc::clone(&probe_client);
+    let probe_port_stop = Arc::clone(&current_port);
+    let probe_token_stop = paths.control_token.clone();
+    window.on_stop_context_probe(move || {
+        let Some(window) = weak_probe.upgrade() else {
+            return;
+        };
+        let base = format!(
+            "http://127.0.0.1:{}",
+            probe_port_stop.load(Ordering::SeqCst)
+        );
+        let token = match load_control_token(&probe_token_stop) {
+            Ok(token) => token,
+            Err(error) => {
+                window.set_probe_status(format!("停止失败：{error}").into());
+                window.set_probe_tone(status_tone(Tone::Bad));
+                return;
+            }
+        };
+        let _ = models::stop_context_probe(&window, &*probe_client_stop, &base, &token);
+    });
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);
@@ -1000,9 +1687,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let saved_state = Arc::clone(&saved_state);
         let auth_state = Arc::clone(&auth_state);
         let auth_admin = Arc::clone(&auth_admin);
+        let service_api = Arc::clone(&service_api);
+        let service_state = Arc::clone(&service_state);
+        let catalog_state = Arc::clone(&catalog_state);
+        let probe_state = Arc::clone(&probe_state);
+        let usage_log = paths.usage_log.clone();
+        let login_reader = Arc::new(recent_issues::HttpLoginRoundsReader::new());
+        let records_api = Arc::clone(&records_api);
         std::thread::spawn(move || {
             let mut has_success = false;
             let mut last_failure: Option<String> = None;
+            let mut last_faults: Option<overview::FaultHistory> = None;
+            let mut last_service: Option<um_service::ServiceView> = None;
+            let mut last_menu: Option<maintenance::Menu> = None;
+            let mut last_issues: Option<recent_issues::RecentIssues> = None;
             let mut poller = overview::OverviewPoller::new();
             while !QUIT.load(Ordering::SeqCst) {
                 let paused = PAUSED.load(Ordering::SeqCst);
@@ -1014,10 +1712,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 let base = format!("http://127.0.0.1:{}", current_port.load(Ordering::SeqCst));
-                let supervision = gateway_status
+                let gateway = gateway_status
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .card();
+                    .clone();
+                let supervision = gateway.card();
+                let service = service_view(&gateway, &service_api, &control_token_path, &base);
                 let saved = saved_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1034,6 +1734,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // The window was hidden or minimized while the probe was
                     // in flight; the resume pass reads again before applying.
                     continue;
+                }
+                let faults = overview::read_fault_history(&upstream_faults_path);
+                if last_faults.as_ref() != Some(&faults) {
+                    last_faults = Some(faults.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            overview::apply_fault_history(&window, &faults);
+                        }
+                    });
+                }
+                // The menu depends on the gateway/service/auth facts and the
+                // records read; a changed set is applied once, so a refresh never
+                // resets an armed confirmation the user is still looking at.
+                let records = match gateway.state {
+                    GatewayState::Running { .. } => match load_control_token(&control_token_path) {
+                        Ok(token) => {
+                            maintenance::read_records(records_api.as_ref(), &base, token.expose())
+                        }
+                        Err(error) => maintenance::RecordsView::failure(error),
+                    },
+                    _ => maintenance::RecordsView::failure(format!(
+                        "网关{}，无法读取维护记录",
+                        gateway.state.detail()
+                    )),
+                };
+                let menu = maintenance::menu_with_records(
+                    &maintenance::MenuState::new(&gateway.state, Some(&service), Some(&auth)),
+                    records,
+                );
+                if last_menu.as_ref() != Some(&menu) {
+                    last_menu = Some(menu.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            maintenance::apply_menu(&window, &menu);
+                        }
+                    });
+                }
+                if last_service.as_ref() != Some(&service) {
+                    last_service = Some(service.clone());
+                    *service_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service.clone());
+                    let weak = weak.clone();
+                    let applied = service.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            um_service::apply_service(&window, &applied);
+                        }
+                    });
+                }
+                // The recent-issues card reads the ledger, the login-round
+                // history and the read faces above. A failed read keeps its
+                // reason and is never folded into zero; a legal empty read
+                // becomes 近期无问题.
+                let catalog = catalog_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let probe_view = probe_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let login = if matches!(&gateway.state, GatewayState::Running { .. }) {
+                    match load_control_token(&control_token_path) {
+                        Ok(token) => {
+                            recent_issues::read_login_rounds(&*login_reader, &base, token.expose())
+                        }
+                        Err(error) => recent_issues::LoginRounds::Unavailable(error),
+                    }
+                } else {
+                    recent_issues::LoginRounds::Unavailable(format!(
+                        "本机网关未运行：{}",
+                        gateway.state.detail()
+                    ))
+                };
+                let issues = recent_issues::read_recent_issues(
+                    &usage_log,
+                    chrono::Utc::now().timestamp_millis(),
+                    &login,
+                    Some(&service),
+                    catalog.as_ref(),
+                    probe_view.as_ref(),
+                );
+                if last_issues.as_ref() != Some(&issues) {
+                    last_issues = Some(issues.clone());
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            recent_issues::apply_recent_issues(&window, &issues);
+                        }
+                    });
                 }
                 *auth_state
                     .lock()
@@ -1079,57 +1872,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let service_log = service_log.clone();
         std::thread::spawn(move || {
-            let mut last_failure = None;
-            let mut stream: Option<LogStream> = None;
+            // The reader owns the missing-file state: the gateway only creates
+            // `gateway.log` after a request finally fails, so a fresh instance
+            // reports the legal empty state instead of a red failure.
+            let mut live = LiveLog::new(service_log);
             while !QUIT.load(Ordering::SeqCst) {
                 if !PAUSED.load(Ordering::SeqCst) {
                     let refresh = REFRESH_LOGS.swap(false, Ordering::SeqCst);
-                    let update = if let Some(opened) = stream.as_mut() {
-                        let previous: Vec<_> = opened.lines().iter().cloned().collect();
-                        match opened.poll() {
-                            Ok(outcome)
-                                if refresh
-                                    || outcome.reset
-                                    || !outcome.appended.is_empty()
-                                    || last_failure.is_some() =>
-                            {
-                                Some(LogUpdate {
-                                previous,
-                                entries: opened.lines().iter().cloned().collect(),
-                                appended: outcome.appended,
-                                reset: outcome.reset || last_failure.is_some(),
-                                trimmed: outcome.trimmed,
-                                failure: None,
-                                })
-                            }
-                            Ok(_) => None,
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
-                                Some(LogUpdate::failed(reason))
-                            }
-                            Err(_) => None,
-                        }
-                    } else {
-                        match LogStream::open(&service_log) {
-                            Ok(opened) => {
-                                let entries = opened.lines().iter().cloned().collect();
-                                stream = Some(opened);
-                                Some(LogUpdate {
-                                    previous: Vec::new(),
-                                    entries,
-                                    appended: Vec::new(),
-                                    reset: true,
-                                    trimmed: 0,
-                                    failure: None,
-                                })
-                            }
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
-                                Some(LogUpdate::failed(reason))
-                            }
-                            Err(_) => None,
-                        }
-                    };
-                    if let Some(update) = update {
-                        last_failure = update.failure.clone();
+                    if let Some(update) = live.read(refresh) {
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(window) = weak.upgrade() {
@@ -1198,7 +1948,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
         window.set_gateway_restarting(true);
-        window.set_settings_status("正在重启本实例网关…".into());
+        window.set_settings_status("正在重启本机网关…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
         let supervisor = Arc::clone(&restart_gateway_supervisor);
         let status = Arc::clone(&restart_gateway_status);
@@ -1214,16 +1964,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                 });
                 if let Some(restarted) = &restarted {
-                    *status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                        restarted.clone();
+                    *status
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
                 }
                 restarted
             };
             let (message, tone) = match restarted.as_ref().map(|status| &status.state) {
-                Some(GatewayState::Running { .. }) => ("网关已重启".to_string(), Tone::Good),
+                Some(GatewayState::Running { .. }) => ("本机网关已重启".to_string(), Tone::Good),
                 Some(state) => (format!("重启失败：{}", state.detail()), Tone::Bad),
-                None => ("本实例网关未接入，无法重启".to_string(), Tone::Bad),
+                None => ("本机网关未接入，无法重启".to_string(), Tone::Bad),
             };
+            if matches!(
+                restarted.as_ref().map(|status| &status.state),
+                Some(GatewayState::Running { .. })
+            ) {
+                // The service card now has a gateway to read again.
+                OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+                USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     window.set_gateway_restarting(false);
@@ -1236,10 +1995,139 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    // The maintenance menu re-checks the same availability its rows show, then
+    // runs the action through the seam each card already owns. Verify, on-demand
+    // login and restart delegate to their own cards so there is one data path;
+    // start/stop use the existing supervisor and its drain semantics.
+    let weak_maintenance = window.as_weak();
+    let maintenance_supervisor = Arc::clone(&gateway_supervisor);
+    let maintenance_gateway = Arc::clone(&gateway_status);
+    let maintenance_service = Arc::clone(&service_state);
+    let maintenance_auth = Arc::clone(&auth_state);
+    window.on_maintenance_act(move |index| {
+        let Some(window) = weak_maintenance.upgrade() else {
+            return;
+        };
+        if window.get_maintenance_action_busy() || QUIT_REQUESTED.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(action) = maintenance::Action::from_index(index) else {
+            return;
+        };
+        let gateway = maintenance_gateway
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let service = maintenance_service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let auth = maintenance_auth
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let state = maintenance::MenuState::new(&gateway.state, service.as_ref(), auth.as_ref());
+        let Some(row) = maintenance::menu(&state)
+            .items
+            .into_iter()
+            .find(|row| row.action == action)
+        else {
+            return;
+        };
+        if !row.enabled {
+            window.set_maintenance_status(row.reason.into());
+            window.set_maintenance_status_tone(status_tone(Tone::Warn));
+            return;
+        }
+        match action {
+            maintenance::Action::Verify => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_verify_login();
+            }
+            maintenance::Action::Login => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_continue_login();
+            }
+            maintenance::Action::Restart => {
+                let (status, tone) = maintenance::delegated_status(action);
+                window.set_maintenance_status(status.into());
+                window.set_maintenance_status_tone(status_tone(tone));
+                window.invoke_restart_gateway();
+            }
+            maintenance::Action::Start | maintenance::Action::Stop => {
+                window.set_maintenance_action_busy(true);
+                window.set_maintenance_status(format!("正在{}本机网关…", row.label).into());
+                window.set_maintenance_status_tone(status_tone(Tone::Warn));
+                let supervisor = Arc::clone(&maintenance_supervisor);
+                let status_slot = Arc::clone(&maintenance_gateway);
+                let weak = window.as_weak();
+                std::thread::spawn(move || {
+                    let (result, running) = {
+                        let mut guard = supervisor
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        match guard.as_mut() {
+                            Some(supervisor) => {
+                                let status = match action {
+                                    maintenance::Action::Start => supervisor.start_or_attach(),
+                                    maintenance::Action::Stop => {
+                                        supervisor.stop(StopReason::UserRequested)
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                *status_slot
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                    status.clone();
+                                let outcome = match (&status.state, action) {
+                                    (GatewayState::Running { .. }, maintenance::Action::Start) => {
+                                        Ok(format!("本机网关运行于 {}", status.base_url))
+                                    }
+                                    (GatewayState::Stopped, maintenance::Action::Stop) => {
+                                        Ok("本机网关已停止".to_string())
+                                    }
+                                    _ => Err(status.state.detail()),
+                                };
+                                (
+                                    maintenance::action_result(action, outcome),
+                                    matches!(status.state, GatewayState::Running { .. }),
+                                )
+                            }
+                            None => (
+                                maintenance::action_result(
+                                    action,
+                                    Err("本机网关未接入，无法执行维护动作".to_string()),
+                                ),
+                                false,
+                            ),
+                        }
+                    };
+                    if running {
+                        OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+                        USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_maintenance_action_busy(false);
+                            if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                                maintenance::apply_result(&window, &result);
+                            }
+                        }
+                    });
+                });
+            }
+        }
+    });
+
     let request_nav = Arc::new(Mutex::new(usage::RequestNav::default()));
     let ledger = paths.usage_log.clone();
     let request_ledger = ledger.clone();
     let request_page_nav = Arc::clone(&request_nav);
+    let request_page_catalog = Arc::clone(&catalog_state);
     let weak_request = window.as_weak();
     window.on_query_requests(move |direction| {
         if let Some(window) = weak_request.upgrade() {
@@ -1248,11 +2136,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 RequestLoad::Page
             };
-            load_requests(&window, &request_ledger, &request_page_nav, direction, mode);
+            load_requests(
+                &window,
+                &request_ledger,
+                &request_page_nav,
+                &request_page_catalog,
+                direction,
+                mode,
+            );
+        }
+    });
+    let request_earlier_ledger = ledger.clone();
+    let request_earlier_nav = Arc::clone(&request_nav);
+    let request_earlier_catalog = Arc::clone(&catalog_state);
+    let weak_request = window.as_weak();
+    window.on_load_earlier_requests(move || {
+        if let Some(window) = weak_request.upgrade() {
+            load_requests(
+                &window,
+                &request_earlier_ledger,
+                &request_earlier_nav,
+                &request_earlier_catalog,
+                0,
+                RequestLoad::Earlier,
+            );
         }
     });
     let request_refresh_ledger = ledger.clone();
     let request_refresh_nav = Arc::clone(&request_nav);
+    let request_refresh_catalog = Arc::clone(&catalog_state);
     let weak_request = window.as_weak();
     window.on_refresh_requests(move || {
         if let Some(window) = weak_request.upgrade() {
@@ -1260,12 +2172,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &window,
                 &request_refresh_ledger,
                 &request_refresh_nav,
+                &request_refresh_catalog,
                 0,
                 RequestLoad::Refresh,
             );
         }
     });
     let request_log = service_log.clone();
+    let export_requests_nav = Arc::clone(&request_nav);
+    let export_requests_dir = paths.instance_dir.clone();
+    let weak_export_requests = window.as_weak();
+    window.on_export_requests(move || {
+        let Some(window) = weak_export_requests.upgrade() else {
+            return;
+        };
+        let rows = export_requests_nav
+            .lock()
+            .expect("request navigation poisoned")
+            .rows
+            .clone();
+        let path = export_requests_dir.join("exports").join("requests.csv");
+        match usage::export_requests_csv(&rows, &path) {
+            Ok(message) => {
+                window.set_request_status(message.into());
+                window.set_request_tone(status_tone(Tone::Good));
+            }
+            Err(reason) => {
+                window.set_request_status(format!("导出失败：{reason}").into());
+                window.set_request_tone(status_tone(Tone::Bad));
+            }
+        }
+    });
     let weak_request = window.as_weak();
     window.on_open_request(move |key| {
         if let Some(window) = weak_request.upgrade() {
@@ -1352,6 +2289,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             window.set_page(page);
             if page == 3 {
                 REFRESH_LOGS.store(true, Ordering::SeqCst);
+            } else if page == 2 {
+                // Opening the settings page reads the login-round table and the
+                // gateway's access info once; the reader threads skip a duplicate
+                // read while the gateway is unchanged.
+                LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+                ACCESS_REFRESH.fetch_add(1, Ordering::SeqCst);
             } else if page == 1 {
                 // Re-entering the request page re-reads the ledger; the
                 // generation guard in `load_requests` drops stale results.
@@ -1363,10 +2306,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak_refresh = window.as_weak();
     window.on_refresh_logs(move || {
         if let Some(window) = weak_refresh.upgrade() {
-            // Acknowledge the click before the reader's next 160 ms poll lands;
-            // apply_logs restores the real count and flips the button to 已刷新.
-            window.set_log_refreshed(false);
-            window.set_log_refresh_pending(true);
+            // The footer read time is the one visible acknowledgement; the
+            // status line only says the read is in flight.
             window.set_log_status("正在刷新…".into());
             window.set_log_tone(3);
         }
@@ -1397,6 +2338,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Export usage writes the overview's current range as CSV to the path the
+    // user typed in the settings card. A failed write keeps its reason.
+    let export_ledger = paths.usage_log.clone();
+    let weak_export = window.as_weak();
+    window.on_export_usage(move |path| {
+        let Some(window) = weak_export.upgrade() else {
+            return;
+        };
+        if window.get_export_busy() || !window.get_export_available() {
+            return;
+        }
+        let range = Range::from_index(window.get_usage_period());
+        let ledger = export_ledger.clone();
+        let path = PathBuf::from(path.as_str());
+        window.set_export_busy(true);
+        window.set_export_status("正在导出…".into());
+        window.set_export_status_tone(status_tone(Tone::Neutral));
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let result = usage::export_usage_csv(
+                &ledger,
+                range,
+                chrono::Utc::now().timestamp_millis(),
+                &path,
+            );
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_export_busy(false);
+                    match result {
+                        Ok(message) => {
+                            window.set_export_status(message.into());
+                            window.set_export_status_tone(status_tone(Tone::Good));
+                        }
+                        Err(reason) => {
+                            window.set_export_status(format!("导出失败：{reason}").into());
+                            window.set_export_status_tone(status_tone(Tone::Bad));
+                        }
+                    }
+                }
+            });
+        });
+    });
+
     // Ctrl+R dispatches to the page-specific refresh callback in the UI.
     let weak_refresh_page = window.as_weak();
     window.on_refresh_page(move || {
@@ -1420,6 +2404,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         window.set_settings_status("正在重新检查网关与账号状态…".into());
         window.set_settings_tone(status_tone(Tone::Warn));
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+        ACCESS_REFRESH.fetch_add(1, Ordering::SeqCst);
         let probe = HttpProbe::new();
         let auth_admin = Arc::clone(&settings_auth_admin);
         let gateway_status = Arc::clone(&settings_gateway_status);
@@ -1454,6 +2440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         apply_overview(&window, &overview, &account);
                         window.set_settings_status("已重新检查网关与账号状态".into());
                         window.set_settings_tone(status_tone(Tone::Good));
+                        window.set_settings_updated_seq(next_page_read_seq());
                         window.set_settings_updated_at(clock_now().into());
                     } else {
                         window.set_settings_status(
@@ -1466,25 +2453,166 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
-    let weak_history = window.as_weak();
-    let history_path = service_log.clone();
-    let nav_for_filter = Arc::clone(&history_navigation);
-    window.on_apply_log_filter(move |_, _| {
-        if let Some(window) = weak_history.upgrade() {
-            if window.get_log_period() != 0 {
-                load_historical_logs(&window, &history_path, &nav_for_filter, 0);
-            } else {
-                FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
-                REFRESH_LOGS.store(true, Ordering::SeqCst);
-            }
+    let history_client: Arc<dyn HistoryClient> = Arc::new(HttpHistoryClient::new());
+    // The login-round filters and the card's own refresh only re-read the
+    // gateway history; they never probe the upstream or start a login.
+    let weak_login_rounds = window.as_weak();
+    let login_rounds_filter = Arc::clone(&login_rounds_query);
+    window.on_filter_login_rounds(move |round, query| {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            window.set_login_rounds_loading(true);
+            window.set_login_rounds_status("正在读取登录轮次…".into());
+            window.set_login_rounds_tone(status_tone(Tone::Neutral));
+        }
+        *login_rounds_filter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = LoginRoundsQuery {
+            round: round.to_string(),
+            q: query.to_string(),
+        };
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_login_rounds = window.as_weak();
+    window.on_refresh_login_rounds(move || {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            window.set_login_rounds_loading(true);
+            window.set_login_rounds_status("正在读取登录轮次…".into());
+            window.set_login_rounds_tone(status_tone(Tone::Neutral));
+        }
+        LOGIN_ROUNDS_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+    let weak_login_rounds = window.as_weak();
+    let login_rounds_for_open = Arc::clone(&login_rounds_state);
+    window.on_open_login_round(move |key| {
+        if let Some(window) = weak_login_rounds.upgrade() {
+            let state = login_rounds_for_open
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            login_rounds::open_round(&window, state.as_ref(), key.as_str());
         }
     });
-    let weak_history = window.as_weak();
-    window.on_log_history(move |_, direction| {
-        if let Some(window) = weak_history.upgrade() {
-            load_historical_logs(&window, &service_log, &history_navigation, direction);
+    let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
+    let history_token = paths.control_token.clone();
+
+    let weak_mode = window.as_weak();
+    let mode_client = Arc::clone(&history_client);
+    let mode_navigation = Arc::clone(&history_navigation);
+    let mode_token = history_token.clone();
+    let mode_port = Arc::clone(&current_port);
+    window.on_select_log_mode(move |index| {
+        let Some(window) = weak_mode.upgrade() else {
+            return;
+        };
+        window.set_log_mode(index);
+        if index == 0 {
+            window.set_log_period(0);
+            window.set_log_history_note("".into());
+            window.set_log_follow(true);
+            FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
+            REFRESH_LOGS.store(true, Ordering::SeqCst);
+            window.set_log_status("正在读取实时日志…".into());
+            window.set_log_tone(3);
+            return;
         }
+        window.set_log_period(
+            HistoryRange::from_index(window.get_log_range())
+                .log_range()
+                .index(),
+        );
+        let base = format!("http://127.0.0.1:{}", mode_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &mode_client,
+            &base,
+            &mode_token,
+            &mode_navigation,
+            false,
+        );
+    });
+
+    let weak_range = window.as_weak();
+    let range_client = Arc::clone(&history_client);
+    let range_navigation = Arc::clone(&history_navigation);
+    let range_token = history_token.clone();
+    let range_port = Arc::clone(&current_port);
+    window.on_select_log_range(move |index| {
+        let Some(window) = weak_range.upgrade() else {
+            return;
+        };
+        window.set_log_range(index);
+        window.set_log_period(HistoryRange::from_index(index).log_range().index());
+        let base = format!("http://127.0.0.1:{}", range_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &range_client,
+            &base,
+            &range_token,
+            &range_navigation,
+            false,
+        );
+    });
+
+    let weak_level = window.as_weak();
+    let level_client = Arc::clone(&history_client);
+    let level_navigation = Arc::clone(&history_navigation);
+    let level_token = history_token.clone();
+    let level_port = Arc::clone(&current_port);
+    window.on_toggle_log_level(move |_| {
+        let Some(window) = weak_level.upgrade() else {
+            return;
+        };
+        if window.get_log_mode() != 1 {
+            return;
+        }
+        let base = format!("http://127.0.0.1:{}", level_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &level_client,
+            &base,
+            &level_token,
+            &level_navigation,
+            false,
+        );
+    });
+
+    let weak_query = window.as_weak();
+    let query_client = Arc::clone(&history_client);
+    let query_navigation = Arc::clone(&history_navigation);
+    let query_token = history_token.clone();
+    let query_port = Arc::clone(&current_port);
+    window.on_query_log_history(move || {
+        let Some(window) = weak_query.upgrade() else {
+            return;
+        };
+        let base = format!("http://127.0.0.1:{}", query_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &query_client,
+            &base,
+            &query_token,
+            &query_navigation,
+            false,
+        );
+    });
+
+    let weak_earlier = window.as_weak();
+    let earlier_client = Arc::clone(&history_client);
+    let earlier_navigation = Arc::clone(&history_navigation);
+    let earlier_token = history_token.clone();
+    let earlier_port = Arc::clone(&current_port);
+    window.on_load_earlier_logs(move || {
+        let Some(window) = weak_earlier.upgrade() else {
+            return;
+        };
+        let base = format!("http://127.0.0.1:{}", earlier_port.load(Ordering::SeqCst));
+        load_log_history(
+            &window,
+            &earlier_client,
+            &base,
+            &earlier_token,
+            &earlier_navigation,
+            true,
+        );
     });
 
     let weak_skip = window.as_weak();
@@ -1612,7 +2740,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.set_password_input_invalid(false);
         window.set_password_input_error("".into());
         window.set_account_busy(true);
-        window.set_credential_status("正在保存账号密码并应用到本实例网关…".into());
+        window.set_credential_status("正在保存账号密码并应用到本机网关…".into());
         window.set_credential_tone(status_tone(Tone::Warn));
 
         let supervisor = Arc::clone(&supervisor_save_credentials);
@@ -1747,12 +2875,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let view = account_view(&LoadOutcome::Missing, Some(&auth));
             let (message, tone) = if cleared {
                 (
-                    "已清除已保存的账号密码；本实例网关已重启".to_string(),
+                    "已清除已保存的账号密码；本机网关已重启".to_string(),
                     Tone::Good,
                 )
             } else {
                 (
-                    "没有已保存的账号密码；本实例网关已重启".to_string(),
+                    "没有已保存的账号密码；本机网关已重启".to_string(),
                     Tone::Warn,
                 )
             };
@@ -1771,6 +2899,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_admin_continue = Arc::clone(&auth_admin);
     let saved_continue = Arc::clone(&saved_state);
     let auth_continue = Arc::clone(&auth_state);
+    let verify_continue = Arc::clone(&verify_state);
     let current_port_continue = Arc::clone(&current_port);
     window.on_continue_login(move || {
         let Some(window) = weak_continue.upgrade() else {
@@ -1780,7 +2909,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
         window.set_account_busy(true);
-        window.set_login_status("正在打开 Edge 登录窗口…".into());
+        window.set_login_status("正在核验当前凭据…".into());
         window.set_login_tone(status_tone(Tone::Warn));
         let base = format!(
             "http://127.0.0.1:{}",
@@ -1790,38 +2919,115 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_admin = Arc::clone(&auth_admin_continue);
         let saved_state = Arc::clone(&saved_continue);
         let auth_state = Arc::clone(&auth_continue);
+        let verify_state = Arc::clone(&verify_continue);
         let weak = window.as_weak();
         std::thread::spawn(move || {
-            let result = match load_control_token(&token_path) {
-                Ok(token) => auth_admin.start_visible_login(&base, &token),
-                Err(error) => Err(error),
+            let current_status = auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .and_then(|auth| match auth {
+                    AuthRead::Status(status) => Some(status.clone()),
+                    AuthRead::Unavailable(_) => None,
+                });
+            let outcome = match load_control_token(&token_path) {
+                Ok(token) => {
+                    account::on_demand_login(&*auth_admin, &base, &token, current_status.as_ref())
+                }
+                Err(error) => OnDemandLogin::VerifyUnavailable(error),
             };
             LOGIN_IN_FLIGHT.store(false, Ordering::SeqCst);
-            let auth = match result {
-                Ok(status) => AuthRead::Status(status),
-                Err(error) => AuthRead::Unavailable(error),
-            };
-            *auth_state
+            let previous_auth = auth_state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let auth = match &outcome {
+                OnDemandLogin::LoginStarted { status, .. } => {
+                    Some(AuthRead::Status(status.clone()))
+                }
+                OnDemandLogin::AlreadyValid {
+                    status: Some(status),
+                    ..
+                } => Some(AuthRead::Status(status.clone())),
+                _ => previous_auth,
+            };
+            if let Some(auth) = &auth {
+                *auth_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+            }
+            // A failed verify keeps its own reason in the card; a manual
+            // takeover that never ran a verify leaves the card untouched.
+            let stored = match &outcome {
+                OnDemandLogin::VerifyUnavailable(error) => {
+                    Some(VerifyOutcome::Unavailable(error.clone()))
+                }
+                _ => outcome.report().cloned().map(VerifyOutcome::Report),
+            };
+            if let Some(stored) = stored {
+                *verify_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stored);
+            }
+            let verify_view = {
+                let stored = verify_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                account::verify_view(stored.as_ref())
+            };
             let saved = saved_state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
-            let view = account_view(&saved, Some(&auth));
-            let (message, tone) = match &auth {
-                AuthRead::Status(status) => match status.state {
-                    AuthState::Valid | AuthState::LoggingIn => (String::new(), Tone::Good),
-                    _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
-                },
-                AuthRead::Unavailable(reason) => (format!("无法打开可见登录：{reason}"), Tone::Bad),
-            };
+            let view = account_view(&saved, auth.as_ref());
+            let (message, tone) = account::on_demand_message(&outcome);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     window.set_account_busy(false);
                     apply_account(&window, &view);
+                    account::apply_verify(&window, &verify_view);
                     window.set_login_status(message.into());
                     window.set_login_tone(status_tone(tone));
+                }
+            });
+        });
+    });
+
+    let weak_verify = window.as_weak();
+    let verify_admin = Arc::clone(&auth_admin);
+    let verify_token_path = paths.control_token.clone();
+    let verify_store = Arc::clone(&verify_state);
+    let verify_port = Arc::clone(&current_port);
+    window.on_verify_login(move || {
+        let Some(window) = weak_verify.upgrade() else {
+            return;
+        };
+        if VERIFY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        window.set_verify_busy(true);
+        let base = format!("http://127.0.0.1:{}", verify_port.load(Ordering::SeqCst));
+        let token_path = verify_token_path.clone();
+        let auth_admin = Arc::clone(&verify_admin);
+        let verify_store = Arc::clone(&verify_store);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let outcome = match load_control_token(&token_path) {
+                Ok(token) => match auth_admin.verify(&base, &token) {
+                    Ok(report) => VerifyOutcome::Report(report),
+                    Err(error) => VerifyOutcome::Unavailable(error),
+                },
+                Err(error) => VerifyOutcome::Unavailable(error),
+            };
+            VERIFY_IN_FLIGHT.store(false, Ordering::SeqCst);
+            *verify_store
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome.clone());
+            let view = account::verify_view(Some(&outcome));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_verify_busy(false);
+                    account::apply_verify(&window, &view);
                 }
             });
         });
@@ -1877,7 +3083,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut config = config
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let next = DesktopConfig { model_api_port: port, ..*config };
+                    let next = DesktopConfig {
+                        model_api_port: port,
+                        ..config.clone()
+                    };
                     config::save_to(path, &next)?;
                     *config = next;
                     Ok(())
@@ -1942,6 +3151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let theme_config = Arc::clone(&current_config);
+    let theme_path_for_handler = theme_path.clone();
     let weak_theme = window.as_weak();
     window.on_theme_mode_changed(move |index| {
         let Some(window) = weak_theme.upgrade() else {
@@ -1952,7 +3162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut config = theme_config
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match config::apply_theme(theme_path.as_deref(), &mut config, theme) {
+        match config::apply_theme(theme_path_for_handler.as_deref(), &mut config, theme) {
             Ok(()) => {
                 window.set_settings_status(format!("外观：{}", theme_label(theme)).into());
                 window.set_settings_tone(status_tone(Tone::Good));
@@ -1961,6 +3171,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window.set_settings_status(message.into());
                 window.set_settings_tone(status_tone(Tone::Warn));
             }
+        }
+    });
+
+    // Sidebar, motion and transparency are user settings with their own visible
+    // controls; each choice reaches the window first and then the saved config.
+    let sidebar_config = Arc::clone(&current_config);
+    let sidebar_path = theme_path.clone();
+    let weak_sidebar = window.as_weak();
+    window.on_sidebar_mode_changed(move |index| {
+        let Some(window) = weak_sidebar.upgrade() else {
+            return;
+        };
+        let mode = SidebarMode::from_index(index);
+        window.set_sidebar_mode(mode.index());
+        let mut config = sidebar_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_sidebar(sidebar_path.as_deref(), &mut config, mode) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", sidebar_label(mode)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    let motion_config = Arc::clone(&current_config);
+    let motion_path = theme_path.clone();
+    let weak_motion = window.as_weak();
+    window.on_motion_mode_changed(move |index| {
+        let Some(window) = weak_motion.upgrade() else {
+            return;
+        };
+        let preference = MotionPreference::from_index(index);
+        window.set_motion_mode(preference.index());
+        let mut config = motion_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_motion(motion_path.as_deref(), &mut config, preference) {
+            Ok(()) => {
+                window.set_settings_status(format!("外观：{}", motion_label(preference)).into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    let transparency_config = Arc::clone(&current_config);
+    let transparency_path = theme_path.clone();
+    let weak_transparency = window.as_weak();
+    window.on_transparency_changed(move |reduce| {
+        let Some(window) = weak_transparency.upgrade() else {
+            return;
+        };
+        window.set_reduce_transparency(reduce);
+        let mut config = transparency_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match config::apply_reduce_transparency(transparency_path.as_deref(), &mut config, reduce) {
+            Ok(()) => {
+                let status = if reduce {
+                    "外观：已降低透明度"
+                } else {
+                    "外观：透明度已恢复"
+                };
+                window.set_settings_status(status.into());
+                window.set_settings_tone(status_tone(Tone::Good));
+            }
+            Err(message) => {
+                window.set_settings_status(message.into());
+                window.set_settings_tone(status_tone(Tone::Warn));
+            }
+        }
+    });
+
+    // Page filters and the auto-refresh interval are user settings; the UI
+    // reports every change through one callback so a restart opens the same view.
+    let settings_path = theme_path.clone();
+    let settings_config = Arc::clone(&current_config);
+    let weak_settings = window.as_weak();
+    window.on_settings_changed(move || {
+        if let Some(window) = weak_settings.upgrade() {
+            persist_window_settings(
+                &window,
+                settings_path.as_deref(),
+                &settings_config,
+                "设置已更新",
+            );
         }
     });
 

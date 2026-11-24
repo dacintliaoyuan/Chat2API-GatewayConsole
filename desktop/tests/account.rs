@@ -2,7 +2,7 @@ use um_desktop::account::{
     account_view, apply_account, clear, credentials_path, first_login, first_login_needed,
     intro_visible, load_from, manual_reason_label, save_to, tray_tooltip, AccountForm,
     AccountSurface, AuthAdmin, AuthRead, AuthState, AuthStatus, Credentials, FormError,
-    HttpAuthAdmin, LoadOutcome, PasswordInput,
+    HttpAuthAdmin, LoadOutcome, PasswordInput, VerifyReport, VerifyVerdict,
 };
 use um_desktop::gateway::ControlToken;
 use um_desktop::overview::Tone;
@@ -416,6 +416,7 @@ struct RecordingSurface {
     saved_detail: std::cell::RefCell<String>,
     can_clear: std::cell::Cell<bool>,
     can_continue: std::cell::Cell<bool>,
+    manual_takeover: std::cell::Cell<bool>,
     overview_label: std::cell::RefCell<String>,
     overview_detail: std::cell::RefCell<String>,
     overview_tone: std::cell::Cell<Option<Tone>>,
@@ -451,6 +452,10 @@ impl AccountSurface for RecordingSurface {
 
     fn set_can_continue_login(&self, value: bool) {
         self.can_continue.set(value);
+    }
+
+    fn set_manual_takeover(&self, value: bool) {
+        self.manual_takeover.set(value);
     }
 
     fn set_overview_label(&self, value: &str) {
@@ -738,6 +743,16 @@ struct RecordingAuthAdmin {
 impl AuthAdmin for RecordingAuthAdmin {
     fn read_status(&self, _base_url: &str, _token: &ControlToken) -> Result<AuthStatus, String> {
         Ok(self.status.clone())
+    }
+
+    fn verify(&self, _base_url: &str, _token: &ControlToken) -> Result<VerifyReport, String> {
+        Ok(VerifyReport {
+            verdict: VerifyVerdict::Valid,
+            reason: None,
+            upstream_status: Some(200),
+            checked_epoch: 0,
+            note: None,
+        })
     }
 
     fn start_visible_login(

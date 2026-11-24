@@ -6,13 +6,16 @@ The repo carries a mix of LF and CRLF files (legacy Windows files vs Rust source
 Rewriting a CRLF file as LF turns a small edit into a whole-file diff and makes
 review/blame unreadable. This guard compares each modified tracked file with HEAD
 and refuses a style change; an intentional one-time normalisation must be listed in
-``ALLOW`` with the reason.
+``ALLOW`` with the reason. A one-time restoration can instead be allowed for a
+single run with ``IMPECCABLE_EOL_ALLOW=path1,path2``; permanent exceptions still
+belong in ``ALLOW``.
 
 Exit codes: 0 clean; 1 style change found.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +32,16 @@ ALLOW: frozenset[str] = frozenset({
 })
 
 
+def _allowed_paths() -> frozenset[str]:
+    """ALLOW plus the one-shot ``IMPECCABLE_EOL_ALLOW`` override for this run."""
+    extra = {
+        item.strip()
+        for item in os.environ.get("IMPECCABLE_EOL_ALLOW", "").split(",")
+        if item.strip()
+    }
+    return ALLOW | extra
+
+
 def _style(raw: bytes) -> str:
     if b"\x00" in raw:
         return "binary"
@@ -41,9 +54,9 @@ def _style(raw: bytes) -> str:
     return "mixed"
 
 
-def _head_bytes(path: str) -> bytes | None:
+def _rev_bytes(rev: str, path: str) -> bytes | None:
     proc = subprocess.run(
-        ["git", "show", f"HEAD:{path}"],
+        ["git", "show", f"{rev}:{path}"],
         cwd=ROOT,
         capture_output=True,
     )
@@ -52,9 +65,28 @@ def _head_bytes(path: str) -> bytes | None:
     return proc.stdout
 
 
-def main() -> int:
+def _since_revision(argv: list[str]) -> str | None:
+    args = list(argv[1:])
+    since = None
+    while args:
+        arg = args.pop(0)
+        if arg == "--since" and args:
+            since = args.pop(0)
+        else:
+            print(f"usage: check_line_endings.py [--since REV]", file=sys.stderr)
+            raise SystemExit(1)
+    return since
+
+
+def main(argv: list[str]) -> int:
+    # Default mode compares the worktree with HEAD so the pre-commit gate sees the
+    # pending edit. ``--since REV`` compares two commits instead: a branch that
+    # already committed a whole-file rewrite would otherwise pass the default mode
+    # because the worktree is clean.
+    since = _since_revision(argv)
+    diff_range = ["HEAD"] if since is None else [since, "HEAD"]
     proc = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "diff", "--name-only", *diff_range],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -63,17 +95,21 @@ def main() -> int:
         print(proc.stderr, file=sys.stderr)
         return 1
     problems = []
+    allowed = _allowed_paths()
     for name in proc.stdout.splitlines():
-        if not name or name in ALLOW:
+        if not name or name in allowed:
             continue
-        head = _head_bytes(name)
-        if head is None:
+        if since is None:
+            before_raw = _rev_bytes("HEAD", name)
+            path = ROOT / name
+            after_raw = path.read_bytes() if path.is_file() else None
+        else:
+            before_raw = _rev_bytes(since, name)
+            after_raw = _rev_bytes("HEAD", name)
+        if before_raw is None or after_raw is None:
             continue
-        path = ROOT / name
-        if not path.is_file():
-            continue
-        before = _style(head)
-        after = _style(path.read_bytes())
+        before = _style(before_raw)
+        after = _style(after_raw)
         if before == "binary" or after == "binary":
             continue
         if before != after:
@@ -88,4 +124,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))
