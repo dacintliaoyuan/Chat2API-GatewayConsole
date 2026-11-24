@@ -56,6 +56,7 @@ struct FakePage {
     password_cleared: AtomicBool,
     reject_submit: AtomicBool,
     credential_error: AtomicBool,
+    post_submit_polls_until_token: AtomicUsize,
     submit_calls: AtomicUsize,
     duo_manual: AtomicBool,
     catalog_ready: bool,
@@ -85,6 +86,7 @@ impl FakePage {
             password_cleared: AtomicBool::new(false),
             reject_submit: AtomicBool::new(false),
             credential_error: AtomicBool::new(false),
+            post_submit_polls_until_token: AtomicUsize::new(0),
             submit_calls: AtomicUsize::new(0),
             duo_manual: AtomicBool::new(false),
             catalog_ready: false,
@@ -164,6 +166,13 @@ impl LoginPage for FakePage {
     }
 
     fn wait(&self, duration: Duration) -> Result<(), String> {
+        if self.submit_clicks() > 0
+            && self.post_submit_polls_until_token.load(Ordering::SeqCst) > 0
+            && self.post_submit_polls_until_token.fetch_sub(1, Ordering::SeqCst) == 1
+        {
+            self.set_url("http://127.0.0.1:9");
+            self.set_token(Some("fresh-token"));
+        }
         thread::sleep(duration.min(self.wait));
         Ok(())
     }
@@ -222,6 +231,11 @@ impl LoginPage for FakePage {
 
     fn credential_value(&self, selectors: &[&str]) -> Result<Option<String>, String> {
         if selectors.contains(&"input[name=\"UserName\"]") {
+            if self.submit_clicks() > 0
+                && self.post_submit_polls_until_token.load(Ordering::SeqCst) > 0
+            {
+                return Err("fixture execution context changed during redirect".to_string());
+            }
             return Ok(self.account_value.lock().expect("account value").clone());
         }
         Ok(None)
@@ -1241,6 +1255,37 @@ fn a_prefilled_same_account_with_a_missing_password_is_filled_and_submitted_once
         vec!["fixture-account", " fixture-password "]
     );
     assert_eq!(page.submit_clicks(), 1, "补填后只自动提交一次");
+}
+
+#[test]
+fn submitted_umpass_round_survives_a_form_read_error_during_redirect() {
+    let temp = TempDir::new("um-rust-login-post-submit-redirect-");
+    let page = empty_form_page();
+    // The form URL remains visible for another poll while its execution
+    // context becomes unavailable, then the browser gets the new session.
+    page.click_steps.lock().unwrap().truncate(1);
+    page.post_submit_polls_until_token.store(2, Ordering::SeqCst);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.set_account_value("fixture-account");
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            configure_form_pair(config);
+            config.click_observe_timeout = Duration::ZERO;
+        },
+    );
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] != json!("logging_in"));
+    assert_eq!(status["state"], json!("valid"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(page.submit_clicks(), 1);
+    assert_eq!(page.fill_calls(), 0);
+    assert_eq!(factory.requests().len(), 1);
 }
 
 #[test]
