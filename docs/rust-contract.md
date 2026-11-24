@@ -889,6 +889,8 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
   `next_check_epoch` 是下一次复查时间。`GET /health` 与 8001 读面只读，
   不探测、不写记录。
 
+本机 8000 的 UM 上游恢复等待和逐步放行已另行定稿，待实现和验收。现有故障记录继续适用本节的打开与关闭条件。业务放行条件见 [ADR 0014](adr/0014-local-model-ingress-and-task-continuation.md#本机-8000-的-um-上游恢复等待)。
+
 ## 10. display
 
 ### 10.1 路由
