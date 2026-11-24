@@ -682,7 +682,7 @@ export component MainWindow inherits Window {
     }
     public pure function help-card-visible(index: int) -> bool {
         if (index == 0) {
-            return root.help-match("快捷键 Ctrl+1…5 Ctrl+R Ctrl+F Alt+F F1 Esc 切换总览 请求诊断 运行日志 设置 帮助 刷新当前页数据 聚焦当前页搜索框（请求、日志或帮助） 只看失败 查看全部 打开帮助 关闭当前页的详情、账号表单或维护菜单");
+            return root.help-match("快捷键 Ctrl+1…5 Ctrl+R Ctrl+F Alt+F F1 Esc 切换总览 请求诊断 运行日志 设置 帮助 刷新当前页数据 聚焦当前页搜索框（请求、日志或帮助） 只看失败 全部结果 打开帮助 关闭当前页的详情、账号表单或维护菜单");
         }
         if (index == 1) {
             return root.help-match("术语 本机网关 chat2api UM 服务 本实例网关 上游模型来源 凭据 账号密码 缓存命中率 首字耗时 输入 Token 输出");
@@ -1435,7 +1435,7 @@ export component MainWindow inherits Window {
     out property <int> usage-chart-key-index: usage-chart.chart-key-index;
     public function focus-usage-chart() { usage-chart.focus-chart(); }
     out property <string> request-fail-toggle-text:
-        root.request-result == 2 ? "查看全部" : "只看失败";
+        root.request-result == 2 ? "全部结果" : "只看失败";
     out property <string> request-fail-toggle-icon: request-fail-toggle.icon;
     out property <bool> request-search-pending: request-search-timer.running;
     out property <bool> request-search-pending-visible: request-pending-hint.visible;
@@ -1769,15 +1769,14 @@ export component MainWindow inherits Window {
     out property <string> request-query-icon: request-query.icon;
     out property <length> request-status-y: request-status-row.absolute-position.y;
     out property <length> request-status-height: request-status-row.height;
-    // Test seams: 加载更早 appends history instead of paging; the hint takes
-    // the button's place once the history ends.
+    // Test seams: 加载更早 appends history instead of paging; the disabled
+    // action names the end of history.
     out property <length> request-load-earlier-x: request-load-earlier.absolute-position.x;
     out property <length> request-load-earlier-y: request-load-earlier.absolute-position.y;
     out property <length> request-load-earlier-width: request-load-earlier.width;
     out property <length> request-load-earlier-height: request-load-earlier.height;
     out property <bool> request-load-earlier-enabled: request-load-earlier.enabled;
-    out property <bool> request-earlier-hint-visible: request-earlier-hint.visible;
-    out property <string> request-earlier-hint-text: request-earlier-hint.text;
+    out property <string> request-load-earlier-tooltip: request-load-earlier.tooltip;
     out property <bool> request-export-enabled: root.requests.length > 0;
     out property <length> request-export-x: request-export.absolute-position.x;
     out property <length> request-export-y: request-export.absolute-position.y;
@@ -2015,6 +2014,19 @@ export component MainWindow inherits Window {
     out property <length> request-list-header-outcome-x: request-list-header-outcome.absolute-position.x;
     out property <length> request-list-header-outcome-width: request-list-header-outcome.width;
     out property <length> request-rows-y: request-rows.absolute-position.y;
+    // Test seams: the footer pager retires with the last row, and the bottom
+    // fade tracks the footer's top edge so a short card cannot clip it.
+    out property <bool> request-list-footer-visible: request-list-footer.visible;
+    out property <length> request-list-footer-y: request-list-footer.absolute-position.y;
+    out property <length> request-list-footer-width: request-list-footer.width;
+    out property <length> request-list-footer-preferred-width:
+        request-list-footer.preferred-width;
+    out property <bool> request-list-bottom-fade-visible:
+        request-list-bottom-fade.visible;
+    out property <length> request-empty-title-y:
+        request-empty-title-hint.absolute-position.y;
+    out property <length> request-empty-expand-y:
+        request-empty-expand.absolute-position.y;
     out property <length> request-detail-x: request-details.absolute-position.x;
     out property <length> request-detail-y: request-details.absolute-position.y;
     out property <length> request-detail-width: request-details.width;
@@ -2477,6 +2489,11 @@ export component MainWindow inherits Window {
             root.maintenance-menu-open = false;
             root.maintenance-confirm = -1;
             root.maintenance-return-focus = true;
+        }
+        // The chart-settings popover is another modal overlay: a page change
+        // closes it too, even when the target page is the current one.
+        if (root.usage-settings-open) {
+            root.usage-settings-open = false;
         }
         if (root.page == page) { return; }
         if (!root.allow-motion) { root.navigate(page); return; }
@@ -3199,7 +3216,9 @@ export component MainWindow inherits Window {
                                     clicked => { root.show-request-failures(); }
                                 }
                                 Hint {
-                                    text: "今天账本记录";
+                                    // A complete source note, separated from the
+                                    // action by the middle dot.
+                                    text: "· 来自今天的账本";
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; }
@@ -3603,7 +3622,7 @@ export component MainWindow inherits Window {
                         // With no request at all the failure filter has nothing
                         // to narrow, so the empty state keeps only 清除筛选.
                         visible: !root.request-empty;
-                        label: root.request-result == 2 ? "查看全部" : "只看失败";
+                        label: root.request-result == 2 ? "全部结果" : "只看失败";
                         icon: "filter";
                         quiet: true;
                         tooltip: root.request-result == 2
@@ -3751,21 +3770,25 @@ export component MainWindow inherits Window {
                             // current filters) next to the 较新/较早 page pager.
                             // The two kinds never share state: loading earlier
                             // keeps the scroll and the current page; the pager
-                            // replaces the page and starts at its top.
+                            // replaces the page and starts at its top. The footer
+                            // retires with the last row: an empty table has no
+                            // pager and keeps its own actions instead.
                             request-list-footer := HorizontalLayout {
+                                visible: root.requests.length > 0;
+                                height: self.visible ? self.preferred-height : 0px;
                                 spacing: 8px; alignment: start;
                                 request-load-earlier := ActionButton {
                                     label: "加载更早";
                                     icon: "chevron-down";
                                     quiet: true;
                                     enabled: root.has-earlier-records;
-                                    tooltip: "加载更早的请求";
+                                    // The disabled action already names the end
+                                    // of history; a separate hint beside it
+                                    // wrapped onto a second line and was
+                                    // clipped at the 410 px detail width.
+                                    tooltip: root.has-earlier-records
+                                        ? "加载更早的请求" : "没有更早的请求了";
                                     clicked => { root.load-earlier-requests(); }
-                                }
-                                request-earlier-hint := Hint {
-                                    text: "没有更早记录";
-                                    visible: root.requests.length > 0 && !root.has-earlier-records;
-                                    vertical-alignment: center;
                                 }
                                 request-export := ActionButton {
                                     label: "导出 CSV";
@@ -3784,6 +3807,19 @@ export component MainWindow inherits Window {
                                 request-newer-page := ActionButton { label: "较新"; icon: "chevron-left"; quiet: true; enabled: root.newer-requests; tooltip: "较新的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(-1); } }
                                 request-older-page := ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(1); } }
                             }
+                        }
+                        // The last row can land half-visible at the viewport's
+                        // bottom edge; an 8 px surface fade makes that edge read
+                        // as the scroll affordance instead of a clipped row.
+                        request-list-bottom-fade := Rectangle {
+                            x: 6px;
+                            y: parent.height - 6px - request-list-footer.height - 8px;
+                            width: parent.width - 24px;
+                            height: 8px;
+                            visible: root.requests.length > 0
+                                && request-rows.content-height
+                                    > request-rows.visible-height + 1px;
+                            background: @linear-gradient(180deg, transparent 0%, Theme.surface 100%);
                         }
                         // The one empty state floats over the table body
                         // instead of being a layout child: a hidden layout
@@ -4183,7 +4219,9 @@ export component MainWindow inherits Window {
                         flex-wrap: wrap;
                         spacing: 6px;
                         alignment: start;
-                        SectionLabel { text: "目录"; vertical-alignment: center; }
+                        // The directory is a jump index, not the selected tab:
+                        // the muted 跳到 label introduces the quiet entries.
+                        Hint { text: "跳到"; vertical-alignment: center; }
                         toc-appearance := ActionButton {
                             label: "外观"; quiet: true;
                             clicked => { root.scroll-settings-to(appearance-card.absolute-position.y); }
@@ -5302,7 +5340,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+1…5"; width: 96px; } Hint { text: "切换总览、请求诊断、运行日志、设置、帮助"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+R"; width: 96px; } Hint { text: "刷新当前页数据"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+F"; width: 96px; } Hint { text: "聚焦当前页搜索框（请求、日志或帮助）"; horizontal-stretch: 1; } }
-                            HorizontalLayout { spacing: 12px; DataText { text: "Alt+F"; width: 96px; } Hint { text: "请求诊断：只看失败 / 查看全部"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Alt+F"; width: 96px; } Hint { text: "请求诊断：只看失败 / 全部结果"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "F1"; width: 96px; } Hint { text: "打开帮助"; horizontal-stretch: 1; } }
                             HorizontalLayout { spacing: 12px; DataText { text: "Esc"; width: 96px; } Hint { text: "关闭当前页的详情、账号表单或维护菜单"; horizontal-stretch: 1; } }
                         }
