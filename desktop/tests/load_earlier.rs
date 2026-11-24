@@ -1,5 +1,6 @@
 //! Request-page 加载更早: append older rows under the current filters, keep the
-//! displayed rows and scroll position, and say 没有更早记录 when the history ends.
+//! displayed rows and scroll position, and let the disabled 加载更早 name the end
+//! of history instead of a second hint beside it.
 //!
 //! The tests drive the same public seam the window uses: `read_requests` reads one
 //! page from the ledger and `RequestNav` owns the page anchor and the separate
@@ -416,7 +417,12 @@ fn the_load_earlier_button_appends_without_resetting_the_scroll_or_page() {
         (window.get_request_scroll_y() + 138.0).abs() < 1.0,
         "the appended rows must not move the scroll position"
     );
-    assert!(window.get_request_earlier_hint_visible());
+    assert!(!window.get_request_load_earlier_enabled());
+    assert_eq!(
+        window.get_request_load_earlier_tooltip().as_str(),
+        "没有更早的请求了",
+        "the disabled 加载更早 names the end of history"
+    );
     assert!(
         window.get_request_older_page_enabled(),
         "加载更早 ending must not disable the 较早 page pager"
@@ -453,24 +459,27 @@ fn the_older_page_button_still_starts_a_new_page_at_the_top() {
 }
 
 #[test]
-fn the_no_more_records_hint_keeps_the_displayed_rows() {
+fn the_no_more_records_keeps_the_disabled_load_earlier_as_the_one_hint() {
     let window = request_window();
     set_rows(&window, 20);
     window.set_older_requests(true);
     window.set_has_earlier_records(false);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
 
-    assert!(window.get_request_earlier_hint_visible());
+    assert!(
+        !window.get_request_load_earlier_enabled(),
+        "the end of history disables 加载更早 instead of adding a second hint"
+    );
     assert_eq!(
-        window.get_request_earlier_hint_text().as_str(),
-        "没有更早记录"
+        window.get_request_load_earlier_tooltip().as_str(),
+        "没有更早的请求了",
+        "the disabled action names the end of history"
     );
     assert_eq!(
         window.get_requests().row_count(),
         20,
         "no empty list replaces the displayed rows"
     );
-    assert!(!window.get_request_load_earlier_enabled());
     assert!(
         window.get_request_older_page_enabled(),
         "the 较早 page pager keeps its own cursor"

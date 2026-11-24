@@ -2,8 +2,10 @@
 //!
 //! The gateway writes JSONL events to `%LOCALAPPDATA%\Chat2API\instance\gateway.log`.
 //! The live incremental reader and its backfill live in [`crate::logstream`]; this
-//! module parses one line and keeps the page status. A missing or unreadable file
-//! keeps its own failure reason and is never shown as a legal empty list.
+//! module parses one line and keeps the page status. The gateway only appends the
+//! file after a request finally fails, so a missing file is the legal "no log
+//! produced yet" state and reads as an empty list; only a real I/O error keeps its
+//! own failure reason.
 
 use std::path::Path;
 
@@ -238,9 +240,12 @@ fn is_word_byte(byte: u8) -> bool {
 }
 
 pub fn read_log_file(path: &Path) -> LogsView {
+    use crate::logstream::LogReadError;
+
     match crate::logstream::LogStream::open_with_limits(path, MAX_LOG_LINES, MAX_LOG_BYTES) {
         Ok(stream) => LogsView::Loaded(stream.entries()),
-        Err(reason) => LogsView::Failed(reason),
+        Err(LogReadError::Missing) => LogsView::Loaded(Vec::new()),
+        Err(LogReadError::Failed(reason)) => LogsView::Failed(reason),
     }
 }
 

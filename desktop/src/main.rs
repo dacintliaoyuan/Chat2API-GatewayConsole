@@ -46,7 +46,9 @@ use um_desktop::log_history::{
     LevelSelection,
 };
 use um_desktop::login_rounds::{self, LoginRoundsQuery, LoginRoundsView};
-use um_desktop::logstream::{format_log_time, plan_log_page, LevelFilter, LogStream, StreamLine};
+use um_desktop::logstream::{
+    format_log_time, plan_log_page, LevelFilter, LiveLog, LiveTick, StreamLine,
+};
 use um_desktop::maintenance;
 use um_desktop::models;
 use um_desktop::models::ProbeClient;
@@ -75,28 +77,10 @@ static PAGE_READ_SEQ: AtomicI32 = AtomicI32::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// One log-page update produced by the reader thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LogUpdate {
-    previous: Vec<StreamLine>,
-    entries: Vec<StreamLine>,
-    appended: Vec<StreamLine>,
-    reset: bool,
-    trimmed: usize,
-    failure: Option<String>,
-}
-
-impl LogUpdate {
-    fn failed(reason: String) -> Self {
-        Self {
-            previous: Vec::new(),
-            entries: Vec::new(),
-            appended: Vec::new(),
-            reset: false,
-            trimmed: 0,
-            failure: Some(reason),
-        }
-    }
-}
+///
+/// The live reader owns the missing/empty/failure distinction; this is only the
+/// copy the UI thread applies.
+type LogUpdate = LiveTick;
 
 fn status_tone(tone: Tone) -> i32 {
     um_desktop::ui::tone_index(tone)
@@ -1888,57 +1872,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         let service_log = service_log.clone();
         std::thread::spawn(move || {
-            let mut last_failure = None;
-            let mut stream: Option<LogStream> = None;
+            // The reader owns the missing-file state: the gateway only creates
+            // `gateway.log` after a request finally fails, so a fresh instance
+            // reports the legal empty state instead of a red failure.
+            let mut live = LiveLog::new(service_log);
             while !QUIT.load(Ordering::SeqCst) {
                 if !PAUSED.load(Ordering::SeqCst) {
                     let refresh = REFRESH_LOGS.swap(false, Ordering::SeqCst);
-                    let update = if let Some(opened) = stream.as_mut() {
-                        let previous: Vec<_> = opened.lines().iter().cloned().collect();
-                        match opened.poll() {
-                            Ok(outcome)
-                                if refresh
-                                    || outcome.reset
-                                    || !outcome.appended.is_empty()
-                                    || last_failure.is_some() =>
-                            {
-                                Some(LogUpdate {
-                                    previous,
-                                    entries: opened.lines().iter().cloned().collect(),
-                                    appended: outcome.appended,
-                                    reset: outcome.reset || last_failure.is_some(),
-                                    trimmed: outcome.trimmed,
-                                    failure: None,
-                                })
-                            }
-                            Ok(_) => None,
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
-                                Some(LogUpdate::failed(reason))
-                            }
-                            Err(_) => None,
-                        }
-                    } else {
-                        match LogStream::open(&service_log) {
-                            Ok(opened) => {
-                                let entries = opened.lines().iter().cloned().collect();
-                                stream = Some(opened);
-                                Some(LogUpdate {
-                                    previous: Vec::new(),
-                                    entries,
-                                    appended: Vec::new(),
-                                    reset: true,
-                                    trimmed: 0,
-                                    failure: None,
-                                })
-                            }
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
-                                Some(LogUpdate::failed(reason))
-                            }
-                            Err(_) => None,
-                        }
-                    };
-                    if let Some(update) = update {
-                        last_failure = update.failure.clone();
+                    if let Some(update) = live.read(refresh) {
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(window) = weak.upgrade() {

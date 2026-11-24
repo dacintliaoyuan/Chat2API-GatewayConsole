@@ -451,3 +451,86 @@ fn search_matches_request_id_model_and_error_and_empty_results_explain_why() {
     );
     assert_ne!(no_match.message, empty_window.message);
 }
+
+#[test]
+fn an_empty_request_table_retires_the_footer_pager() {
+    let window = request_window();
+    window.set_requests(ModelRc::from(Vec::<main_ui::RequestRow>::new().as_slice()));
+    window.set_request_status("所选时间没有请求记录。".into());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+
+    assert!(
+        !window.get_request_list_footer_visible(),
+        "an empty table has no pager"
+    );
+    assert_eq!(
+        window.get_request_list_footer_height(),
+        0.0,
+        "the retired footer must not reserve a dead row"
+    );
+    assert!(
+        window.get_request_empty_expand_visible(),
+        "the empty table still offers 扩大时间范围"
+    );
+    assert!(
+        window.get_request_empty_refresh_visible(),
+        "the empty table still offers 刷新"
+    );
+    assert!(
+        window.get_request_empty_expand_y() - window.get_request_empty_title_y() <= 40.0,
+        "the empty actions follow the reason instead of a dead pager"
+    );
+}
+
+#[test]
+fn the_footer_fits_the_410px_list_beside_the_detail() {
+    let window = request_window();
+    let rows = (0..25).map(request_row).collect::<Vec<_>>();
+    window.set_requests(ModelRc::from(rows.as_slice()));
+    window.set_has_earlier_records(false);
+    window.set_older_requests(true);
+    window.set_selected_request("key-3".into());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+
+    let pane_width = window.get_request_list_width();
+    let footer_width = window.get_request_list_footer_width();
+    let footer_height = window.get_request_list_footer_height();
+    let footer_y = window.get_request_list_footer_y();
+    let panel_y = window.get_request_list_panel_y();
+    let panel_height = window.get_request_list_panel_height();
+    println!(
+        "pane={pane_width} footer y={footer_y} w={footer_width} h={footer_height} preferred={} panel y={panel_y} h={panel_height} fade={}",
+        window.get_request_list_footer_preferred_width(),
+        window.get_request_list_bottom_fade_visible(),
+    );
+    assert!(
+        pane_width < 460.0,
+        "the open detail leaves the list about 410 px: {pane_width}"
+    );
+    assert!(window.get_request_list_footer_visible());
+    assert!(
+        footer_height <= 34.5,
+        "the footer stays one control row at the detail width: {footer_height}"
+    );
+    assert!(
+        window.get_request_list_footer_preferred_width() <= footer_width - 23.0,
+        "the footer fits the card instead of overflowing the end-of-history hint"
+    );
+    assert!(
+        footer_y + footer_height <= panel_y + panel_height + 0.5,
+        "the footer stays inside the card instead of being clipped: footer bottom {} panel bottom {}",
+        footer_y + footer_height,
+        panel_y + panel_height
+    );
+    assert!(!window.get_request_load_earlier_enabled());
+    assert_eq!(
+        window.get_request_load_earlier_tooltip().as_str(),
+        "没有更早的请求了"
+    );
+    assert!(window.get_request_export_enabled());
+    assert!(window.get_request_older_page_enabled());
+    assert!(
+        window.get_request_list_bottom_fade_visible(),
+        "a scrollable list fades its bottom edge instead of cutting a row"
+    );
+}

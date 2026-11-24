@@ -355,6 +355,39 @@ fn escape_closes_the_chart_settings_popover_and_returns_focus() {
 }
 
 #[test]
+fn navigating_closes_the_chart_settings_popover() {
+    let chart = chart();
+    click(
+        &chart,
+        chart.get_usage_settings_toggle_x() + chart.get_usage_settings_toggle_width() / 2.0,
+        chart.get_usage_settings_toggle_y() + chart.get_usage_settings_toggle_height() / 2.0,
+    );
+    assert!(
+        chart.get_usage_settings_open_value(),
+        "图表设置 opens the popover"
+    );
+    chart.invoke_navigate_to(0);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(
+        !chart.get_usage_settings_open_value(),
+        "a navigation closes the popover even when it stays on the same page"
+    );
+
+    click(
+        &chart,
+        chart.get_usage_settings_toggle_x() + chart.get_usage_settings_toggle_width() / 2.0,
+        chart.get_usage_settings_toggle_y() + chart.get_usage_settings_toggle_height() / 2.0,
+    );
+    assert!(chart.get_usage_settings_open_value());
+    chart.invoke_navigate_to(1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(250));
+    assert!(
+        !chart.get_usage_settings_open_value(),
+        "a page change closes the chart-settings popover"
+    );
+}
+
+#[test]
 fn the_plot_fills_the_chart_card_without_a_blank_band() {
     let chart = chart();
     let chart_y = chart.get_overview_chart_absolute_y();
@@ -911,7 +944,7 @@ fn the_failed_filter_folds_the_chart_and_keeps_the_list_readable() {
     assert!(window.get_request_list_height() >= 240.0);
     assert_eq!(
         window.get_request_fail_toggle_text(),
-        "查看全部",
+        "全部结果",
         "the one-key filter can be turned off again"
     );
 }

@@ -5,6 +5,11 @@
 //! page never displays a synthetic event id. Reads advance a file offset so a poll
 //! only returns lines that were not shown before. Truncation, rotation and
 //! replacement reset the stream and re-read the new tail.
+//!
+//! A missing file is not a read failure. The gateway creates `gateway.log` only
+//! after a request finally fails, so a fresh instance has no log file at all;
+//! [`LogReadError`] keeps that legal empty state apart from an I/O error, and
+//! [`LiveLog`] reports it to the page as an empty stream instead of a failure.
 
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
@@ -23,6 +28,29 @@ pub const DEFAULT_MAX_LINES: usize = 400;
 pub const DEFAULT_TAIL_BYTES: u64 = 256 * 1024;
 /// The prefix compared to detect a replaced/rotated file.
 const HEAD_BYTES: u64 = 256;
+
+/// Why one log read could not produce a window.
+///
+/// The gateway only appends `gateway.log` when a request finally fails, so a fresh
+/// instance has no log file at all. `Missing` is the legal "no log produced yet"
+/// state; `Failed` is a real I/O error and carries the path and the operating-system
+/// reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogReadError {
+    /// The file does not exist yet (or no longer exists).
+    Missing,
+    /// The file exists but could not be read.
+    Failed(String),
+}
+
+impl std::fmt::Display for LogReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("日志文件尚未产生"),
+            Self::Failed(reason) => formatter.write_str(reason),
+        }
+    }
+}
 
 #[cfg(windows)]
 type FileId = (u32, u64);
@@ -193,7 +221,7 @@ pub struct LogStream {
 }
 
 impl LogStream {
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self, String> {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, LogReadError> {
         Self::open_with_limits(path, DEFAULT_MAX_LINES, DEFAULT_TAIL_BYTES)
     }
 
@@ -201,7 +229,7 @@ impl LogStream {
         path: impl Into<PathBuf>,
         max_lines: usize,
         tail_bytes: u64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LogReadError> {
         let path = path.into();
         let (mut file, length, file_id) = open_len(&path)?;
         let tail = read_tail(&mut file, length, tail_bytes, &path)?;
@@ -223,8 +251,9 @@ impl LogStream {
     ///
     /// A partial trailing line is left unread until its newline arrives. On an
     /// unreadable file the previous window is kept and the error carries the path
-    /// and the operating-system reason.
-    pub fn poll(&mut self) -> Result<PollOutcome, String> {
+    /// and the operating-system reason; a file that disappeared reports
+    /// [`LogReadError::Missing`] and keeps the window the same way.
+    pub fn poll(&mut self) -> Result<PollOutcome, LogReadError> {
         let (mut file, length, file_id) = open_len(&self.path)?;
         let head = read_head(&mut file, length, &self.path)?;
 
@@ -254,11 +283,11 @@ impl LogStream {
         }
 
         file.seek(SeekFrom::Start(self.offset))
-            .map_err(|error| format!("定位日志失败（{}）：{error}", self.path.display()))?;
+            .map_err(|error| failed(format!("定位日志失败（{}）：{error}", self.path.display())))?;
         let mut bytes = Vec::new();
         file.take(length - self.offset)
             .read_to_end(&mut bytes)
-            .map_err(|error| format!("读取日志失败（{}）：{error}", self.path.display()))?;
+            .map_err(|error| failed(format!("读取日志失败（{}）：{error}", self.path.display())))?;
 
         let mut cursor = 0usize;
         let mut appended = Vec::new();
@@ -348,6 +377,142 @@ impl LogStream {
     }
 }
 
+/// One live-page update produced by [`LiveLog::read`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTick {
+    /// Lines the page showed before this tick.
+    pub previous: Vec<StreamLine>,
+    /// Lines the page should show after this tick.
+    pub entries: Vec<StreamLine>,
+    /// Lines appended by this tick.
+    pub appended: Vec<StreamLine>,
+    /// True when the page must rebuild instead of appending.
+    pub reset: bool,
+    /// Lines dropped from the front of the bounded window.
+    pub trimmed: usize,
+    /// A read failure; `None` is a healthy or empty stream.
+    pub failure: Option<String>,
+}
+
+impl LiveTick {
+    fn failed(reason: String) -> Self {
+        Self {
+            previous: Vec::new(),
+            entries: Vec::new(),
+            appended: Vec::new(),
+            reset: false,
+            trimmed: 0,
+            failure: Some(reason),
+        }
+    }
+}
+
+/// The live tail the app's refresh loop reads once per tick.
+///
+/// The reader is opened lazily and kept across ticks. A missing file is the legal
+/// "no log produced yet" state: the page receives one empty rebuild and keeps
+/// polling until the file appears, instead of a failure that would stay red on a
+/// fresh instance. Only a real I/O error is reported as a failure, and the same
+/// failure is reported once until the next explicit refresh.
+#[derive(Debug)]
+pub struct LiveLog {
+    path: PathBuf,
+    stream: Option<LogStream>,
+    last_failure: Option<String>,
+    empty_reported: bool,
+}
+
+impl LiveLog {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            stream: None,
+            last_failure: None,
+            empty_reported: false,
+        }
+    }
+
+    /// Reads one tick. `None` means nothing changed and the page can keep what it
+    /// shows.
+    pub fn read(&mut self, refresh: bool) -> Option<LiveTick> {
+        let Some(stream) = self.stream.as_mut() else {
+            return self.open(refresh);
+        };
+        let previous: Vec<_> = stream.lines().iter().cloned().collect();
+        let had_failure = self.last_failure.is_some();
+        match stream.poll() {
+            Ok(outcome)
+                if refresh
+                    || outcome.reset
+                    || !outcome.appended.is_empty()
+                    || had_failure =>
+            {
+                self.last_failure = None;
+                self.empty_reported = false;
+                Some(LiveTick {
+                    previous,
+                    entries: stream.lines().iter().cloned().collect(),
+                    appended: outcome.appended,
+                    reset: outcome.reset || had_failure,
+                    trimmed: outcome.trimmed,
+                    failure: None,
+                })
+            }
+            Ok(_) => None,
+            Err(LogReadError::Missing) => {
+                self.stream = None;
+                self.missing_tick(previous, refresh)
+            }
+            Err(LogReadError::Failed(reason)) => self.failure_tick(reason, refresh),
+        }
+    }
+
+    fn open(&mut self, refresh: bool) -> Option<LiveTick> {
+        match LogStream::open(&self.path) {
+            Ok(opened) => {
+                self.last_failure = None;
+                self.empty_reported = false;
+                let entries = opened.lines().iter().cloned().collect();
+                self.stream = Some(opened);
+                Some(LiveTick {
+                    previous: Vec::new(),
+                    entries,
+                    appended: Vec::new(),
+                    reset: true,
+                    trimmed: 0,
+                    failure: None,
+                })
+            }
+            Err(LogReadError::Missing) => self.missing_tick(Vec::new(), refresh),
+            Err(LogReadError::Failed(reason)) => self.failure_tick(reason, refresh),
+        }
+    }
+
+    fn missing_tick(&mut self, previous: Vec<StreamLine>, refresh: bool) -> Option<LiveTick> {
+        self.last_failure = None;
+        if self.empty_reported && !refresh {
+            return None;
+        }
+        self.empty_reported = true;
+        Some(LiveTick {
+            previous,
+            entries: Vec::new(),
+            appended: Vec::new(),
+            reset: true,
+            trimmed: 0,
+            failure: None,
+        })
+    }
+
+    fn failure_tick(&mut self, reason: String, refresh: bool) -> Option<LiveTick> {
+        if !refresh && self.last_failure.as_ref() == Some(&reason) {
+            return None;
+        }
+        self.last_failure = Some(reason.clone());
+        Some(LiveTick::failed(reason))
+    }
+}
+
 struct TailRead {
     lines: Vec<(u64, String)>,
     offset: u64,
@@ -355,14 +520,23 @@ struct TailRead {
     start: u64,
 }
 
-fn open_len(path: &Path) -> Result<(File, u64, Option<FileId>), String> {
-    let file =
-        File::open(path).map_err(|error| format!("读取日志失败（{}）：{error}", path.display()))?;
+fn failed(reason: String) -> LogReadError {
+    LogReadError::Failed(reason)
+}
+
+fn open_len(path: &Path) -> Result<(File, u64, Option<FileId>), LogReadError> {
+    let file = File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            LogReadError::Missing
+        } else {
+            failed(format!("读取日志失败（{}）：{error}", path.display()))
+        }
+    })?;
     let metadata = file
         .metadata()
-        .map_err(|error| format!("读取日志大小失败（{}）：{error}", path.display()))?;
+        .map_err(|error| failed(format!("读取日志大小失败（{}）：{error}", path.display())))?;
     if !metadata.is_file() {
-        return Err(format!("日志路径不是文件（{}）", path.display()));
+        return Err(failed(format!("日志路径不是文件（{}）", path.display())));
     }
     let file_id = file_id(&file);
     Ok((file, metadata.len(), file_id))
@@ -397,16 +571,16 @@ fn read_tail(
     length: u64,
     tail_bytes: u64,
     path: &Path,
-) -> Result<TailRead, String> {
+) -> Result<TailRead, LogReadError> {
     let start = length.saturating_sub(tail_bytes);
     let read_from = start.saturating_sub(1);
     file.seek(SeekFrom::Start(read_from))
-        .map_err(|error| format!("定位日志失败（{}）：{error}", path.display()))?;
+        .map_err(|error| failed(format!("定位日志失败（{}）：{error}", path.display())))?;
     let mut bytes = Vec::new();
     file.by_ref()
         .take(length - read_from)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取日志失败（{}）：{error}", path.display()))?;
+        .map_err(|error| failed(format!("读取日志失败（{}）：{error}", path.display())))?;
 
     let mut cursor = 0usize;
     if read_from < start {
@@ -436,15 +610,15 @@ fn read_tail(
     })
 }
 
-fn read_head(file: &mut File, length: u64, path: &Path) -> Result<Vec<u8>, String> {
+fn read_head(file: &mut File, length: u64, path: &Path) -> Result<Vec<u8>, LogReadError> {
     if length == 0 {
         return Ok(Vec::new());
     }
     file.seek(SeekFrom::Start(0))
-        .map_err(|error| format!("定位日志失败（{}）：{error}", path.display()))?;
+        .map_err(|error| failed(format!("定位日志失败（{}）：{error}", path.display())))?;
     let mut head = vec![0u8; length.min(HEAD_BYTES) as usize];
     file.read_exact(&mut head)
-        .map_err(|error| format!("读取日志失败（{}）：{error}", path.display()))?;
+        .map_err(|error| failed(format!("读取日志失败（{}）：{error}", path.display())))?;
     Ok(head)
 }
 
@@ -514,10 +688,10 @@ pub fn read_history(
     since: i64,
     level: LevelFilter,
     keyword: &str,
-) -> Result<HistoryPage, String> {
+) -> Result<HistoryPage, LogReadError> {
     let (mut file, length, _) = open_len(path)?;
     if before.is_some_and(|offset| offset > length) {
-        return Err("日志已轮换，请从最新一页重新读取".to_string());
+        return Err(failed("日志已轮换，请从最新一页重新读取".to_string()));
     }
     let end = before.unwrap_or(length);
     let tail = read_tail(&mut file, end, DEFAULT_TAIL_BYTES, path)?;
