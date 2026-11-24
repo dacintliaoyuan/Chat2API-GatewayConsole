@@ -1361,12 +1361,23 @@ export component MainWindow inherits Window {
         root.request-chart-collapsed-explicit;
     // The fold decision reads the height the request list would keep with the
     // chart open, not the window height: filters, status row and the expanded
-    // analytics card come off the viewport first.
+    // analytics card come off the viewport first. Preferred heights keep the
+    // decision out of the page's layout allocation, so it cannot feed back.
     out property <length> request-list-available-height:
         max(0px, request-scroll.visible-height
-            - request-filters.height
-            - request-status-row.height
+            - request-filters.preferred-height
+            - request-status-row.preferred-height
             - request-analytics.expanded-height
+            - 24px);
+    // The height the request list would keep with the chart at its current
+    // disclosure state: the viewport minus the cards that sit above it. Every
+    // term is a content-preferred height, never one the page layout assigns,
+    // or the row height would feed back into the page's preferred height.
+    out property <length> request-list-height-budget:
+        max(0px, request-scroll.visible-height
+            - request-filters.preferred-height
+            - request-status-row.preferred-height
+            - (root.request-empty ? 0px : request-analytics.current-height)
             - 24px);
     public function apply-auto-chart-collapse() {
         root.request-chart-collapsed-explicit = false;
@@ -1407,6 +1418,12 @@ export component MainWindow inherits Window {
     out property <bool> request-empty:
         root.requests.length == 0 && !root.request-filters-active;
     out property <string> request-status-text: root.request-status-label;
+    // The unfiltered empty window names the page count in the status row;
+    // the table below owns the one 所选时间没有请求记录 reason.
+    out property <string> request-status-display:
+        root.request-status-label == "所选时间没有请求记录。"
+        ? "北京时间 · 本页 0 条" : root.request-status-label;
+    out property <string> request-status-display-text: root.request-status-display;
     out property <bool> request-chart-focused: request-analytics.chart-focus-visible;
     public function focus-request-chart() { request-analytics.focus-chart(); }
     out property <bool> usage-chart-focused: usage-chart.chart-focus-visible;
@@ -1582,6 +1599,11 @@ export component MainWindow inherits Window {
     out property <length> overview-chart-width: usage-chart.width;
     out property <length> overview-chart-absolute-y: usage-chart.absolute-position.y;
     out property <length> overview-chart-content-height: usage-chart.content-height;
+    // Test seams: the first screen's plot height and the page viewport's bottom
+    // edge, so the layout tests measure what the user actually sees.
+    out property <length> overview-plot-height: usage-chart.plot-height;
+    out property <length> overview-viewport-bottom:
+        overview-scroll.absolute-position.y + overview-scroll.visible-height;
     out property <length> overview-title-y: page-title.absolute-position.y;
     out property <length> overview-title-height: page-title.height;
     out property <length> overview-state-gateway-width: state-gateway.width;
@@ -1762,6 +1784,18 @@ export component MainWindow inherits Window {
     out property <length> request-older-page-height: request-older-page.height;
     out property <bool> request-older-page-enabled: request-older-page.enabled;
     out property <length> request-analytics-y: request-analytics.absolute-position.y;
+    out property <bool> request-analytics-visible: request-analytics.visible;
+    out property <length> request-list-panel-y:
+        request-list-panel.absolute-position.y;
+    out property <length> request-row-height: request-row.height;
+    out property <length> request-list-pane-height: request-list-pane.height;
+    out property <length> request-list-panel-height: request-list-panel.height;
+    out property <length> request-list-footer-height: request-list-footer.height;
+    out property <length> request-filters-height: request-filters.height;
+    out property <length> request-status-row-height: request-status-row.height;
+    out property <length> request-empty-y: request-empty.absolute-position.y;
+    out property <length> request-empty-height: request-empty.height;
+    out property <bool> status-row-visible: status-row.visible;
     out property <length> request-analytics-height: request-analytics.height;
     // Test seam: the compact first screen ends at the footer, so the first
     out property <length> request-analytics-width: request-analytics.width;
@@ -1922,6 +1956,8 @@ export component MainWindow inherits Window {
     out property <length> request-page-width: request-page.width;
     out property <length> request-page-host-width: page-host.width;
     out property <length> request-page-height: request-page.preferred-height;
+    out property <length> request-page-actual-height: request-page.height;
+    out property <length> request-scroll-content-height: request-scroll.content-height;
     out property <length> request-scroll-viewport-height: request-scroll.visible-height;
     out property <length> request-filter-width: request-filters.width;
     out property <length> request-filter-row-width: request-filter-row.width;
@@ -2091,6 +2127,8 @@ export component MainWindow inherits Window {
     out property <string> continue-login-label: configure-account-button.label;
     out property <bool> verify-card-visible: verify-card.visible;
     out property <length> verify-card-height: verify-card.height;
+    out property <length> verify-card-x: verify-card.absolute-position.x;
+    out property <length> verify-card-width: verify-card.width;
     out property <bool> verify-button-enabled: !root.verify-busy;
     out property <length> verify-button-x: verify-action.absolute-position.x;
     out property <length> verify-button-y: verify-action.absolute-position.y;
@@ -3180,11 +3218,12 @@ export component MainWindow inherits Window {
                     }
                     // The chart takes the leftover height instead of leaving a
                     // blank band above the status row, but it never grows past
-                    // 260 px and pushes 最近核验 / 近期问题 / 上游故障历史
-                    // off the first screen.
+                    // 300 px. With the one-row 最近核验 card this leaves a
+                    // ≥120 px plot while the 近期问题 title stays on the first
+                    // screen.
                     usage-chart := UsageChart {
                         vertical-stretch: 1;
-                        max-height: 260px;
+                        max-height: 300px;
                         period <=> root.usage-period;
                         points: root.usage-points;
                         labels: root.usage-labels;
@@ -3206,41 +3245,46 @@ export component MainWindow inherits Window {
                     // The recent verify card always exists: a never-verified
                     // instance is a legal state with its own copy and the first
                     // probe action, not a blank card.
+                    // The recent verify card is one compact row: title, time,
+                    // result, detail and 重新核验 share a line so the first
+                    // screen keeps its height for the plot and 近期问题.
                     verify-card := Card {
-                        gap: 10px;
-                        VerticalLayout {
-                            alignment: start;
+                        inset-y: 10px;
+                        HorizontalLayout {
                             spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                SectionLabel {
-                                    text: "最近核验";
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                }
-                                if !root.verify-at.is-empty : DataText {
-                                    text: root.verify-at;
-                                    vertical-alignment: center;
-                                }
+                            cross-axis-alignment: center;
+                            SectionLabel {
+                                text: "最近核验";
+                                vertical-alignment: center;
                             }
-                            HorizontalLayout {
-                                spacing: 7px;
-                                cross-axis-alignment: center;
-                                StatusDot { tone: root.verify-tone; }
-                                Text {
-                                    text: root.verify-result;
-                                    color: Theme.ink;
-                                    font-weight: 600;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                }
+                            if !root.verify-at.is-empty : DataText {
+                                text: root.verify-at;
+                                vertical-alignment: center;
+                            }
+                            StatusDot { tone: root.verify-tone; }
+                            Text {
+                                text: root.verify-result;
+                                color: Theme.ink;
+                                font-weight: 600;
+                                font-size: 13px;
+                                vertical-alignment: center;
                             }
                             if !root.verify-detail.is-empty : Hint {
                                 text: root.verify-detail;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+                            if root.verify-detail.is-empty : Rectangle {
+                                horizontal-stretch: 1;
                             }
                             verify-action := ActionButton {
                                 label: root.verify-action-label;
                                 icon: "check";
+                                // The row shrinks the detail hint, never the
+                                // action: 96 px holds 重新核验 with its glyph.
+                                min-width: 96px;
                                 enabled: !root.verify-busy;
                                 clicked => { root.verify-login(); }
                             }
@@ -3410,7 +3454,8 @@ export component MainWindow inherits Window {
                 // ScrollView takes over at the minimum window size.
                 request-page := VerticalLayout {
                 width: 100%;
-                min-height: max(self.preferred-height, request-scroll.visible-height);
+                alignment: stretch;
+                height: max(self.preferred-height, request-scroll.visible-height);
                 // Leave a gutter on the right so the scrollbar thumb lands on
                 // the page, never inside a card.
                 padding-right: root.request-compact ? 8px : 0px;
@@ -3509,7 +3554,7 @@ export component MainWindow inherits Window {
                     // label clear of the ScrollView thumb and the window edge.
                     padding-right: root.request-compact ? 0px : 8px;
                     Hint {
-                        text: root.request-status-label;
+                        text: root.request-status-display;
                         color: Theme.status_ink(root.request-tone);
                         horizontal-stretch: 1;
                         vertical-alignment: center;
@@ -3564,6 +3609,9 @@ export component MainWindow inherits Window {
                     // With no request at all the list card is the one empty
                     // state; a second analytics card would repeat the reason.
                     visible: !root.request-empty;
+                    // A hidden card must not keep its expanded height in the
+                    // page, or the list card starts 107 px lower.
+                    height: root.request-empty ? 0px : self.preferred-height;
                     width: 100%;
                     horizontal-stretch: 1;
                     compact: root.request-compact;
@@ -3593,12 +3641,25 @@ export component MainWindow inherits Window {
                     width: 100%;
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
+                    // The row takes the height the cards leave, so the list
+                    // card keeps its 240 px floor and the page scrolls when
+                    // the chart is expanded.
+                    height: max(240px, root.request-list-height-budget);
+                    // The detail must share the list's top and bottom edges,
+                    // not float above its bottom with a 120 px blank band.
+                    cross-axis-alignment: stretch;
                     spacing: root.request-compact && !root.selected-request.is-empty ? 0px : 12px;
                     request-list-pane := VerticalLayout {
                     horizontal-stretch: 0;
                     // The page scrolls; the list keeps the ADR 0015 240 px
                     // floor at every width instead of collapsing to one row.
+                    // The row owns the floor as an explicit height, so the pane
+                    // only needs to stay stretchable above it.
                     min-height: 240px;
+                    max-height: 100000px;
+                    // The pane's own layout must distribute the row's extra
+                    // height to the card instead of leaving it under the panel.
+                    alignment: stretch;
                     // The card takes the row's remaining height so its own
                     // centered empty state sits under the status row instead of
                     // leaving a blank band above the table.
@@ -3612,6 +3673,10 @@ export component MainWindow inherits Window {
                     visible: !root.request-compact || root.selected-request.is-empty;
                     spacing: 8px;
                     request-list-panel := Panel {
+                        // The pane's layout gives the card the row's height; the
+                        // min keeps the table body at the same floor even when
+                        // the pane measures its preferred height first.
+                        min-height: max(240px, root.request-list-height-budget);
                         vertical-stretch: 1;
                         VerticalLayout {
                             padding-left: 6px;
@@ -3634,73 +3699,15 @@ export component MainWindow inherits Window {
                                 request-list-header-first-token := Hint { text: "首字耗时"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                                 request-list-header-outcome := Hint { text: "结果"; width: 76px; horizontal-alignment: right; vertical-alignment: center; }
                             }
-                            request-empty := VerticalLayout {
-                                visible: root.requests.length == 0;
-                                // Fill the card body so the one empty state sits
-                                // in the middle of the table instead of under
-                                // its header with a blank 115 px band below.
-                                // max-height 0 collapses the hidden layout;
-                                // the visible one stretches instead of adding
-                                // its preferred height to the page.
-                                min-height: 0px;
-                                max-height: root.requests.length == 0 ? 100000px : 0px;
-                                vertical-stretch: root.requests.length == 0 ? 1 : 0;
-                                alignment: center;
-                                spacing: 6px;
-                                request-empty-title-hint := Hint {
-                                    text: root.request-filters-active
-                                        ? "没有符合筛选的请求" : "所选时间没有请求记录";
-                                    color: Theme.ink;
-                                    font-size: 13px;
-                                    font-weight: 600;
-                                    horizontal-alignment: center;
-                                }
-                                Hint {
-                                    // The status row names the empty window;
-                                    // the table adds the next step only when a
-                                    // filter is what emptied it.
-                                    visible: root.request-filters-active;
-                                    height: self.visible ? self.preferred-height : 0px;
-                                    text: "调整筛选条件，或清除筛选后重试";
-                                    horizontal-alignment: center;
-                                }
-                                request-empty-clear-row := HorizontalLayout {
-                                    visible: root.request-filters-active;
-                                    height: root.request-filters-active ? self.preferred-height : 0px;
-                                    alignment: center;
-                                    request-empty-clear := ActionButton {
-                                        label: "清除筛选";
-                                        icon: "close";
-                                        quiet: true;
-                                        clicked => { root.clear-request-filters(); }
-                                    }
-                                }
-                                request-empty-expand-row := HorizontalLayout {
-                                    visible: !root.request-filters-active;
-                                    height: self.visible ? self.preferred-height : 0px;
-                                    alignment: center;
-                                    spacing: 8px;
-                                    request-empty-expand := ActionButton {
-                                        label: "扩大时间范围";
-                                        icon: "chevron-down";
-                                        quiet: true;
-                                        tooltip: "把请求日期范围切到全部";
-                                        clicked => {
-                                            root.request-period = 4;
-                                            root.query-requests(0);
-                                        }
-                                    }
-                                    request-empty-refresh := ActionButton {
-                                        label: "刷新";
-                                        icon: "refresh";
-                                        quiet: true;
-                                        clicked => { root.query-requests(0); }
-                                    }
-                                }
-                            }
                             request-rows := ListView {
                                 visible: root.requests.length > 0;
                                 vertical-stretch: 1;
+                                // A hidden ListView still feeds the parent
+                                // layout's preferred height in this Slint
+                                // version; cap it at zero so the empty
+                                // state keeps the table body.
+                                min-height: 0px;
+                                max-height: root.requests.length > 0 ? 100000px : 0px;
                                 content-y <=> root.request-scroll-y;
                                 for item in root.requests : Selectable {
                                     label: root.request-row-label(item);
@@ -3726,7 +3733,7 @@ export component MainWindow inherits Window {
                             // The two kinds never share state: loading earlier
                             // keeps the scroll and the current page; the pager
                             // replaces the page and starts at its top.
-                            HorizontalLayout {
+                            request-list-footer := HorizontalLayout {
                                 spacing: 8px; alignment: start;
                                 request-load-earlier := ActionButton {
                                     label: "加载更早";
@@ -3754,6 +3761,69 @@ export component MainWindow inherits Window {
                                 request-older-page := ActionButton { label: "较早"; icon: "chevron-right"; quiet: true; enabled: root.older-requests; tooltip: "较早的请求"; clicked => { root.request-scroll-y = 0px; root.query-requests(1); } }
                             }
                         }
+                        // The one empty state floats over the table body
+                        // instead of being a layout child: a hidden layout
+                        // still feeds this Slint layout's preferred height,
+                        // and a stretched child never grew past its content.
+                        request-empty := VerticalLayout {
+                            visible: root.requests.length == 0;
+                            x: 6px;
+                            y: request-list-header.height + 10px;
+                            width: parent.width - 24px;
+                            height: parent.height - request-list-header.height
+                                - request-list-footer.height - 20px;
+                            alignment: center;
+                            spacing: 6px;
+                            request-empty-title-hint := Hint {
+                                text: root.request-filters-active
+                                    ? "没有符合筛选的请求" : "所选时间没有请求记录";
+                                color: Theme.ink;
+                                font-size: 13px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+                            Hint {
+                                // The table adds the next step only when a
+                                // filter is what emptied it.
+                                visible: root.request-filters-active;
+                                height: self.visible ? self.preferred-height : 0px;
+                                text: "调整筛选条件，或清除筛选后重试";
+                                horizontal-alignment: center;
+                            }
+                            request-empty-clear-row := HorizontalLayout {
+                                visible: root.request-filters-active;
+                                height: root.request-filters-active ? self.preferred-height : 0px;
+                                alignment: center;
+                                request-empty-clear := ActionButton {
+                                    label: "清除筛选";
+                                    icon: "close";
+                                    quiet: true;
+                                    clicked => { root.clear-request-filters(); }
+                                }
+                            }
+                            request-empty-expand-row := HorizontalLayout {
+                                visible: !root.request-filters-active;
+                                height: self.visible ? self.preferred-height : 0px;
+                                alignment: center;
+                                spacing: 8px;
+                                request-empty-expand := ActionButton {
+                                    label: "扩大时间范围";
+                                    icon: "chevron-down";
+                                    quiet: true;
+                                    tooltip: "把请求日期范围切到全部";
+                                    clicked => {
+                                        root.request-period = 4;
+                                        root.query-requests(0);
+                                    }
+                                }
+                                request-empty-refresh := ActionButton {
+                                    label: "刷新";
+                                    icon: "refresh";
+                                    quiet: true;
+                                    clicked => { root.query-requests(0); }
+                                }
+                            }
+                        }
                     }
                 }
                 request-details := TextDetails {
@@ -3761,6 +3831,7 @@ export component MainWindow inherits Window {
                     // The detail fills the list row; its own content must not
                     // raise the page's preferred height.
                     preferred-height: 0px;
+                    vertical-stretch: 1;
                     width: root.selected-request.is-empty ? 0px : root.request-compact ? max(300px, root.request-content-width()) : min(400px, (root.width - 212px) * 0.48);
                     clip: true;
                     animate width { duration: Theme.settle; easing: ease-out; }
@@ -5319,6 +5390,9 @@ export component MainWindow inherits Window {
             }
 
             status-row := HorizontalLayout {
+                // The 540×420 maintenance sheet reaches the bottom edge; hide
+                // the footer so its 更新于 text cannot show under the sheet.
+                visible: !(root.maintenance-menu-open && root.maintenance-menu-sheet);
                 spacing: 8px;
                 status-dot := StatusDot { tone: root.status-tone; y: (parent.height - self.height) / 2; }
                 Hint { text: root.status-line; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; vertical-alignment: center; }
@@ -5394,7 +5468,7 @@ export component MainWindow inherits Window {
                 // the state card would leave less than 300 px for the actions.
                 y: root.maintenance-menu-top;
                 height: min(maintenance-menu-content.preferred-height,
-                    root.height - self.y - (root.maintenance-menu-sheet ? 8px : 56px));
+                    root.height - self.y - (root.maintenance-menu-sheet ? 0px : 56px));
                 z: 20;
                 // An always-instantiated, zero-height live region so the open
                 // and close transitions are announced even when the panel's

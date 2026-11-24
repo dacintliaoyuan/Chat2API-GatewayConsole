@@ -906,6 +906,11 @@ fn an_unfiltered_empty_request_list_keeps_the_reason_inside_the_table() {
         "the status row still explains the empty time window"
     );
     assert_eq!(
+        window.get_request_status_display_text().as_str(),
+        "北京时间 · 本页 0 条",
+        "the status row keeps the page count instead of repeating the table reason"
+    );
+    assert_eq!(
         window.get_request_empty_title().as_str(),
         "所选时间没有请求记录",
         "the table carries the same reason instead of a header-only blank table"

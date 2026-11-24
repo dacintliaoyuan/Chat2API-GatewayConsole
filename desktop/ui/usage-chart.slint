@@ -270,6 +270,11 @@ export component RequestAnalytics inherits Panel {
             : header.preferred-height + 8px
                 + (root.compact ? 302px : 148px)
                 + (root.has-data ? 36px + 8px : 0px));
+    // The height the card takes at the current disclosure state, computed from
+    // its content instead of the height the page layout assigns it. The request
+    // page's list-height budget reads this value so the list height can never
+    // feed back into the page's preferred height.
+    out property <length> current-height: content.preferred-height;
     // Test seams: the actual stack the request card lays out at this width. The
     // 800 px window uses the compact stack, so the speed table sits under the
     // chart and both span the card instead of the 420 px side table squeezing
@@ -868,8 +873,17 @@ export component UsageChart inherits Panel {
                     VerticalLayout {
                         spacing: 3px;
                         Heading { text: "用量趋势"; }
-                        Hint { text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
-                        + (root.show-requests ? " · 单位：次" : " · 单位：亿"); }
+                        // The read status shares the subtitle line instead of a
+                        // separate 17 px row below the plot; the plot keeps the
+                        // height for its bars.
+                        Hint {
+                            text: (root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天")
+                                + (root.show-requests ? " · 单位：次" : " · 单位：亿")
+                                + (root.status-text.is-empty ? "" : " · " + root.status-text);
+                            color: root.status-text.is-empty ? Theme.muted : root.status-tone;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     right-header := HorizontalLayout {
@@ -1045,20 +1059,26 @@ export component UsageChart inherits Panel {
 
             selection := Rectangle {
                 visible: root.has-data;
-                height: root.has-data ? 58px : 0px;
+                // One 28 px readout row: the hint, the selected value and
+                // 取消固定 share it, so the plot keeps the vertical budget.
+                height: root.has-data ? 28px : 0px;
 
                 HorizontalLayout {
                     x: 0px;
                     y: 0px;
                     width: parent.width;
-                    height: 40px;
+                    height: parent.height;
                     spacing: 8px;
-                    Hint {
-                        text: root.has-selection ? root.selection-label : "悬停查看数值";
+                    selection-hint := Hint {
+                        text: root.has-selection ? root.selection-label
+                            : "悬停查看数值 · ← → 切换时段";
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
                         wrap: no-wrap;
+                        accessible-role: text;
+                        accessible-live-region: polite;
+                        Tooltip { text: @markdown("← → 切换时段 · Enter 固定 · Esc 取消固定"); }
                     }
                     DataText {
                         text: root.selection-value;
@@ -1077,20 +1097,6 @@ export component UsageChart inherits Panel {
                         clicked => { root.pinned = -1; }
                     }
                 }
-
-                Hint {
-                    y: 40px;
-                    width: parent.width;
-                    height: 18px;
-                    text: "← → 切换时段 · Enter 固定 · Esc 取消固定";
-                    vertical-alignment: center;
-                    wrap: no-wrap;
-                }
-            }
-
-            if root.has-data && !root.status-text.is-empty : Hint {
-                text: root.status-text;
-                color: root.status-tone;
             }
         }
     }
