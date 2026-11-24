@@ -45,6 +45,19 @@ pub struct FinalFailure<'a> {
     pub started_at: Instant,
 }
 
+/// Safe diagnostic fields for a local Chat attempt. No response text is logged.
+pub(crate) struct ChatAttemptEvidence<'a> {
+    pub request_id: &'a str,
+    pub attempt: u32,
+    pub upstream_status: Option<u16>,
+    pub upstream_request_id: Option<&'a str>,
+    pub transport_error: Option<&'static str>,
+    pub reason: Option<&'static str>,
+    pub error_body: Option<&'static str>,
+    pub stream_options: &'static str,
+    pub retry_without_stream_options: bool,
+}
+
 /// Append-only runtime event log; a write failure never affects the response.
 pub struct EventLog {
     path: Option<PathBuf>,
@@ -57,6 +70,28 @@ impl EventLog {
             path,
             lock: Mutex::new(()),
         }
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.path.is_some()
+    }
+
+    pub(crate) fn chat_attempt(&self, evidence: ChatAttemptEvidence<'_>) {
+        self.append_event(json!({
+            "time": Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+            "service": "chat2api",
+            "event": "upstream_chat_attempt",
+            "protocol": "chat",
+            "request_id": evidence.request_id,
+            "attempt": evidence.attempt,
+            "upstream_status": evidence.upstream_status,
+            "upstream_request_id": evidence.upstream_request_id,
+            "transport_error": evidence.transport_error,
+            "reason": evidence.reason,
+            "error_body": evidence.error_body,
+            "stream_options": evidence.stream_options,
+            "retry_without_stream_options": evidence.retry_without_stream_options,
+        }));
     }
 
     pub(crate) fn listener_failure(&self, component: &str, operation: &str, error: &io::Error) {
@@ -99,6 +134,10 @@ impl EventLog {
             "physical_attempts": failure.stats.physical_attempts,
             "duration_ms": failure.started_at.elapsed().as_millis() as u64,
         });
+        self.append_event(row);
+    }
+
+    fn append_event(&self, row: serde_json::Value) {
         let mut line = serde_json::to_string(&row).unwrap_or_default();
         line.push('\n');
         if self.append(line.as_bytes()).is_err() {

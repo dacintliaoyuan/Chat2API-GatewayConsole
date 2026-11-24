@@ -2112,10 +2112,17 @@ fn drive_login(
             }
         } else if stage == "umpass" && !manual_account_takeover {
             let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
-            let fields = [
-                page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
-                page.credential_field(&UMPASS_PASSWORD_SELECTORS),
-            ];
+            // After the one allowed submission the old form can disappear
+            // during navigation. Observe rejection, MFA and session evidence
+            // without inspecting the credential inputs again.
+            let fields = if auto_submissions == 0 {
+                [
+                    page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
+                    page.credential_field(&UMPASS_PASSWORD_SELECTORS),
+                ]
+            } else {
+                [CredentialField::Missing; 2]
+            };
             if fields.iter().any(|field| {
                 matches!(field, CredentialField::Filled | CredentialField::ProtectedAutofill)
             }) {
@@ -2124,7 +2131,7 @@ fn drive_login(
             // #125: a browser-prefilled account is never overwritten or
             // submitted when it differs from the account the app saved. Pause
             // the automatic round and ask the user which account to use.
-            if !inner.config.um_account.is_empty() {
+            if auto_submissions == 0 && !inner.config.um_account.is_empty() {
                 let account_problem = match page.credential_value(&UMPASS_ACCOUNT_SELECTORS) {
                     Ok(Some(account))
                         if !account.eq_ignore_ascii_case(inner.config.um_account.trim()) =>

@@ -541,6 +541,16 @@ pub fn handle_non_success(
         elapsed,
     );
     if let Some(plan) = plan {
+        if state.proxy.recovery.is_some() && (500..=599).contains(&status) {
+            // This body would be discarded on retry. Only sample bytes
+            // already available, without delaying the existing retry path.
+            let summary = response
+                .read_discarded_error_text()
+                .ok()
+                .as_deref()
+                .and_then(crate::upstream_fault::summarize_error_text);
+            state.proxy.observe_business_failure(summary.as_deref());
+        }
         drop(response);
         if plan.reauthentication.is_some() {
             if !state.proxy.record_bearer_rejection(&credential.value, status) {

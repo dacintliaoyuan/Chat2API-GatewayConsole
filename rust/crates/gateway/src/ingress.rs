@@ -29,8 +29,8 @@ use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::EventLog;
 use crate::gate::constant_time_eq;
 use crate::http::{
-    accept_connections, random_hex, read_request_body, read_request_head, write_response,
-    write_response_head, BodyRead, Headers, Request, Response, MAX_HEADER_BYTES,
+    accept_connections, peer_disconnected, random_hex, read_request_body, read_request_head,
+    write_response, write_response_head, BodyRead, Headers, Request, Response, MAX_HEADER_BYTES,
 };
 use crate::server::{
     error_protocol, is_local_control_request, with_error_headers, write_memory_pressure,
@@ -55,6 +55,10 @@ const DEFAULT_CONNECT_TIMEOUT_MILLIS: u64 = 200;
 const DEFAULT_SHUTDOWN_WAIT_SECONDS: u64 = 30;
 const HEAD_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const WORKER_RESPONSE_POLL: Duration = Duration::from_millis(50);
+// The worker starts its request budget after parsing the forwarded request
+// and needs to write the timeout response after that budget expires.
+const WORKER_RESPONSE_WRITE_ALLOWANCE: Duration = Duration::from_millis(250);
 
 /// The ingress process configuration.
 #[derive(Debug, Clone)]
@@ -87,6 +91,8 @@ pub struct IngressConfig {
     pub head_read_timeout: Duration,
     pub body_read_timeout: Duration,
     pub worker_read_timeout: Duration,
+    /// Worker request budget that an ingress model POST must allow for its response head.
+    pub model_response_head_timeout: Duration,
 }
 
 impl Default for IngressConfig {
@@ -111,6 +117,9 @@ impl Default for IngressConfig {
                 crate::config::DEFAULT_BODY_READ_TIMEOUT_SECONDS,
             ),
             worker_read_timeout: WORKER_READ_TIMEOUT,
+            model_response_head_timeout: Duration::from_secs(
+                crate::config::DEFAULT_REQUEST_TOTAL_SECONDS,
+            ),
         }
     }
 }
@@ -221,13 +230,16 @@ struct QueuedRequest {
 }
 
 impl QueuedRequest {
-    fn new(request: &Request, body: Vec<u8>) -> Self {
+    fn from_validated(request: Request) -> Self {
+        let BodyRead::Complete(body) = request.body else {
+            unreachable!("ingress validated the body before dispatch");
+        };
         Self {
-            method: request.method.clone(),
-            target: request.target.clone(),
-            headers: request.headers.clone(),
+            method: request.method,
+            target: request.target,
+            headers: request.headers,
             body,
-            request_id: request.request_id.clone(),
+            request_id: request.request_id,
         }
     }
 
@@ -547,6 +559,10 @@ fn handle_connection(state: Arc<IngressState>, mut stream: TcpStream, peer_ip: I
     }
 }
 
+fn is_model_path(path: &str) -> bool {
+    path.starts_with("/v1/") || path.starts_with("/api/")
+}
+
 fn handle_forward(
     state: &IngressState,
     client: &mut TcpStream,
@@ -554,16 +570,7 @@ fn handle_forward(
 ) -> io::Result<bool> {
     let protocol = error_protocol(request.path());
     let request_id = request.request_id.clone();
-    let Some(body) = body_bytes(&request) else {
-        return write_error(
-            client,
-            GatewayError::invalid_request("Incomplete request body"),
-            protocol,
-            &request_id,
-        );
-    };
-    let queued = QueuedRequest::new(&request, body.to_vec());
-    let queueable = request.path().starts_with("/v1/") || request.path().starts_with("/api/");
+    let queueable = is_model_path(request.path());
     if queueable {
         match desired_state(state) {
             DesiredState::Stopped => {
@@ -593,8 +600,9 @@ fn handle_forward(
             );
         }
     }
+    let queued = QueuedRequest::from_validated(request);
     if let Some((mut worker, worker_port)) = try_connect_worker(&state.config) {
-        let outcome = forward_to_worker(client, &mut worker, &queued, worker_port)?;
+        let outcome = forward_to_worker(client, &mut worker, &queued, worker_port, &state.config)?;
         return Ok(outcome.close);
     }
     if !queueable {
@@ -613,7 +621,8 @@ fn handle_forward(
     };
     match wait_for_worker(state, id, client) {
         WaitOutcome::Ready(mut worker, worker_port, queued) => {
-            let outcome = forward_to_worker(client, &mut worker, &queued, worker_port)?;
+            let outcome =
+                forward_to_worker(client, &mut worker, &queued, worker_port, &state.config)?;
             Ok(outcome.close)
         }
         WaitOutcome::TimedOut => write_error(
@@ -647,8 +656,9 @@ fn handle_health(
             &request_id,
         );
     };
-    let queued = QueuedRequest::new(&request, Vec::new());
-    let outcome = forward_to_worker(client, &mut worker, &queued, worker_port)?;
+    let mut queued = QueuedRequest::from_validated(request);
+    queued.body = Vec::new();
+    let outcome = forward_to_worker(client, &mut worker, &queued, worker_port, &state.config)?;
     Ok(outcome.close)
 }
 
@@ -682,25 +692,18 @@ fn handle_admin_shutdown(
             );
         }
     }
-    let Some(body) = body_bytes(&request) else {
-        return write_error(
-            client,
-            GatewayError::invalid_request("Incomplete request body"),
-            protocol,
-            &request_id,
-        );
-    };
-    let queued = QueuedRequest::new(&request, body.to_vec());
+    let queued = QueuedRequest::from_validated(request);
     state.stopping.store(true, Ordering::SeqCst);
     match try_connect_worker(&state.config) {
         Some((mut worker, worker_port)) => {
-            let outcome = match forward_to_worker(client, &mut worker, &queued, worker_port) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    state.shutdown_request.store(true, Ordering::SeqCst);
-                    return Err(error);
-                }
-            };
+            let outcome =
+                match forward_to_worker(client, &mut worker, &queued, worker_port, &state.config) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        state.shutdown_request.store(true, Ordering::SeqCst);
+                        return Err(error);
+                    }
+                };
             if outcome.upstream_status == Some(202) {
                 wait_for_worker_exit(state);
                 state.shutdown_request.store(true, Ordering::SeqCst);
@@ -795,7 +798,7 @@ fn wait_for_worker(state: &IngressState, id: u64, client: &mut TcpStream) -> Wai
             let _ = take_queued(state, id);
             return WaitOutcome::TimedOut;
         }
-        if client_disconnected(client) {
+        if peer_disconnected(client, state.config.head_read_timeout) {
             let _ = take_queued(state, id);
             return WaitOutcome::Cancelled;
         }
@@ -915,25 +918,6 @@ fn wait_for_worker_exit(state: &IngressState) {
     }
 }
 
-fn client_disconnected(stream: &mut TcpStream) -> bool {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
-    let mut byte = [0u8; 1];
-    let disconnected = match stream.peek(&mut byte) {
-        Ok(0) => true,
-        Ok(_) => false,
-        Err(error) => matches!(
-            error.kind(),
-            io::ErrorKind::ConnectionReset
-                | io::ErrorKind::ConnectionAborted
-                | io::ErrorKind::UnexpectedEof
-                | io::ErrorKind::BrokenPipe
-                | io::ErrorKind::NotConnected
-        ),
-    };
-    let _ = stream.set_read_timeout(Some(HEAD_READ_TIMEOUT));
-    disconnected
-}
-
 struct ForwardOutcome {
     close: bool,
     upstream_status: Option<u16>,
@@ -944,10 +928,25 @@ fn forward_to_worker(
     worker: &mut TcpStream,
     request: &QueuedRequest,
     worker_port: u16,
+    config: &IngressConfig,
 ) -> io::Result<ForwardOutcome> {
-    let bytes = serialize_request(request, worker_port);
-    let written = write_request_bytes(worker, &bytes).unwrap_or(0);
-    if written < bytes.len() {
+    let head = match serialize_request_head(request, worker_port) {
+        Ok(head) => head,
+        Err(_) => {
+            let protocol = error_protocol(request.path());
+            let _ = write_memory_pressure(client, protocol, &request.request_id);
+            return Ok(ForwardOutcome {
+                close: true,
+                upstream_status: None,
+            });
+        }
+    };
+    let written = write_request_bytes(worker, &head).unwrap_or(0);
+    // Once any header bytes were sent, preserve the worker-loss semantics:
+    // an incomplete body must not put this request back on the recovery queue.
+    let request_sent = written == head.len()
+        && write_request_bytes(worker, &request.body).is_ok_and(|count| count == request.body.len());
+    if !request_sent {
         let error = GatewayError::gateway_worker_lost(written > 0);
         let close = write_error(
             client,
@@ -960,9 +959,27 @@ fn forward_to_worker(
             upstream_status: None,
         });
     }
-    let head = match read_response_head(worker) {
-        Ok(Some(head)) => head,
-        Ok(None) | Err(_) => {
+    // Only model requests wait for UM recovery. Control requests, including
+    // shutdown, still observe the worker outcome if the caller disconnects.
+    let client_timeout = is_model_path(request.path()).then_some(config.head_read_timeout);
+    let head_timeout = (request.method == "POST").then(|| {
+        config
+            .model_response_head_timeout
+            .saturating_add(WORKER_RESPONSE_WRITE_ALLOWANCE)
+    });
+    let head = match read_worker_response_head(
+        worker,
+        client_timeout.map(|timeout| (&*client, timeout)),
+        head_timeout,
+    ) {
+        Ok(ResponseHeadRead::Ready(head)) => head,
+        Ok(ResponseHeadRead::ClientDisconnected) => {
+            return Ok(ForwardOutcome {
+                close: true,
+                upstream_status: None,
+            });
+        }
+        Ok(ResponseHeadRead::WorkerClosed) | Err(_) => {
             let error = GatewayError::gateway_worker_lost(true);
             let close = write_error(
                 client,
@@ -979,7 +996,7 @@ fn forward_to_worker(
     let status = head.status;
     let framing = response_framing(&head);
     write_client_response_head(client, &head, &framing)?;
-    let close = relay_body(client, worker, &framing, head.leftover)?;
+    let close = relay_body(client, worker, client_timeout, &framing, head.leftover)?;
     Ok(ForwardOutcome {
         close,
         upstream_status: Some(status),
@@ -1000,11 +1017,22 @@ fn write_request_bytes(worker: &mut TcpStream, bytes: &[u8]) -> io::Result<usize
     Ok(written)
 }
 
-fn serialize_request(request: &QueuedRequest, worker_port: u16) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(256 + request.body.len());
-    bytes.extend_from_slice(
-        format!("{} {} HTTP/1.1\r\n", request.method, request.target).as_bytes(),
-    );
+fn serialize_request_head(request: &QueuedRequest, worker_port: u16) -> io::Result<Vec<u8>> {
+    // The parser bounds the input head. Allow space for the request line
+    // delimiters and any synthesized Host, Content-Length and Connection.
+    let capacity = request.method.len()
+        + request.target.len()
+        + 128
+        + request
+            .headers
+            .iter()
+            .map(|header| header.name.len() + header.value.len() + 4)
+            .sum::<usize>();
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| io::ErrorKind::OutOfMemory)?;
+    write!(bytes, "{} {} HTTP/1.1\r\n", request.method, request.target)?;
     let mut has_host = false;
     let mut has_length = false;
     for header in request.headers.iter() {
@@ -1026,21 +1054,19 @@ fn serialize_request(request: &QueuedRequest, worker_port: u16) -> Vec<u8> {
         bytes.extend_from_slice(b"\r\n");
     }
     if !has_host {
-        bytes.extend_from_slice(format!("Host: 127.0.0.1:{worker_port}\r\n").as_bytes());
+        write!(bytes, "Host: 127.0.0.1:{worker_port}\r\n")?;
     }
     if !has_length {
-        bytes.extend_from_slice(format!("Content-Length: {}\r\n", request.body.len()).as_bytes());
+        write!(bytes, "Content-Length: {}\r\n", request.body.len())?;
     }
     bytes.extend_from_slice(b"Connection: close\r\n\r\n");
-    bytes.extend_from_slice(&request.body);
-    bytes
+    Ok(bytes)
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection" | "keep-alive" | "proxy-connection" | "te" | "trailer" | "upgrade" | "expect"
-    )
+    ["connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade", "expect"]
+        .iter()
+        .any(|header| name.eq_ignore_ascii_case(header))
 }
 
 struct ResponseHead {
@@ -1049,7 +1075,108 @@ struct ResponseHead {
     leftover: Vec<u8>,
 }
 
-fn read_response_head(stream: &mut TcpStream) -> io::Result<Option<ResponseHead>> {
+enum ResponseHeadRead {
+    Ready(ResponseHead),
+    ClientDisconnected,
+    WorkerClosed,
+}
+
+struct WorkerResponseReader<'a> {
+    stream: &'a mut TcpStream,
+    client: Option<(&'a TcpStream, Duration)>,
+    socket_timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    last_probe: Instant,
+    cancelled: bool,
+}
+
+impl<'a> WorkerResponseReader<'a> {
+    fn new(
+        stream: &'a mut TcpStream,
+        client: Option<(&'a TcpStream, Duration)>,
+        minimum_idle_timeout: Option<Duration>,
+    ) -> io::Result<Self> {
+        let socket_timeout = if client.is_some() {
+            stream.read_timeout()?
+        } else {
+            None
+        };
+        Ok(Self {
+            stream,
+            client,
+            socket_timeout,
+            idle_timeout: socket_timeout
+                .map(|timeout| timeout.max(minimum_idle_timeout.unwrap_or_default())),
+            read_timeout: socket_timeout,
+            last_probe: Instant::now(),
+            cancelled: false,
+        })
+    }
+
+    fn restore_timeout(&self) -> io::Result<()> {
+        if self.read_timeout != self.socket_timeout {
+            self.stream.set_read_timeout(self.socket_timeout)?;
+        }
+        Ok(())
+    }
+}
+
+impl Read for WorkerResponseReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let Some((client, client_timeout)) = self.client else {
+            return self.stream.read(buffer);
+        };
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let read_started = Instant::now();
+        loop {
+            if self.last_probe.elapsed() >= WORKER_RESPONSE_POLL {
+                if peer_disconnected(client, client_timeout) {
+                    self.cancelled = true;
+                    return Err(io::ErrorKind::ConnectionAborted.into());
+                }
+                self.last_probe = Instant::now();
+            }
+            // A short socket timeout only wakes the cancellation check. The
+            // original idle window applies to this entire read across all polls.
+            let poll_timeout = self.idle_timeout.map_or(WORKER_RESPONSE_POLL, |timeout| {
+                WORKER_RESPONSE_POLL.min(timeout.saturating_sub(read_started.elapsed()))
+            });
+            if poll_timeout.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            if self.read_timeout != Some(poll_timeout) {
+                self.stream.set_read_timeout(Some(poll_timeout))?;
+                self.read_timeout = Some(poll_timeout);
+            }
+            match self.stream.read(buffer) {
+                Err(error) if is_timeout_error(&error) => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
+fn read_worker_response_head(
+    stream: &mut TcpStream,
+    client: Option<(&TcpStream, Duration)>,
+    head_timeout: Option<Duration>,
+) -> io::Result<ResponseHeadRead> {
+    let mut reader = WorkerResponseReader::new(stream, client, head_timeout)?;
+    let head = read_response_head(&mut reader);
+    if reader.cancelled {
+        return Ok(ResponseHeadRead::ClientDisconnected);
+    }
+    let Some(head) = head? else {
+        return Ok(ResponseHeadRead::WorkerClosed);
+    };
+    reader.restore_timeout()?;
+    Ok(ResponseHeadRead::Ready(head))
+}
+
+fn read_response_head(reader: &mut impl Read) -> io::Result<Option<ResponseHead>> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {
@@ -1062,7 +1189,7 @@ fn read_response_head(stream: &mut TcpStream) -> io::Result<Option<ResponseHead>
                 "response header block is too large",
             ));
         }
-        let read = stream.read(&mut buffer)?;
+        let read = reader.read(&mut buffer)?;
         if read == 0 {
             if raw.is_empty() {
                 return Ok(None);
@@ -1155,30 +1282,36 @@ fn write_client_response_head(
 }
 
 fn relay_body(
-    client: &mut TcpStream,
+    mut client: &TcpStream,
     worker: &mut TcpStream,
+    client_timeout: Option<Duration>,
     framing: &Framing,
     leftover: Vec<u8>,
 ) -> io::Result<bool> {
+    let mut worker = WorkerResponseReader::new(
+        worker,
+        client_timeout.map(|timeout| (client, timeout)),
+        None,
+    )?;
     match framing {
         Framing::Length(length) => {
-            copy_length(client, worker, leftover, *length)?;
+            copy_length(&mut client, &mut worker, leftover, *length)?;
             Ok(false)
         }
         Framing::Chunked => {
-            copy_chunked(client, worker, leftover)?;
+            copy_chunked(&mut client, &mut worker, leftover)?;
             Ok(false)
         }
         Framing::CloseDelimited => {
-            copy_until_eof(client, worker, leftover)?;
+            copy_until_eof(&mut client, &mut worker, leftover)?;
             Ok(true)
         }
     }
 }
 
 fn copy_length(
-    client: &mut TcpStream,
-    worker: &mut TcpStream,
+    client: &mut impl Write,
+    worker: &mut impl Read,
     pending: Vec<u8>,
     length: u64,
 ) -> io::Result<()> {
@@ -1205,8 +1338,8 @@ fn copy_length(
 }
 
 fn copy_chunked(
-    client: &mut TcpStream,
-    worker: &mut TcpStream,
+    client: &mut impl Write,
+    worker: &mut impl Read,
     mut pending: Vec<u8>,
 ) -> io::Result<()> {
     enum ChunkState {
@@ -1321,8 +1454,8 @@ fn copy_chunked(
 }
 
 fn copy_until_eof(
-    client: &mut TcpStream,
-    worker: &mut TcpStream,
+    client: &mut impl Write,
+    worker: &mut impl Read,
     pending: Vec<u8>,
 ) -> io::Result<()> {
     if !pending.is_empty() {
@@ -1341,13 +1474,6 @@ fn copy_until_eof(
 
 fn find_crlf(bytes: &[u8]) -> Option<usize> {
     bytes.windows(2).position(|window| window == b"\r\n")
-}
-
-fn body_bytes(request: &Request) -> Option<&[u8]> {
-    match &request.body {
-        BodyRead::Complete(bytes) => Some(bytes),
-        _ => None,
-    }
 }
 
 fn write_error(

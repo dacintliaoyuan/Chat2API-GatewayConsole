@@ -19,13 +19,22 @@ use crate::ledger::UsageRecord;
 use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
-use crate::upstream::post_compat;
+use crate::upstream::{post_compat, PostError};
 
 /// Serve one embeddings request.
 pub fn handle_embeddings(
     state: &AppState,
     request: &Request,
-    _stream: &mut TcpStream,
+    stream: &mut TcpStream,
+) -> ChatResult {
+    let dispatch = crate::server::ModelDispatch::new(state, request, stream);
+    handle_embeddings_with_dispatch(state, request, &dispatch)
+}
+
+pub(crate) fn handle_embeddings_with_dispatch(
+    state: &AppState,
+    request: &Request,
+    dispatch: &crate::server::ModelDispatch<'_>,
 ) -> ChatResult {
     let mut stats = AttemptStats::default();
     let started_at = Instant::now();
@@ -48,7 +57,10 @@ pub fn handle_embeddings(
     };
     let mut usage = None;
     let result = match body {
-        Ok(body) => handle_embeddings_inner(state, body.unwrap_or_default(), &mut stats, &mut usage),
+        Ok(body) => {
+            let deadline = Instant::now() + state.config.request_total;
+            handle_embeddings_inner(state, body.unwrap_or_default(), &mut stats, &mut usage, deadline, &request.request_id, dispatch)
+        }
         Err(error) => ChatResult::Response(error.response()),
     };
     let final_failure = result.final_failure_status();
@@ -85,9 +97,11 @@ fn handle_embeddings_inner(
     body: Map<String, Value>,
     stats: &mut AttemptStats,
     usage: &mut Option<Value>,
+    deadline: Instant,
+    request_id: &str,
+    dispatch: &crate::server::ModelDispatch<'_>,
 ) -> ChatResult {
     let raw = serde_json::to_vec(&serde_json::Value::Object(body)).unwrap_or_default();
-    let deadline = Instant::now() + state.config.request_total;
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
     let mut auth_wait_budget = AuthWaitBudget::new(state.config.auth_wait_budget());
@@ -102,24 +116,30 @@ fn handle_embeddings_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let credential = state.proxy.upstream_credential();
-        let mut response = match post_compat(
-            &state.config,
-            &credential.value,
+        let attempt = post_compat(
+            dispatch,
             "/api/v1/embeddings",
             &raw,
             false,
             deadline,
             &[],
-        ) {
+        );
+        let attempt_elapsed = dispatch.attempt_elapsed(attempt_started);
+        let (mut response, credential) = match attempt {
             Ok(response) => response,
-            Err(failure) => {
+            Err(PostError::Admission(result)) => {
+                stats.tries -= 1;
+                stats.physical_attempts -= 1;
+                return result;
+            }
+            Err(PostError::Transport(failure)) => {
+                state.proxy.observe_business_failure(None);
                 last.record_transport(failure);
                 if let Some(plan) = retry_state.plan(
                     RetryOutcome::Transport,
                     &limits,
                     deadline,
-                    attempt_started.elapsed(),
+                    attempt_elapsed,
                 ) {
                     if retry::sleep_with_deadline(plan.delay, deadline) {
                         continue;
@@ -139,7 +159,7 @@ fn handle_embeddings_inner(
                 &mut retry_state,
                 &mut last,
                 response,
-                attempt_started.elapsed(),
+                attempt_elapsed,
                 deadline,
                 &mut auth_wait_budget,
                 &credential,
@@ -164,7 +184,7 @@ fn handle_embeddings_inner(
             if payload["data"].as_array().is_some_and(|data| !data.is_empty()) {
                 state
                     .proxy
-                    .record_business_success("embeddings_completion", Some(200));
+                    .record_business_success(request_id, "embeddings_completion", Some(200));
             }
             if state.config.desktop_instance {
                 if let Some(reported) = payload.get_mut("usage").and_then(Value::as_object_mut) {

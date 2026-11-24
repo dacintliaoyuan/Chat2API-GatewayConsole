@@ -227,6 +227,7 @@ fn main() -> ExitCode {
             control_token_file: config.control_token_file.clone(),
             service_log: config.service_log,
             max_request_bytes: config.max_request_bytes,
+            model_response_head_timeout: config.request_total,
             ..IngressConfig::default()
         };
         let mut server = match IngressServer::start(ingress_config) {

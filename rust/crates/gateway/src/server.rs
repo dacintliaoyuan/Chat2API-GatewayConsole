@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::body::{read_json_body, BodyPolicy};
-use crate::chat::{handle_chat, ChatResult};
+use crate::chat::{handle_chat_with_dispatch, ChatResult};
 use crate::config::{AuthMode, ConfigError, GatewayConfig, Role, RunMode};
-use crate::embeddings::handle_embeddings;
+use crate::embeddings::handle_embeddings_with_dispatch;
 use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::EventLog;
 use crate::gate::{
@@ -34,13 +34,13 @@ use crate::login::{
     production_browser_factory, CredentialProbe, HttpCredentialProbe, LoginBrowserFactory,
     LoginService,
 };
-use crate::messages::handle_messages;
+use crate::messages::handle_messages_with_dispatch;
 use crate::readonly::ProxyState;
 use crate::reauth::{
     AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthTrigger, ReauthenticationProvider,
     ReauthenticationService,
 };
-use crate::responses::handle_responses;
+use crate::responses::handle_responses_with_dispatch;
 use crate::watch::WatchStatus;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -354,6 +354,7 @@ impl ServerHandle {
             // auth watch. A supervisor waits for the port to be released before
             // it switches ports; stopping the browser first could keep the port
             // open for the whole login shutdown and make that wait time out.
+            self.state.shutdown_request.store(true, Ordering::SeqCst);
             self.shutdown.store(true, Ordering::SeqCst);
             let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
             let _ = handle.join();
@@ -403,12 +404,21 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if state.config.role != crate::config::Role::Local {
                 next_probe = Instant::now() + interval;
             }
+            let recovery = state.proxy.recovery.as_ref();
+            let mut shared_probe = None;
             while !shutdown.load(Ordering::SeqCst) {
-                let remaining = next_probe.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
+                let now = Instant::now();
+                shared_probe = recovery.and_then(|gate| gate.take_probe(now));
+                let remaining = next_probe.saturating_duration_since(now);
+                if shared_probe.is_some() || remaining.is_zero() {
                     break;
                 }
-                thread::sleep(remaining.min(Duration::from_secs(1)));
+                let tick = if recovery.is_some() {
+                    Duration::from_millis(100)
+                } else {
+                    Duration::from_secs(1)
+                };
+                thread::sleep(remaining.min(tick));
             }
             if shutdown.load(Ordering::SeqCst) {
                 break;
@@ -428,16 +438,30 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if let Some(login) = &state.login {
                 login.note_probe(verdict, reason, upstream_status);
             }
-            let next_interval = if verdict == "valid" {
-                base_interval
-            } else {
-                (interval * 2).min(AUTH_WATCH_MAX_INTERVAL)
-            };
-            watch.record_round(verdict, next_interval);
-            state.proxy.record_next_check_after(next_interval);
-            // 本机巡检可能先等待认证恢复，复查仍按已公布的时间执行。
-            next_probe = Instant::now() + next_interval;
-            interval = next_interval;
+            if let Some((gate, generation)) = recovery.zip(shared_probe) {
+                gate.finish_probe(
+                    generation,
+                    verdict == "valid",
+                    reason == Some("credential_changed"),
+                    verdict == "unknown"
+                        && matches!(
+                            reason,
+                            Some("upstream_5xx" | "timeout" | "network_error" | "invalid_catalog_shape")
+                        ),
+                );
+            }
+            if shared_probe.is_none() || Instant::now() >= next_probe {
+                let next_interval = if verdict == "valid" {
+                    base_interval
+                } else {
+                    (interval * 2).min(AUTH_WATCH_MAX_INTERVAL)
+                };
+                watch.record_round(verdict, next_interval);
+                state.proxy.record_next_check_after(next_interval);
+                // 本机巡检可能先等待认证恢复，复查仍按已公布的时间执行。
+                next_probe = Instant::now() + next_interval;
+                interval = next_interval;
+            }
             if verdict == "valid" {
                 continue;
             }
@@ -479,6 +503,117 @@ impl std::fmt::Display for ServerError {
 }
 
 impl std::error::Error for ServerError {}
+
+/// Request-scoped upstream admission. A successful trial only releases its
+/// slot after dispatch has delivered the response to the client.
+pub(crate) struct ModelDispatch<'a> {
+    state: &'a AppState,
+    request: &'a Request,
+    client: Option<TcpStream>,
+    permit: std::cell::RefCell<Option<crate::upstream_recovery::Permit<'a>>>,
+    sent: std::cell::Cell<bool>,
+    waiting: std::cell::Cell<Duration>,
+}
+
+impl<'a> ModelDispatch<'a> {
+    pub(crate) fn new(state: &'a AppState, request: &'a Request, stream: &TcpStream) -> Self {
+        let client = state.proxy.recovery.as_ref().and_then(|_| {
+            (request.method == "POST" && is_model_path(request.path()))
+                .then(|| stream.try_clone().ok())
+                .flatten()
+        });
+        Self {
+            state,
+            request,
+            client,
+            permit: std::cell::RefCell::new(None),
+            sent: std::cell::Cell::new(false),
+            waiting: std::cell::Cell::new(Duration::ZERO),
+        }
+    }
+
+    pub(crate) fn wait(&self, deadline: Instant) -> Result<(), ChatResult> {
+        use crate::upstream_recovery::AdmissionError;
+
+        let Some(recovery) = &self.state.proxy.recovery else {
+            return Ok(());
+        };
+        if self.sent.get() {
+            return Ok(());
+        }
+        // A connection establishment may outlast the admission which
+        // preceded it. Release that permit before joining the queue again.
+        self.permit.take();
+        let bytes = match &self.request.body {
+            BodyRead::Complete(body) => body.capacity() as u64,
+            _ => 0,
+        };
+        let started = Instant::now();
+        let result = recovery.admit(&self.request.request_id, bytes, deadline, || self.cancelled());
+        self.waiting.set(self.waiting.get() + started.elapsed());
+        let error = match result {
+            Ok(permit) => {
+                self.permit.replace(permit);
+                return Ok(());
+            }
+            Err(AdmissionError::Cancelled) => {
+                return Err(ChatResult::Written { close: true, failed: false });
+            }
+            Err(AdmissionError::Timeout) => GatewayError::new(
+                503, "UM did not recover before the request deadline", "upstream_recovery_timeout",
+            ),
+            Err(AdmissionError::QueueFull) => GatewayError::new(
+                503, "UM recovery wait queue is full", "upstream_recovery_queue_full",
+            ),
+        };
+        Err(ChatResult::Response(error.response_for(error_protocol(self.request.path()))))
+    }
+
+    pub(crate) fn config(&self) -> &GatewayConfig {
+        &self.state.config
+    }
+
+    pub(crate) fn attempt_elapsed(&self, started_at: Instant) -> Duration {
+        started_at.elapsed().saturating_sub(self.waiting.replace(Duration::ZERO))
+    }
+
+    pub(crate) fn upstream_credential(&self) -> crate::readonly::UpstreamCredential {
+        self.state.proxy.upstream_credential()
+    }
+
+    pub(crate) fn first_gated_send(&self) -> bool {
+        self.state.proxy.recovery.is_some() && !self.sent.get()
+    }
+
+    pub(crate) fn authorize_send(&self) -> Result<bool, ChatResult> {
+        let Some(recovery) = &self.state.proxy.recovery else {
+            return Ok(true);
+        };
+        if self.sent.get() {
+            return Ok(true);
+        }
+        let permit = self.permit.borrow();
+        if permit.is_some() && self.cancelled() {
+            return Err(ChatResult::Written { close: true, failed: false });
+        }
+        let allowed = recovery.can_send(permit.as_ref());
+        self.sent.set(allowed);
+        Ok(allowed)
+    }
+
+    fn cancelled(&self) -> bool {
+        self.state.shutdown_request.load(Ordering::SeqCst)
+            || self.client.as_ref().is_some_and(|stream| {
+                crate::http::peer_disconnected(stream, IDLE_CONNECTION_TIMEOUT)
+            })
+    }
+
+    fn complete(&self, delivered: bool) {
+        if let Some(permit) = self.permit.take() {
+            permit.complete(delivered);
+        }
+    }
+}
 
 enum RouteOutcome {
     Response(Response),
@@ -591,11 +726,16 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
                 return;
             }
         };
-        let (outcome, admission) = dispatch(&state, &request, &mut stream);
+        let model_dispatch = ModelDispatch::new(&state, &request, &stream);
+        let (outcome, admission) = dispatch(&state, &request, &mut stream, &model_dispatch);
         let (close, write_ok) = match outcome {
             RouteOutcome::Response(response) => {
                 let close = response.close;
-                let written = write_response(&mut stream, &response).is_ok();
+                // The ingress can close its worker connection as soon as it
+                // has the full response. Check for cancellation before writing.
+                let cancelled = model_dispatch.permit.borrow().is_some()
+                    && model_dispatch.cancelled();
+                let written = !cancelled && write_response(&mut stream, &response).is_ok();
                 if path == DESKTOP_PORT_SWITCH_PATH && response.status == 202 {
                     state.shutdown_request.store(true, Ordering::SeqCst);
                 }
@@ -603,6 +743,7 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             }
             RouteOutcome::Written { close } => (close, true),
         };
+        model_dispatch.complete(write_ok);
         release_admission(&state, admission);
         if close || !write_ok {
             return;
@@ -730,8 +871,9 @@ fn dispatch(
     state: &AppState,
     request: &Request,
     stream: &mut TcpStream,
+    model_dispatch: &ModelDispatch<'_>,
 ) -> (RouteOutcome, Option<Admission>) {
-    let (outcome, admission) = dispatch_inner(state, request, stream);
+    let (outcome, admission) = dispatch_inner(state, request, stream, model_dispatch);
     let outcome = match outcome {
         RouteOutcome::Response(mut response) => {
             response = with_error_headers(response, &request.request_id);
@@ -751,6 +893,7 @@ fn dispatch_inner(
     state: &AppState,
     request: &Request,
     stream: &mut TcpStream,
+    model_dispatch: &ModelDispatch<'_>,
 ) -> (RouteOutcome, Option<Admission>) {
     if request.method == "OPTIONS" {
         return (
@@ -778,7 +921,7 @@ fn dispatch_inner(
         if let Err(error) = origin_allowed(state, request) {
             return (RouteOutcome::Response(error.response()), admission);
         }
-        let result = handle_chat(state, request, stream, admission.take());
+        let result = handle_chat_with_dispatch(state, request, stream, admission.take(), model_dispatch);
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
@@ -801,7 +944,7 @@ fn dispatch_inner(
                 admission,
             );
         }
-        let result = handle_messages(state, request, stream, admission.take());
+        let result = handle_messages_with_dispatch(state, request, stream, admission.take(), model_dispatch);
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
@@ -818,7 +961,7 @@ fn dispatch_inner(
         if let Err(error) = origin_allowed(state, request) {
             return (RouteOutcome::Response(error.response()), admission);
         }
-        let result = handle_responses(state, request, stream, admission.take());
+        let result = handle_responses_with_dispatch(state, request, stream, admission.take(), model_dispatch);
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
@@ -835,7 +978,7 @@ fn dispatch_inner(
         if let Err(error) = origin_allowed(state, request) {
             return (RouteOutcome::Response(error.response()), admission);
         }
-        let result = handle_embeddings(state, request, stream);
+        let result = handle_embeddings_with_dispatch(state, request, model_dispatch);
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
@@ -875,6 +1018,15 @@ pub fn nonstream_aggregate_allowed(
         && scope.key_ids.contains(key_id)
         && scope.models.contains(model)
         && scope.protocols.contains(protocol)
+}
+
+fn is_model_path(path: &str) -> bool {
+    is_chat_path(path)
+        || matches!(
+            path,
+            "/v1/messages" | "/api/v1/messages" | "/v1/responses" | "/api/v1/responses"
+                | "/v1/embeddings" | "/api/v1/embeddings"
+        )
 }
 
 fn is_chat_path(path: &str) -> bool {

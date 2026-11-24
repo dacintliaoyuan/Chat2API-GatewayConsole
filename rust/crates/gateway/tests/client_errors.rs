@@ -196,6 +196,122 @@ fn a_final_failure_log_records_tries_and_physical_attempts() {
 }
 
 #[test]
+fn local_chat_records_each_400_and_its_compatibility_attempt_by_request_id() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = ChatStub::start();
+    let log_path = temp.path().join("service.log");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.role = um_gateway::config::Role::Local;
+        config.service_log = Some(log_path.clone());
+    });
+
+    for (stream, second, expected_body) in [
+        (true, "Content-Length: 0\r\n\r\n", "empty"),
+        (false, "Transfer-Encoding: chunked\r\n\r\ninvalid\r\n", "read_failed"),
+    ] {
+        let body = r#"{"error":{"code":"context_length_exceeded","message":"fixture-sensitive-text"}}"#;
+        stub.push(ChatAttempt::RawResponse {
+            bytes: format!(
+                "HTTP/1.1 400 Bad Request\r\nX-Request-Id: 59766032-437e-4a05-9839-8399bfa2a454\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len(),
+            )
+            .into_bytes(),
+            hold: Duration::ZERO,
+        });
+        stub.push(ChatAttempt::RawResponse {
+            bytes: format!("HTTP/1.1 400 Bad Request\r\n{second}").into_bytes(),
+            hold: Duration::ZERO,
+        });
+        let request = ClientRequest::post(
+            "/v1/chat/completions",
+            &json!({
+                "model": "fixture-model",
+                "messages": [{"role": "user", "content": "fixture-prompt"}],
+                "stream": stream,
+                "stream_options": {"include_usage": true},
+            }).to_string(),
+        ).header("Content-Type", "application/json");
+        let response = client_request(gateway.addr, &request).unwrap();
+        assert_eq!(response.status, 400);
+        let id = assert_error_headers(&response);
+
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(!log.contains("fixture-sensitive-text"));
+        assert!(!log.contains("fixture-prompt"));
+        let rows: Vec<Value> = log.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row["request_id"] == id && row["event"] == "upstream_chat_attempt")
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["attempt"], 1);
+        assert_eq!(rows[0]["upstream_status"], 400);
+        assert_eq!(rows[0]["upstream_request_id"], "59766032-437e-4a05-9839-8399bfa2a454");
+        assert_eq!(rows[0]["reason"], "context_length_exceeded");
+        assert_eq!(rows[0]["retry_without_stream_options"], true);
+        assert_eq!(rows[1]["attempt"], 2);
+        assert_eq!(rows[1]["upstream_status"], 400);
+        assert_eq!(rows[1]["stream_options"], "removed_for_retry");
+        assert_eq!(rows[1]["reason"], "unknown");
+        assert_eq!(rows[1]["error_body"], expected_body);
+    }
+
+    let seen = stub.seen();
+    assert_eq!(seen.len(), 4);
+    for pair in seen.chunks_exact(2) {
+        assert!(pair[0].body.get("stream_options").is_some());
+        assert!(pair[1].body.get("stream_options").is_none());
+    }
+}
+
+#[test]
+fn a_delayed_400_body_does_not_block_chat_compatibility_retry() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = ChatStub::start();
+    let log_path = temp.path().join("service.log");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.role = um_gateway::config::Role::Local;
+        config.service_log = Some(log_path.clone());
+        config.request_total = Duration::from_secs(1);
+    });
+    stub.push(ChatAttempt::RawResponse {
+        bytes: b"HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\n\r\n".to_vec(),
+        hold: Duration::from_secs(2),
+    });
+    stub.push(ChatAttempt::Json {
+        status: 200,
+        body: json!({"choices": [{"message": {"content": "ok"}}]}),
+    });
+
+    let request = ClientRequest::post(
+        "/v1/chat/completions",
+        &json!({
+            "model": "fixture-model",
+            "messages": [{"role": "user", "content": "fixture-prompt"}],
+            "stream": false,
+            "stream_options": {"include_usage": true},
+        })
+        .to_string(),
+    )
+    .header("Content-Type", "application/json");
+    let response = client_request(gateway.addr, &request).unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(stub.attempts(), 2);
+
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    let attempts: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "upstream_chat_attempt")
+        .collect();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0]["error_body"], "not_ready");
+    assert_eq!(attempts[1]["upstream_status"], 200);
+    assert_eq!(attempts[1]["stream_options"], "removed_for_retry");
+    assert_eq!(attempts[0]["request_id"], attempts[1]["request_id"]);
+}
+
+#[test]
 fn an_in_band_error_carries_the_same_request_id_as_the_stream() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = ChatStub::start();

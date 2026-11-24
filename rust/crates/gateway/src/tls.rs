@@ -46,8 +46,21 @@ pub fn wrap(stream: TcpStream, host: &str) -> io::Result<TlsStream> {
 }
 
 /// A boxed upstream transport: plain TCP or TLS over TCP.
-pub trait UpstreamIo: Read + Write + Send {}
-impl<T: Read + Write + Send> UpstreamIo for T {}
+pub trait UpstreamIo: Read + Write + Send {
+    fn set_nonblocking(&self, enabled: bool) -> io::Result<()>;
+}
+
+impl UpstreamIo for TcpStream {
+    fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        TcpStream::set_nonblocking(self, enabled)
+    }
+}
+
+impl UpstreamIo for TlsStream {
+    fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        self.sock.set_nonblocking(enabled)
+    }
+}
 
 /// One upstream byte stream behind the transport seam.
 pub type UpstreamStream = Box<dyn UpstreamIo>;

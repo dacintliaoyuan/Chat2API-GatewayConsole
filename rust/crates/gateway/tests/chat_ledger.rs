@@ -91,13 +91,17 @@ fn desktop_chat_failure_links_its_single_ledger_row_to_the_runtime_log() {
     let response = client_request(gateway.addr, &request(false)).expect("desktop chat");
     assert!(response.status >= 400);
     let usage = wait_jsonl(&ledger, 1, Duration::from_secs(2));
-    let failures = wait_jsonl(&service, 1, Duration::from_secs(2));
+    let failures = wait_jsonl(&service, 2, Duration::from_secs(2));
     assert_eq!(usage.len(), 1);
     assert_eq!(usage[0]["usage_source"], "none");
     let id = usage[0]["request_id"].as_str().expect("HTTP request ID");
     assert_eq!(id.len(), 32);
-    assert_eq!(failures[0]["request_id"], id);
-    assert_eq!(failures[0]["final"], usage[0]["status"]);
+    let summary = failures
+        .iter()
+        .find(|row| row["event"] == "request_summary")
+        .expect("request summary after the upstream attempt event");
+    assert_eq!(summary["request_id"], id);
+    assert_eq!(summary["final"], usage[0]["status"]);
 }
 
 #[test]

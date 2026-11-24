@@ -602,6 +602,162 @@ fn a_forwarded_request_is_not_resent_when_the_worker_disconnects() {
     assert_eq!(worker.seen().len(), 1);
 }
 
+fn forward_to_waiting_worker(
+    temp: &TempDir,
+    listener: &TcpListener,
+    worker_idle_timeout: Duration,
+    model_head_timeout: Duration,
+) -> (Ingress, TcpStream, TcpStream) {
+    listener
+        .set_nonblocking(true)
+        .expect("worker listener mode");
+    let port = listener.local_addr().expect("worker address").port();
+    let ingress = start_ingress_with_state(temp, port, &running_state_json(), |config| {
+        config.worker_read_timeout = worker_idle_timeout;
+        config.model_response_head_timeout = model_head_timeout;
+    });
+    let mut client = TcpStream::connect(ingress.addr).expect("connect ingress client");
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("client read timeout");
+    write_request(&mut client, ingress.addr, "/v1/chat/completions", "{}");
+
+    let mut worker = None;
+    wait_until(Duration::from_secs(2), || match listener.accept() {
+        Ok((stream, _)) => {
+            worker = Some(stream);
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+        Err(error) => panic!("accept forwarded connection: {error}"),
+    });
+    let mut worker = worker.expect("forwarded connection");
+    worker.set_nonblocking(false).expect("worker stream mode");
+    worker
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("worker fixture read timeout");
+    let request = read_fake_request(&mut worker).expect("forwarded model request");
+    assert_eq!(request.target, "/v1/chat/completions");
+    assert_eq!(request.body, b"{}");
+    (ingress, client, worker)
+}
+
+#[test]
+fn disconnected_client_closes_the_forwarded_worker_socket_during_a_partial_head() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let listener = TcpListener::bind("127.0.0.1:0").expect("worker listener");
+    let worker_timeout = Duration::from_secs(10);
+    let (_ingress, client, mut worker) =
+        forward_to_waiting_worker(&temp, &listener, worker_timeout, worker_timeout);
+    worker
+        .write_all(b"HTTP/1.1 200 OK\r\n")
+        .expect("partial response head");
+    drop(client);
+
+    let mut byte = [0];
+    assert_eq!(worker.read(&mut byte).expect("worker socket closed"), 0);
+    assert_eq!(
+        listener
+            .accept()
+            .expect_err("request was not resent")
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn disconnected_client_closes_the_worker_socket_after_the_first_sse_frame() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let listener = TcpListener::bind("127.0.0.1:0").expect("worker listener");
+    let worker_timeout = Duration::from_secs(10);
+    let (_ingress, mut client, mut worker) =
+        forward_to_waiting_worker(&temp, &listener, worker_timeout, worker_timeout);
+    let first = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                  Transfer-Encoding: chunked\r\n\r\nD\r\ndata: first\n\n\r\n";
+    worker
+        .write_all(first)
+        .expect("response head and first frame");
+    let mut received = vec![0; first.len()];
+    client.read_exact(&mut received).expect("first SSE frame");
+    assert_eq!(&received, first);
+    drop(client);
+
+    let mut byte = [0];
+    assert_eq!(worker.read(&mut byte).expect("worker socket closed"), 0);
+    assert_eq!(
+        listener
+            .accept()
+            .expect_err("request was not resent")
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn polling_a_silent_worker_preserves_the_worker_lost_response() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let listener = TcpListener::bind("127.0.0.1:0").expect("worker listener");
+    let worker_timeout = Duration::from_millis(400);
+    let started = Instant::now();
+    let (_ingress, mut client, _worker) =
+        forward_to_waiting_worker(&temp, &listener, worker_timeout, Duration::from_millis(50));
+
+    let response = read_client_response(&mut client).expect("worker idle timeout response");
+    assert!(started.elapsed() >= worker_timeout);
+    assert_eq!(response.status, 502);
+    assert_eq!(error_code(&response), "gateway_worker_lost");
+    assert_eq!(response.header("X-Should-Retry"), Some("false"));
+    assert_eq!(response.json()["error"]["detail"]["forwarded"], json!(true));
+}
+
+#[test]
+fn worker_timeout_response_can_be_relayed_after_its_request_budget_expires() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let listener = TcpListener::bind("127.0.0.1:0").expect("worker listener");
+    let model_budget = Duration::from_millis(350);
+    let (_ingress, mut client, mut worker) =
+        forward_to_waiting_worker(&temp, &listener, Duration::from_millis(150), model_budget);
+
+    thread::sleep(model_budget + Duration::from_millis(50));
+    worker
+        .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 2\r\n\r\n{}")
+        .expect("worker timeout response");
+
+    let response = read_client_response(&mut client).expect("relayed worker timeout response");
+    assert_eq!(response.status, 503);
+}
+
+#[test]
+fn response_head_progress_resets_idle_timeout_and_body_keeps_original_timeout() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let listener = TcpListener::bind("127.0.0.1:0").expect("worker listener");
+    let worker_timeout = Duration::from_millis(500);
+    let (_ingress, mut client, mut worker) =
+        forward_to_waiting_worker(&temp, &listener, worker_timeout, Duration::from_secs(1));
+
+    thread::sleep(Duration::from_millis(700));
+    worker
+        .write_all(b"HTTP/1.1 200 OK\r\n")
+        .expect("partial response head");
+    thread::sleep(Duration::from_millis(650));
+    worker
+        .write_all(b"Content-Length: 3\r\n\r\n")
+        .expect("complete response head");
+    thread::sleep(Duration::from_millis(150));
+    let body_started = Instant::now();
+    worker.write_all(b"{}").expect("delayed body prefix");
+    // The last byte never arrives. The short poll timeout must allow the
+    // prefix through, and the longer head timeout must not delay body EOF.
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .expect("client body timeout");
+
+    let response = read_client_response(&mut client).expect("delayed worker response");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"{}");
+    assert!(body_started.elapsed() >= worker_timeout);
+}
+
 #[test]
 fn sse_response_is_streamed_before_the_worker_finishes() {
     let temp = TempDir::new(unique_temp_prefix());
