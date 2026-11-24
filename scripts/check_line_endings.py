@@ -6,13 +6,16 @@ The repo carries a mix of LF and CRLF files (legacy Windows files vs Rust source
 Rewriting a CRLF file as LF turns a small edit into a whole-file diff and makes
 review/blame unreadable. This guard compares each modified tracked file with HEAD
 and refuses a style change; an intentional one-time normalisation must be listed in
-``ALLOW`` with the reason.
+``ALLOW`` with the reason. A one-time restoration can instead be allowed for a
+single run with ``IMPECCABLE_EOL_ALLOW=path1,path2``; permanent exceptions still
+belong in ``ALLOW``.
 
 Exit codes: 0 clean; 1 style change found.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +30,16 @@ ALLOW: frozenset[str] = frozenset({
     # The Lucide-backed icon map is new and follows the desktop UI's LF style.
     "desktop/ui/icons.slint",
 })
+
+
+def _allowed_paths() -> frozenset[str]:
+    """ALLOW plus the one-shot ``IMPECCABLE_EOL_ALLOW`` override for this run."""
+    extra = {
+        item.strip()
+        for item in os.environ.get("IMPECCABLE_EOL_ALLOW", "").split(",")
+        if item.strip()
+    }
+    return ALLOW | extra
 
 
 def _style(raw: bytes) -> str:
@@ -82,8 +95,9 @@ def main(argv: list[str]) -> int:
         print(proc.stderr, file=sys.stderr)
         return 1
     problems = []
+    allowed = _allowed_paths()
     for name in proc.stdout.splitlines():
-        if not name or name in ALLOW:
+        if not name or name in allowed:
             continue
         if since is None:
             before_raw = _rev_bytes("HEAD", name)
